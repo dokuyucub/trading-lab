@@ -1,0 +1,30 @@
+# Gizli anahtarlar - asla commit edilmez
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+/build/
+/dist/
+
+# Araçlar
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Veri ve durum - yeniden üretilebilir, repoda yeri yok.
+# Yollar KOKE SABITLI (bastaki /): aksi halde 'data/' kurali
+# src/tlab/data/ kaynak paketini de dislar ve kod sessizce
+# commit edilmeden kalir.
+/data/
+/logs/
+*.db
+*.db-journal
+*.parquet
