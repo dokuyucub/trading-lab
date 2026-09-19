@@ -1,0 +1,15 @@
+# Faz 1 islem evreni: dar spread'li, yuksek hacimli isimler.
+# Kucuk basliyoruz - tarama/secim motoru Faz 5'in isi.
+symbols:
+  - SPY
+  - QQQ
+  - IWM
+  - AAPL
+  - MSFT
+  - NVDA
+  - AMD
+  - AMZN
+  - GOOGL
+  - META
+  - TSLA
+  - JPM

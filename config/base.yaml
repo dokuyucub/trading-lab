@@ -1,0 +1,43 @@
+# tlab temel yapilandirmasi.
+# Gizli bilgi buraya YAZILMAZ - anahtarlar .env dosyasindan okunur.
+
+app:
+  # Borsa saatlerinin yorumlandigi zaman dilimi. Sistem icinde her sey UTC,
+  # sadece seans saatleri bu dilimde ifade edilir.
+  exchange_timezone: America/New_York
+
+data:
+  # iex  -> ucretsiz plan, toplam hacmin ~%2-3'u. Gelistirme icin yeterli.
+  # sip  -> tam konsolide akis (ucretli). Canliya gecerken burasi degisir.
+  # Hangi feed ile karar verildigi journal'a yazilir; eski sonuclarla
+  # yeni sonuclari karsilastirirken bu alan sart.
+  feed: iex
+  cache_dir: data/bars
+  default_timeframe: 1Min
+
+session:
+  # ABD normal seansi (exchange_timezone'a gore)
+  regular_open: "09:30"
+  regular_close: "16:00"
+  # Gun sonunda pozisyonlarin zorunlu kapatilacagi tampon (dakika).
+  flatten_before_close_minutes: 10
+  # Uzatilmis seans likiditesi ince, spread genis. Varsayilan kapali.
+  allow_extended_hours: false
+
+risk:
+  # Islem basina riske edilen ozsermaye yuzdesi (stop'a kadar olan mesafe).
+  max_risk_per_trade_pct: 0.5
+  # Gun ici toplam zarar bu esige degince kill-switch devreye girer.
+  max_daily_loss_pct: 2.0
+  max_concurrent_positions: 3
+  max_gross_exposure_pct: 50.0
+  # Spread'i genis, fiyati dusuk enstrumanlar "ufak marj" stratejisini oldurur.
+  min_price: 5.0
+  max_spread_bps: 15
+  # Pattern Day Trader kurali: 25.000 $ alti hesapta 5 is gununde 3 day trade.
+  enforce_pdt: true
+  pdt_equity_threshold: 25000
+  max_day_trades_per_window: 3
+
+journal:
+  path: data/journal.db
