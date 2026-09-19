@@ -115,7 +115,7 @@ def test_missing_secrets_raise_actionable_error(
 
 def test_masked_output_never_leaks_the_key() -> None:
     """Loglara ve hata ciktilarina anahtar duz metin olarak dusmemeli."""
-    secret_value = "sk-super-secret-value-9999"
+    secret_value = "sk-super-secret-value-9999"  # noqa: S105 - testin konusu bu
     secrets = Secrets(_env_file=None, alpaca_api_key="PKABCDEFGH", alpaca_secret_key=secret_value)
     rendered = str(secrets.masked())
     assert secret_value not in rendered
