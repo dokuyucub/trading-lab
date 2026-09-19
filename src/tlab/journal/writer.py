@@ -14,11 +14,12 @@ import sqlite3
 import subprocess
 import uuid
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, date
 from pathlib import Path
 from typing import Any
 
-from tlab.core.types import BracketOrder, Decision, OrderRef, Trade
+from tlab.core.clock import Clock, LiveClock
+from tlab.core.types import BracketOrder, Decision, Fill, OrderRef, Trade
 from tlab.errors import JournalError
 
 RunMode = str  # paper | live | backtest | shadow
@@ -60,10 +61,21 @@ def current_git_sha(root: Path | None = None) -> str | None:
 
 
 class JournalWriter:
-    """Kararlari ve kosulari journal'a yazar."""
+    """Kararlari ve kosulari journal'a yazar.
 
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    Saat DISARIDAN veriliyor, `datetime.now()` cagrilmiyor. Sebep
+    sistemin geri kalaniyla ayni: backtest'te zamani biz kontrol
+    ediyoruz. Journal kendi saatine bakarsa, gecmis veri uzerinde
+    yapilan bir kosunun kayitlari bugunun tarihini tasir ve o
+    kosudan uretilen istatistikler zaman ekseninde yerinden oynar.
+    """
+
+    def __init__(self, conn: sqlite3.Connection, clock: Clock | None = None) -> None:
         self._conn = conn
+        self._clock = clock or LiveClock()
+
+    def _now(self) -> str:
+        return self._clock.now().astimezone(UTC).isoformat()
 
     def start_run(
         self,
@@ -92,7 +104,7 @@ class JournalWriter:
                 " params_version, config_json, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     run_id,
-                    datetime.now(UTC).isoformat(),
+                    self._now(),
                     mode,
                     git_sha,
                     data_feed,
@@ -111,7 +123,7 @@ class JournalWriter:
         try:
             self._conn.execute(
                 "UPDATE runs SET ended_at = ? WHERE run_id = ?",
-                (datetime.now(UTC).isoformat(), run_id),
+                (self._now(), run_id),
             )
         except sqlite3.Error as exc:
             msg = f"Kosu kapatilamadi ({run_id}): {exc}"
@@ -135,24 +147,35 @@ class JournalWriter:
             raise JournalError(msg) from exc
 
     def record_order(
-        self, order: BracketOrder, ref: OrderRef, decision_id: str | None = None
+        self,
+        order: BracketOrder,
+        *,
+        run_id: str,
+        decision_id: str | None = None,
+        status: str = "submitting",
     ) -> None:
-        """Gonderilen emri kaydeder.
+        """Emri brokera GONDERMEDEN ONCE kaydeder (write-ahead).
 
-        Emir kaydi, karari brokerdaki gercek emre baglar. Bu bag
-        olmadan "hangi karar hangi islemi dogurdu" sorusu
-        cevaplanamaz ve kapanan pozisyonlar hicbir stratejiye
-        atfedilemez.
+        Sira bilincli: client_order_id'yi biz uretiyoruz, broker'in
+        verdigi kimlik ise ancak cevap geldiginde biliniyor. Once
+        gonderip sonra kaydetmek, ikisinin arasinda surec olurse
+        brokerdaki emri sahipsiz birakirdi - o emrin dolmasindan
+        dogan pozisyon hicbir karara atfedilemez ve mutabakat onu
+        goremezdi.
+
+        Kayit `submitting` durumunda duser; broker cevap verince
+        `confirm_order` ile kesinlesir.
         """
         try:
             self._conn.execute(
-                "INSERT INTO orders (broker_order_id, client_order_id, decision_id,"
-                " symbol, side, qty, entry_type, limit_price, stop_loss, take_profit,"
-                " status, submitted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO orders (client_order_id, broker_order_id, decision_id,"
+                " run_id, symbol, side, qty, entry_type, limit_price, stop_loss,"
+                " take_profit, status, submitted_at)"
+                " VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    ref.broker_order_id,
-                    ref.client_order_id,
+                    order.client_order_id,
                     decision_id,
+                    run_id,
                     order.symbol,
                     order.side.value,
                     order.qty,
@@ -160,23 +183,90 @@ class JournalWriter:
                     order.limit_price,
                     order.stop_loss,
                     order.take_profit,
-                    ref.status,
-                    ref.submitted_at.astimezone(UTC).isoformat(),
+                    status,
+                    self._now(),
                 ),
             )
         except sqlite3.Error as exc:
-            msg = f"Emir kaydedilemedi ({ref.broker_order_id}): {exc}"
+            msg = f"Emir kaydedilemedi ({order.client_order_id}): {exc}"
             raise JournalError(msg) from exc
 
-    def update_order_status(self, broker_order_id: str, status: str) -> None:
+    def confirm_order(self, client_order_id: str, ref: OrderRef) -> None:
+        """Broker cevabiyla emri kesinlestirir."""
+        self._update_order(
+            client_order_id,
+            "broker_order_id = ?, status = ?, updated_at = ?",
+            (ref.broker_order_id, ref.status, self._now()),
+        )
+
+    def update_order_status(
+        self, client_order_id: str, status: str, broker_order_id: str | None = None
+    ) -> None:
         """Emrin son bilinen durumunu gunceller."""
+        if broker_order_id is None:
+            self._update_order(
+                client_order_id,
+                "status = ?, updated_at = ?",
+                (status, self._now()),
+            )
+            return
+        self._update_order(
+            client_order_id,
+            "status = ?, broker_order_id = COALESCE(broker_order_id, ?), updated_at = ?",
+            (status, broker_order_id, self._now()),
+        )
+
+    def _update_order(self, client_order_id: str, assignment: str, params: tuple[Any, ...]) -> None:
         try:
             self._conn.execute(
-                "UPDATE orders SET status = ?, updated_at = ? WHERE broker_order_id = ?",
-                (status, datetime.now(UTC).isoformat(), broker_order_id),
+                # `assignment` cagiran metotlarda sabit metin; degerler
+                # her zaman parametre olarak baglaniyor.
+                f"UPDATE orders SET {assignment} WHERE client_order_id = ?",  # noqa: S608
+                (*params, client_order_id),
             )
         except sqlite3.Error as exc:
-            msg = f"Emir durumu guncellenemedi ({broker_order_id}): {exc}"
+            msg = f"Emir guncellenemedi ({client_order_id}): {exc}"
+            raise JournalError(msg) from exc
+
+    def record_fill(self, fill: Fill, run_id: str) -> bool:
+        """Gerceklesmeyi denetim izine yazar; zaten varsa False doner."""
+        try:
+            cursor = self._conn.execute(
+                "INSERT OR IGNORE INTO fills (broker_order_id, client_order_id, run_id,"
+                " symbol, side, qty, price, filled_at, order_type)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    fill.broker_order_id,
+                    fill.client_order_id,
+                    run_id,
+                    fill.symbol,
+                    fill.side.value,
+                    fill.qty,
+                    fill.price,
+                    fill.filled_at.astimezone(UTC).isoformat(),
+                    fill.order_type,
+                ),
+            )
+        except sqlite3.Error as exc:
+            msg = f"Gerceklesme kaydedilemedi ({fill.broker_order_id}): {exc}"
+            raise JournalError(msg) from exc
+        return cursor.rowcount > 0
+
+    def record_halt(self, trade_date: date, reason: str, run_id: str) -> None:
+        """Gunu kill-switch ile kapatir.
+
+        Kayit veritabaninda tutuluyor cunku bellekteki bir bayrak
+        sureci asmaz: systemd yeniden baslattiginda sistem, gunu
+        kapatmis oldugunu unutur ve tekrar islem acardi.
+        """
+        try:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO daily_state (trade_date, halted_at, halt_reason, run_id)"
+                " VALUES (?, ?, ?, ?)",
+                (trade_date.isoformat(), self._now(), reason, run_id),
+            )
+        except sqlite3.Error as exc:
+            msg = f"Gun durumu kaydedilemedi ({trade_date}): {exc}"
             raise JournalError(msg) from exc
 
     def record_trade(self, trade: Trade) -> bool:

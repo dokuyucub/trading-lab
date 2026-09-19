@@ -3,10 +3,11 @@
 from tlab.journal.db import apply_migrations, connect, schema_version
 from tlab.journal.queries import (
     decision_count,
+    halt_reason,
     open_entry_orders,
-    recorded_trade_ids,
     session_summary,
     top_veto_reasons,
+    unconfirmed_orders,
 )
 from tlab.journal.writer import JournalWriter
 
@@ -15,9 +16,10 @@ __all__ = [
     "apply_migrations",
     "connect",
     "decision_count",
+    "halt_reason",
     "open_entry_orders",
-    "recorded_trade_ids",
     "schema_version",
     "session_summary",
     "top_veto_reasons",
+    "unconfirmed_orders",
 ]

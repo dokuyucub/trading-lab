@@ -8,6 +8,7 @@ ogrenme katmani buraya bir suru sorgu ekleyecek).
 from __future__ import annotations
 
 import sqlite3
+from datetime import date
 from typing import Any
 
 from tlab.errors import JournalError
@@ -34,14 +35,34 @@ def open_entry_orders(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
     return {str(row["client_order_id"]): dict(row) for row in rows}
 
 
-def recorded_trade_ids(conn: sqlite3.Connection) -> set[str]:
-    """Journal'a daha once yazilmis islem kimlikleri."""
+def unconfirmed_orders(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Gonderildigi yazilmis ama broker cevabi kaydedilmemis emirler.
+
+    Bu satirlar, emri kaydetmekle gondermek arasinda surecin oldugu
+    pencerenin izidir. Her turda broker'a karsi cozumlenirler: emir
+    brokerda varsa kesinlesir, yoksa ve uzerinden yeterli sure
+    gectiyse 'kayip' olarak isaretlenip sembolun onu acilir.
+    """
     try:
-        rows = conn.execute("SELECT trade_id FROM trades").fetchall()
+        rows = conn.execute(
+            "SELECT client_order_id, symbol, submitted_at FROM orders WHERE status = 'submitting'"
+        ).fetchall()
     except sqlite3.Error as exc:
-        msg = f"Islem kimlikleri okunamadi: {exc}"
+        msg = f"Kesinlesmemis emirler okunamadi: {exc}"
         raise JournalError(msg) from exc
-    return {str(row["trade_id"]) for row in rows}
+    return [dict(row) for row in rows]
+
+
+def halt_reason(conn: sqlite3.Connection, trade_date: date) -> str | None:
+    """Gun kill-switch ile kapatildiysa sebebi, degilse None.
+
+    Surec yeniden baslasa bile okunabildigi icin kill-switch karari
+    gun boyunca gecerli kaliyor.
+    """
+    row = conn.execute(
+        "SELECT halt_reason FROM daily_state WHERE trade_date = ?", (trade_date.isoformat(),)
+    ).fetchone()
+    return None if row is None else str(row["halt_reason"])
 
 
 def decision_count(conn: sqlite3.Connection, run_id: str) -> tuple[int, int]:
