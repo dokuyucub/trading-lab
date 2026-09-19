@@ -6,7 +6,16 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from tlab.core.types import Account, Position, Side
+from tlab.core.types import (
+    Account,
+    BracketOrder,
+    EntryType,
+    Fill,
+    OrderRef,
+    Position,
+    Side,
+    TimeInForce,
+)
 from tlab.errors import BrokerError
 from tlab.sdk_compat import sdk_bool, sdk_field, sdk_float, sdk_int
 
@@ -99,3 +108,180 @@ class AlpacaBroker:
             next_open=next_open,
             next_close=next_close,
         )
+
+    # ------------------------------------------------------------------
+    # Emirler
+    # ------------------------------------------------------------------
+
+    def list_open_orders(self) -> list[OrderRef]:
+        from alpaca.trading.enums import QueryOrderStatus
+        from alpaca.trading.requests import GetOrdersRequest
+
+        try:
+            raw_orders: Any = self._client.get_orders(
+                filter=GetOrdersRequest(status=QueryOrderStatus.OPEN)
+            )
+        except Exception as exc:
+            msg = f"Bekleyen emirler alinamadi: {exc}"
+            raise BrokerError(msg) from exc
+
+        return [self._to_order_ref(raw) for raw in raw_orders]
+
+    def submit_bracket(self, order: BracketOrder) -> OrderRef:
+        """Giris + stop + hedefi tek paket halinde gonderir."""
+        from alpaca.trading.enums import OrderClass, OrderSide
+        from alpaca.trading.enums import TimeInForce as AlpacaTIF
+        from alpaca.trading.requests import (
+            LimitOrderRequest,
+            MarketOrderRequest,
+            StopLossRequest,
+            TakeProfitRequest,
+        )
+
+        common = {
+            "symbol": order.symbol,
+            "qty": order.qty,
+            "side": OrderSide.BUY if order.side is Side.BUY else OrderSide.SELL,
+            "time_in_force": (
+                AlpacaTIF.DAY if order.time_in_force is TimeInForce.DAY else AlpacaTIF.GTC
+            ),
+            "order_class": OrderClass.BRACKET,
+            "take_profit": TakeProfitRequest(limit_price=order.take_profit),
+            "stop_loss": StopLossRequest(stop_price=order.stop_loss),
+            "client_order_id": order.client_order_id,
+        }
+
+        request = (
+            LimitOrderRequest(limit_price=order.limit_price, **common)
+            if order.entry_type is EntryType.LIMIT
+            else MarketOrderRequest(**common)
+        )
+
+        try:
+            raw: Any = self._client.submit_order(order_data=request)
+        except Exception as exc:
+            msg = f"{order.symbol} emri gonderilemedi: {exc}"
+            raise BrokerError(msg) from exc
+
+        return self._to_order_ref(raw)
+
+    def close_position(self, symbol: str) -> OrderRef | None:
+        """Pozisyonu piyasa emriyle kapatir.
+
+        Alpaca pozisyon yoksa hata dondurur; bunu None'a ceviriyoruz
+        cunku "zaten kapali" bir hata degil, istenen son durumdur.
+        """
+        try:
+            raw: Any = self._client.close_position(symbol)
+        except Exception as exc:
+            if _is_position_missing(exc):
+                return None
+            msg = f"{symbol} pozisyonu kapatilamadi: {exc}"
+            raise BrokerError(msg) from exc
+        return self._to_order_ref(raw)
+
+    def cancel_open_orders(self, symbol: str | None = None) -> int:
+        """Bekleyen emirleri iptal eder."""
+        if symbol is None:
+            try:
+                cancelled: Any = self._client.cancel_orders()
+            except Exception as exc:
+                msg = f"Emirler iptal edilemedi: {exc}"
+                raise BrokerError(msg) from exc
+            return len(list(cancelled))
+
+        count = 0
+        for order in self.list_open_orders():
+            if order.symbol != symbol:
+                continue
+            try:
+                self._client.cancel_order_by_id(order.broker_order_id)
+            except Exception as exc:
+                msg = f"{symbol} emri iptal edilemedi ({order.broker_order_id}): {exc}"
+                raise BrokerError(msg) from exc
+            count += 1
+        return count
+
+    @staticmethod
+    def _to_order_ref(raw: Any) -> OrderRef:
+        """SDK emir nesnesini cekirdek OrderRef tipine cevirir."""
+        submitted = sdk_field(raw, "submitted_at") or sdk_field(raw, "created_at")
+        if not isinstance(submitted, datetime):
+            msg = "Emir yanitinda gecerli bir zaman damgasi yok"
+            raise BrokerError(msg)
+
+        status = sdk_field(raw, "status", "unknown")
+        return OrderRef(
+            broker_order_id=str(sdk_field(raw, "id", "")),
+            client_order_id=str(sdk_field(raw, "client_order_id", "")),
+            symbol=str(sdk_field(raw, "symbol", "")),
+            submitted_at=submitted,
+            status=str(getattr(status, "value", status)),
+        )
+
+    def list_fills(self, since: datetime) -> list[Fill]:
+        """Verilen andan bu yana gerceklesmis emirleri bacaklariyla dondurur."""
+        from alpaca.trading.enums import QueryOrderStatus
+        from alpaca.trading.requests import GetOrdersRequest
+
+        try:
+            raw_orders: Any = self._client.get_orders(
+                filter=GetOrdersRequest(
+                    status=QueryOrderStatus.ALL,
+                    after=since,
+                    # Bracket bacaklari ebeveynin icinde geliyor; duz
+                    # listede kayboluyorlar ve cikislari kaciririz.
+                    nested=True,
+                    limit=500,
+                )
+            )
+        except Exception as exc:
+            msg = f"Gerceklesmeler alinamadi: {exc}"
+            raise BrokerError(msg) from exc
+
+        fills: list[Fill] = []
+        for raw in raw_orders:
+            fills.extend(self._collect_fills(raw))
+        fills.sort(key=lambda fill: fill.filled_at)
+        return fills
+
+    @classmethod
+    def _collect_fills(cls, raw: Any) -> list[Fill]:
+        """Bir emri ve tum bacaklarini gerceklesme listesine cevirir."""
+        fills: list[Fill] = []
+        single = cls._to_fill(raw)
+        if single is not None:
+            fills.append(single)
+        for leg in sdk_field(raw, "legs", []) or []:
+            fills.extend(cls._collect_fills(leg))
+        return fills
+
+    @staticmethod
+    def _to_fill(raw: Any) -> Fill | None:
+        """Dolmus bir emri Fill'e cevirir; dolmamissa None."""
+        filled_at = sdk_field(raw, "filled_at")
+        qty = sdk_float(raw, "filled_qty")
+        price = sdk_float(raw, "filled_avg_price")
+        if not isinstance(filled_at, datetime) or qty <= 0 or price <= 0:
+            return None
+
+        side_raw = sdk_field(raw, "side", "")
+        side_value = str(getattr(side_raw, "value", side_raw)).lower()
+        order_type = sdk_field(raw, "order_type") or sdk_field(raw, "type", "market")
+
+        return Fill(
+            broker_order_id=str(sdk_field(raw, "id", "")),
+            client_order_id=str(sdk_field(raw, "client_order_id", "")),
+            symbol=str(sdk_field(raw, "symbol", "")),
+            side=Side.BUY if side_value == "buy" else Side.SELL,
+            qty=qty,
+            price=price,
+            filled_at=filled_at,
+            order_type=str(getattr(order_type, "value", order_type)).lower(),
+        )
+
+
+def _is_position_missing(exc: Exception) -> bool:
+    """Alpaca'nin "pozisyon yok" hatasini ayirt eder."""
+    text = str(exc).lower()
+    return "position does not exist" in text or "position not found" in text
