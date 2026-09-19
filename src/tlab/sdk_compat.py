@@ -15,10 +15,14 @@ from typing import Any
 
 
 def sdk_field(source: Any, name: str, default: Any = None) -> Any:
-    """Alan degerini, kaynak ister model ister sozluk olsun okur."""
-    if isinstance(source, dict):
-        return source.get(name, default)
-    value = getattr(source, name, default)
+    """Alan degerini, kaynak ister model ister sozluk olsun okur.
+
+    Degeri None olan bir alan, hic olmayan alanla ayni sayilir ve
+    varsayilana duser. Bu esitlik sart: aksi halde ayni bilgi sozlukte
+    None, nesnede varsayilan dondururdu ve uyum katmani tam da
+    kapatmak icin var oldugu farki yeniden uretirdi.
+    """
+    value = source.get(name) if isinstance(source, dict) else getattr(source, name, None)
     return default if value is None else value
 
 

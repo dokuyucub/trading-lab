@@ -129,3 +129,21 @@ def test_corrupt_bar_raises_instead_of_reaching_strategies() -> None:
 def test_missing_timestamp_raises() -> None:
     with pytest.raises(DataError, match="zaman damgasi"):
         AlpacaMarketData._to_bar("SPY", dict(DICT_BAR, timestamp=None))
+
+
+def test_none_value_falls_back_identically_for_dict_and_object() -> None:
+    """Uyum katmaninin varlik sebebi bu esitlik.
+
+    Alani None olan bir sozluk, alani None olan bir nesneyle ayni
+    sonucu vermeli. Aksi halde `str(sdk_field(...))` cagrisi bir
+    tarafta "USD", diger tarafta "None" uretirdi.
+    """
+
+    @dataclass
+    class WithNone:
+        currency: str | None = None
+
+    assert sdk_field(WithNone(), "currency", "USD") == "USD"
+    assert sdk_field({"currency": None}, "currency", "USD") == "USD"
+    assert sdk_field({}, "currency", "USD") == "USD"
+    assert str(sdk_field({"currency": None}, "currency", "USD")) == "USD"

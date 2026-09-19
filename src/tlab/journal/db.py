@@ -11,12 +11,18 @@ git gecmisinden cevaplanabilsin diye.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from pathlib import Path
 
 from tlab.errors import JournalError
 
 MIGRATIONS_DIR = Path(__file__).parent / "migrations"
+
+# Goc adi SQL metnine gomuldugu icin karakter kumesi kisitli tutuluyor.
+# Parametre baglama executescript icinde calismiyor; bu yuzden guvenlik
+# adin kendisinde saglaniyor.
+_MIGRATION_NAME = re.compile(r"^\d{3}_[a-z0-9_]+$")
 
 
 def connect(path: Path) -> sqlite3.Connection:
@@ -54,11 +60,10 @@ def schema_version(conn: sqlite3.Connection) -> int:
 def _discover_migrations() -> list[tuple[int, str, Path]]:
     found: list[tuple[int, str, Path]] = []
     for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
-        prefix = path.stem.split("_", 1)[0]
-        if not prefix.isdigit():
-            msg = f"Goc dosyasi 'NNN_ad.sql' bicimini izlemeli: {path.name}"
+        if not _MIGRATION_NAME.match(path.stem):
+            msg = f"Goc dosyasi 'NNN_kucuk_harfli_ad.sql' bicimini izlemeli: {path.name}"
             raise JournalError(msg)
-        found.append((int(prefix), path.stem, path))
+        found.append((int(path.stem[:3]), path.stem, path))
     return found
 
 

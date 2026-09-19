@@ -108,3 +108,26 @@ def test_optional_fields_survive_as_none(cache: BarCache) -> None:
     loaded = cache.load("SPY", Timeframe.D1)[0]
     assert loaded.vwap is None
     assert loaded.trade_count is None
+
+
+def test_naive_filter_dates_are_rejected_with_a_clear_error(
+    cache: BarCache, sample_bars: list[Bar]
+) -> None:
+    """Naive tarih, pandas'in anlasilmaz bir TypeError'i ile patliyordu.
+
+    Hatayi kendi sinirimizda, ne yapilmasi gerektigini soyleyerek veriyoruz.
+    """
+    cache.save("SPY", Timeframe.M1, sample_bars)
+    with pytest.raises(DataError, match="timezone"):
+        cache.load("SPY", Timeframe.M1, start=datetime(2026, 1, 5, 14, 30))
+
+
+def test_filters_respect_source_timezone(cache: BarCache, sample_bars: list[Bar]) -> None:
+    """Farkli dilimde verilen tarih dogru ana cevrilmeli."""
+    from datetime import timezone
+
+    cache.save("SPY", Timeframe.M1, sample_bars)
+    eastern = timezone(timedelta(hours=-5))
+    # 09:33 New York = 14:33 UTC -> 4. bardan itibaren 7 bar
+    subset = cache.load("SPY", Timeframe.M1, start=datetime(2026, 1, 5, 9, 33, tzinfo=eastern))
+    assert len(subset) == 7

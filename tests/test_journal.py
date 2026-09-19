@@ -189,3 +189,22 @@ def test_duplicate_decision_id_is_rejected(
     writer.record_decision(decision)
     with pytest.raises(JournalError, match="Karar kaydedilemedi"):
         writer.record_decision(decision)
+
+
+def test_migration_filenames_are_restricted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Goc adi SQL metnine gomuluyor; parametre baglama burada calismaz.
+
+    Guvenlik bu yuzden adin kendisinde saglaniyor.
+    """
+    import tlab.journal.db as db
+
+    fake_dir = tmp_path / "migrations"
+    fake_dir.mkdir()
+    (fake_dir / "001_ok'; DROP TABLE runs;--.sql").write_text("SELECT 1;", encoding="utf-8")
+    monkeypatch.setattr(db, "MIGRATIONS_DIR", fake_dir)
+
+    connection = connect(tmp_path / "x.db")
+    with pytest.raises(JournalError, match="bicimini izlemeli"):
+        apply_migrations(connection)

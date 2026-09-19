@@ -21,6 +21,17 @@ from tlab.errors import DataError
 _COLUMNS = ["ts", "open", "high", "low", "close", "volume", "vwap", "trade_count"]
 
 
+def _require_aware(label: str, moment: datetime | None) -> None:
+    """Naive tarih, pandas'in anlasilmaz bir TypeError'i ile patlardi.
+
+    Hatayi kendi sinirimizda, ne yapilmasi gerektigini soyleyerek
+    veriyoruz.
+    """
+    if moment is not None and moment.tzinfo is None:
+        msg = f"{label} timezone bilgisi icermeli (ornegin datetime.now(UTC))"
+        raise DataError(msg)
+
+
 class BarCache:
     """Barlari sembol ve periyot bazinda parquet dosyalarinda saklar."""
 
@@ -42,6 +53,9 @@ class BarCache:
         end: datetime | None = None,
     ) -> list[Bar]:
         """Onbellekten barlari okur. Dosya yoksa bos liste doner."""
+        _require_aware("start", start)
+        _require_aware("end", end)
+
         path = self.path_for(symbol, timeframe)
         if not path.exists():
             return []
@@ -55,12 +69,11 @@ class BarCache:
         if frame.empty:
             return []
 
-        timestamps = pd.to_datetime(frame["ts"], utc=True)
+        frame = frame.assign(ts=pd.to_datetime(frame["ts"], utc=True))
         if start is not None:
-            frame = frame[timestamps >= pd.Timestamp(start)]
-            timestamps = timestamps[timestamps >= pd.Timestamp(start)]
+            frame = frame[frame["ts"] >= pd.Timestamp(start)]
         if end is not None:
-            frame = frame[timestamps <= pd.Timestamp(end)]
+            frame = frame[frame["ts"] <= pd.Timestamp(end)]
 
         symbol = symbol.upper()
         return [
@@ -75,7 +88,7 @@ class BarCache:
                 vwap=None if pd.isna(row.vwap) else float(row.vwap),
                 trade_count=None if pd.isna(row.trade_count) else int(row.trade_count),
             )
-            for row in frame.assign(ts=pd.to_datetime(frame["ts"], utc=True)).itertuples()
+            for row in frame.itertuples()
         ]
 
     def coverage(self, symbol: str, timeframe: Timeframe) -> tuple[datetime, datetime] | None:
@@ -104,8 +117,12 @@ class BarCache:
         zaman sirali ve tekilligi garantili.
         """
         if not bars:
-            existing = self.coverage(symbol, timeframe)
-            return 0 if existing is None else len(self.load(symbol, timeframe))
+            path = self.path_for(symbol, timeframe)
+            if not path.exists():
+                return 0
+            # Sadece ts kolonu okunur: sayim icin tum dosyayi
+            # cozmenin anlami yok.
+            return len(pd.read_parquet(path, columns=["ts"]))
 
         mismatched = {bar.symbol.upper() for bar in bars} - {symbol.upper()}
         if mismatched:
