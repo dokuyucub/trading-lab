@@ -120,6 +120,13 @@ class SessionSection(Strict):
     regular_close: time = time(16, 0)
     flatten_before_close_minutes: Annotated[int, Field(ge=0, le=120)] = 10
     allow_extended_hours: bool = False
+    entry_order_ttl_minutes: Annotated[int, Field(ge=1, le=390)] = 15
+    """Dolmayan giris emri bu sure sonunda iptal edilir.
+
+    Kirilim sinyali zamana baglidir: on dakika once gecerli olan bir
+    giris fiyati artik gecerli degildir. Emri gun boyu asili birakmak,
+    sinyalin ilgisiz kaldigi bir anda dolmasina yol acar.
+    """
 
     @model_validator(mode="after")
     def _check(self) -> Self:

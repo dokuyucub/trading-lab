@@ -80,6 +80,11 @@ class RiskGate:
 
         if ctx.position is not None:
             reasons.append(f"{intent.symbol} icin zaten acik pozisyon var")
+        elif intent.symbol in ctx.pending_orders:
+            # Pozisyon henuz olusmamis olabilir ama emir yolda.
+            # Bu kontrol olmadan dolmayan bir limit emri her turda
+            # yeniden gonderilir ve pozisyon kat kat buyur.
+            reasons.append(f"{intent.symbol} icin brokerda bekleyen emir var")
 
         if len(ctx.positions) >= config.max_concurrent_positions:
             reasons.append(

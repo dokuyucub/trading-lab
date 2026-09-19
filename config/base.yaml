@@ -23,6 +23,10 @@ session:
   flatten_before_close_minutes: 10
   # Uzatilmis seans likiditesi ince, spread genis. Varsayilan kapali.
   allow_extended_hours: false
+  # Dolmayan giris emri bu sure sonunda iptal edilir. Kirilim sinyali
+  # zamana bagli: emri gun boyu asili birakmak, sinyalin ilgisiz
+  # kaldigi bir anda dolmasina yol acar.
+  entry_order_ttl_minutes: 15
 
 risk:
   # Islem basina riske edilen ozsermaye yuzdesi (stop'a kadar olan mesafe).

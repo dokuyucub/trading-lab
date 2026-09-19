@@ -155,6 +155,15 @@ class Context:
     positions: Mapping[str, Position]
     quote: Quote | None = None
 
+    pending_orders: frozenset[str] = frozenset()
+    """Brokerda bekleyen emri olan semboller.
+
+    Pozisyon listesi tek basina yetmiyor: gonderilmis ama henuz
+    dolmamis bir limit emri ortada pozisyon YOKKEN de maruziyet
+    demektir. Bu bilgi olmadan dongu, dolmayi bekleyen bir emir icin
+    her turda yenisini gonderir.
+    """
+
     @property
     def last_bar(self) -> Bar | None:
         return self.bars[-1] if self.bars else None
@@ -168,6 +177,14 @@ class Context:
     def position(self) -> Position | None:
         """Bu sembolde acik pozisyon (varsa)."""
         return self.positions.get(self.symbol)
+
+    @property
+    def has_open_exposure(self) -> bool:
+        """Bu sembolde acik pozisyon ya da bekleyen emir var mi.
+
+        Yeni bir giris icin tek bakilmasi gereken soru budur.
+        """
+        return self.position is not None or self.symbol in self.pending_orders
 
     @property
     def session_bars(self) -> tuple[Bar, ...]:

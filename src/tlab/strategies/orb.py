@@ -98,8 +98,10 @@ class OpeningRangeBreakout:
         if not 0 <= ctx.session.minutes_since_open <= params.entry_window_minutes:
             return None
 
-        # Sembol basina tek pozisyon: ayni fikre iki kez risk alinmaz.
-        if ctx.position is not None:
+        # Sembol basina tek maruziyet: ayni fikre iki kez risk alinmaz.
+        # Bekleyen emir de maruziyettir - dolmayi bekleyen bir limit
+        # emri ortada pozisyon yokken de sermayeyi baglar.
+        if ctx.has_open_exposure:
             return None
 
         last = ctx.last_bar
