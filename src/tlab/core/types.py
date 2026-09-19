@@ -195,14 +195,27 @@ class Account(Frozen):
 
 
 class Position(Frozen):
-    """Acik pozisyon. `qty` her zaman pozitif; yon `side` alaninda."""
+    """Acik pozisyon. `qty` her zaman pozitif; yon `side` alaninda.
+
+    Miktar bilincli olarak float: Alpaca kesirli hisse tutabiliyor
+    (kesirli emir, temettu yeniden yatirimi). Tamsayiya yuvarlamak
+    pozisyonu OLDUGUNDAN FARKLI gosterirdi ve 0,5 hisselik bir
+    pozisyon tamamen kaybolurdu. Broker tek dogru kaynak oldugu icin
+    onun bildirdigi miktar oldugu gibi saklanir; emir gonderirken
+    tam hisse sarti ayrica BracketOrder tarafinda uygulanir.
+    """
 
     symbol: str
     side: Side
-    qty: Annotated[int, Field(gt=0)]
+    qty: Annotated[float, Field(gt=0)]
     avg_entry_price: PositivePrice
     current_price: PositivePrice
     unrealized_pl: float = 0.0
+
+    @property
+    def is_fractional(self) -> bool:
+        """Kesirli pozisyon mu. Bracket emri tam hisse gerektirir."""
+        return self.qty != int(self.qty)
 
     @property
     def market_value(self) -> float:
@@ -349,7 +362,40 @@ class BracketOrder(Frozen):
         if self.entry_type is EntryType.MARKET and self.limit_price is not None:
             msg = f"{self.symbol}: market emrinde limit_price bulunamaz"
             raise ValueError(msg)
+        self._check_geometry()
         return self
+
+    def _check_geometry(self) -> None:
+        """Stop ve hedefin yone gore dogru tarafta oldugunu garanti eder.
+
+        Intent ayni kurali zaten dogruluyor, ama brokera giden nesne
+        budur ve dogrudan da olusturulabilir. Ayrica fiyatlar burada
+        yuvarlandigi icin Intent'te saglam olan bir bracket, cok dar
+        bir stop yuzunden yuvarlandiktan sonra cokebilir
+        (stop == giris). Son sozu bu kontrol soyluyor.
+        """
+        low, high = (
+            (self.stop_loss, self.take_profit)
+            if self.side is Side.BUY
+            else (self.take_profit, self.stop_loss)
+        )
+        if not low < high:
+            msg = (
+                f"{self.symbol} {self.side.value.upper()}: stop ({self.stop_loss}) ve "
+                f"hedef ({self.take_profit}) yanlis tarafta ya da ayni fiyatta"
+            )
+            raise ValueError(msg)
+
+        if self.limit_price is None:
+            return
+        if not low < self.limit_price < high:
+            msg = (
+                f"{self.symbol} {self.side.value.upper()}: giris ({self.limit_price}) "
+                f"stop ({self.stop_loss}) ile hedef ({self.take_profit}) arasinda degil. "
+                "Fiyatlar yuvarlandiktan sonra cakismis olabilir - stop mesafesi "
+                "en az bir fiyat adimi olmali."
+            )
+            raise ValueError(msg)
 
     @classmethod
     def from_intent(cls, intent: Intent, qty: int, entry_type: EntryType) -> BracketOrder:

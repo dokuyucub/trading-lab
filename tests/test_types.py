@@ -341,3 +341,103 @@ def test_vetoed_decision_cannot_carry_an_order(sample_intent: Intent) -> None:
 )
 def test_round_price_follows_tick_rules(raw: float, expected: float) -> None:
     assert round_price(raw) == expected
+
+
+# --------------------------------------------------------------------------
+# Bracket geometrisi - emrin kendisinde
+# --------------------------------------------------------------------------
+#
+# Intent ayni kurali dogruluyor, ama brokera giden nesne BracketOrder ve
+# dogrudan da olusturulabiliyor. Asagidaki testler bu ikinci savunma
+# hattinin duruyor oldugunu garanti eder.
+
+
+@pytest.mark.parametrize(
+    ("side", "stop", "target"),
+    [
+        (Side.BUY, 101.0, 99.0),  # long'da stop hedefin ustunde
+        (Side.SELL, 99.0, 101.0),  # short'ta stop hedefin altinda
+        (Side.BUY, 100.0, 100.0),  # stop ve hedef ayni fiyatta
+    ],
+)
+def test_market_bracket_rejects_wrong_sided_exits(side: Side, stop: float, target: float) -> None:
+    with pytest.raises(ValidationError):
+        BracketOrder(
+            symbol="SPY",
+            side=side,
+            qty=1,
+            entry_type=EntryType.MARKET,
+            stop_loss=stop,
+            take_profit=target,
+        )
+
+
+def test_limit_bracket_requires_entry_between_stop_and_target() -> None:
+    with pytest.raises(ValidationError):
+        BracketOrder(
+            symbol="SPY",
+            side=Side.BUY,
+            qty=1,
+            entry_type=EntryType.LIMIT,
+            limit_price=98.0,  # stop'un altinda
+            stop_loss=99.0,
+            take_profit=101.0,
+        )
+
+
+def test_rounding_must_not_collapse_the_bracket() -> None:
+    """Cok dar bir stop, yuvarlandiktan sonra girisle ayni fiyata duser.
+
+    Boyle bir emir brokera ulasirsa ya reddedilir ya da girisle birlikte
+    stop'u tetikler. Yuvarlama sonrasi kontrol bu yuzden sart.
+    """
+    tight = Intent(
+        strategy_id="t",
+        symbol="SPY",
+        side=Side.BUY,
+        reference_price=100.001,
+        stop_loss=99.9996,
+        take_profit=100.004,
+    )
+    assert tight.risk_per_share > 0  # Intent duzeyinde gecerli
+    with pytest.raises(ValidationError):
+        BracketOrder.from_intent(tight, qty=10, entry_type=EntryType.LIMIT)
+
+
+def test_valid_short_bracket_is_accepted() -> None:
+    order = BracketOrder(
+        symbol="SPY",
+        side=Side.SELL,
+        qty=5,
+        entry_type=EntryType.LIMIT,
+        limit_price=100.0,
+        stop_loss=101.0,
+        take_profit=98.0,
+    )
+    assert order.qty == 5
+
+
+# --------------------------------------------------------------------------
+# Kesirli pozisyonlar
+# --------------------------------------------------------------------------
+
+
+def test_fractional_position_is_preserved() -> None:
+    """Tamsayiya yuvarlamak 0,5 hisselik pozisyonu tamamen kaybettirirdi.
+
+    Gozetimsiz calisan bir sistemde pozisyonu gormemek, yanlis
+    gormekten daha tehlikeli.
+    """
+    position = Position(
+        symbol="SPY", side=Side.BUY, qty=0.5, avg_entry_price=100.0, current_price=101.0
+    )
+    assert position.qty == pytest.approx(0.5)
+    assert position.is_fractional
+    assert position.market_value == pytest.approx(50.5)
+
+
+def test_whole_share_position_is_not_flagged_fractional() -> None:
+    position = Position(
+        symbol="SPY", side=Side.BUY, qty=10, avg_entry_price=100.0, current_price=101.0
+    )
+    assert not position.is_fractional

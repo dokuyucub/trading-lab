@@ -68,7 +68,11 @@ class AlpacaBroker:
                     # Alpaca short pozisyonlari negatif miktarla bildirir;
                     # biz yonu ayri alanda tutup miktari pozitif sakliyoruz.
                     side=Side.BUY if qty > 0 else Side.SELL,
-                    qty=int(abs(qty)),
+                    # Yuvarlama yok: 0,5 hisselik bir pozisyon int()
+                    # ile sifira duser ve sistem onu hic gormez.
+                    # Mutabakatta pozisyonu kacirmak, gozetimsiz
+                    # calisan bir sistemde en tehlikeli hatadir.
+                    qty=abs(qty),
                     avg_entry_price=entry_price,
                     # Piyasa kapaliyken current_price bos gelebilir.
                     current_price=sdk_float(raw, "current_price") or entry_price,
