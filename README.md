@@ -3,9 +3,10 @@
 Alpaca üzerinde çalışan, gözetimsiz işlem yapan ve kendi işlemlerinden öğrenen
 bir alım-satım sistemi.
 
-> **Durum: Faz 0 — salt okunur.** Sistem şu anda hesap okur, piyasa verisi çeker
-> ve karar kaydı altyapısını hazırlar. **Emir göndermez.** Emir yetkisi, risk
-> kapısı tamamlandıktan sonra Faz 1'de açılacak.
+> **Durum: Faz 1 — gözetimsiz paper trading.** Sistem bir seansı başından sonuna
+> kendi başına yürütür: açılış aralığı kırılımlarını arar, risk kapısından
+> geçirir, bracket emri gönderir, gün sonunda pozisyonları kapatır ve her kararı
+> journal'a yazar. Varsayılan olarak **paper** hesapta çalışır.
 
 ---
 
@@ -41,7 +42,11 @@ veri → özellik → strateji → RİSK KAPISI → execution → journal → ö
 |---|---|
 | `core/` | Saf alan tipleri ve zaman soyutlaması. Hiçbir dış bağımlılığı yok. |
 | `data/` | Alpaca'dan bar/kotasyon, yerel parquet önbelleği. |
+| `features/` | Grafik okuma: göstergeler ve seans durumu. Saf fonksiyonlar. |
+| `strategies/` | Bağlamdan işlem niyetine. Ağ yok, durum yok. |
+| `risk/` | Risk kapısı: veto veya boyutlandırma. Tek koruma katmanı. |
 | `execution/` | Broker protokolü ve Alpaca uygulaması. |
+| `engine/` | Mutabakat ve seans döngüsü. |
 | `journal/` | Karar ve işlem kaydı — öğrenmenin yakıtı. |
 | `config.py` | Davranış ayarları (YAML) + anahtarlar (.env), bilerek ayrı. |
 
@@ -90,6 +95,35 @@ tlab doctor              # kurulumu baştan sona kontrol et
 
 `.env` dosyası `.gitignore` içindedir ve repoya **asla** girmez.
 
+## İlk çalıştırma
+
+Sistemi ilk kez çalıştırırken emir göndertmeyin. `--dry-run` her şeyi yapar —
+strateji karar verir, risk kapısı boyutlandırır, journal'a yazılır — ama emir
+brokera gitmez:
+
+```bash
+tlab run --dry-run          # bir seans boyunca izle
+tlab summary                # ne olurdu, hangi kararlar veto edildi
+```
+
+Veto sebepleri listesi en kıymetli çıktıdır: sistem hiç işlem açmıyorsa sebebi
+orada yazılıdır. Gördüklerinizden memnunsanız `--dry-run` olmadan çalıştırın.
+
+## Bir seans nasıl işliyor
+
+Döngü her turda sırasıyla şunları yapar — ve **sıra tesadüfi değil**:
+
+1. **Mutabakat** — broker'daki gerçek pozisyonlar ve gerçekleşmeler okunur,
+   kapanan işlemler journal'a yazılır. Her karar gerçek duruma göre verilmeli,
+   hafızadaki duruma göre değil.
+2. **Kill-switch** — günlük zarar sınırı aşıldıysa gün kapanır. Gün kötüye
+   gittiğinde stratejinin ne düşündüğünün önemi yoktur.
+3. **Gün sonu kapanışı** — kapanış tamponuna girildiyse pozisyonlar kapatılır.
+4. **Değerlendirme** — her sembol için bağlam kurulur, strateji sorulur, risk
+   kapısından geçirilir, izin çıkarsa bracket emri gider.
+
+Her karar — izin verilen de **veto edilen de** — journal'a yazılır.
+
 ## Komutlar
 
 | Komut | Ne yapar |
@@ -99,6 +133,10 @@ tlab doctor              # kurulumu baştan sona kontrol et
 | `tlab account` | Hesap özeti ve açık pozisyonlar |
 | `tlab fetch SPY --days 30 --timeframe 1Min` | Geçmiş bar verisi çeker, önbelleğe yazar |
 | `tlab journal init` | Journal veritabanını oluşturur/günceller |
+| `tlab run --dry-run` | Seansı yürütür ama **emir göndermez** — ilk çalıştırma için |
+| `tlab run` | Seans döngüsünü başlatır (paper hesap) |
+| `tlab run --once` | Tek tur çalıştırıp çıkar |
+| `tlab summary` | Son koşunun özeti: kararlar, işlemler, veto sebepleri |
 
 ## Yapılandırma
 
@@ -137,8 +175,8 @@ ayrıldığında çekirdek mantık brokera bağlanmadan doğrulanabilir.
 | Faz | Kapsam | Durum |
 |---|---|---|
 | 0 | İskelet, config, veri + önbellek, journal şeması, salt okunur broker | **tamam** |
-| 1 | Tek strateji (ORB), tam risk kapısı, bracket order, gözetimsiz koşu | sırada |
-| 2 | Backtest motoru (aynı strateji kodu) ve dürüst metrikler | |
+| 1 | ORB stratejisi, tam risk kapısı, bracket order, mutabakat, gözetimsiz koşu | **tamam** |
+| 2 | Backtest motoru (aynı strateji kodu) ve dürüst metrikler | sırada |
 | 3 | Gece analizi, shadow mode, terfi kapısı | |
 | 4 | Bilanço takvimi, haber/katalizör → özellik ve sert bloklar | |
 | 5 | Çoklu strateji, rejim sınıflandırma, dağıtım öğrenmesi | |

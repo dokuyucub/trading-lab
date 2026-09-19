@@ -9,6 +9,43 @@ sürüme geri dönmek tek komutluk iştir. Ayrıntı için `CONTRIBUTING.md`.
 
 ## [Yayınlanmamış]
 
+### Planlanan
+- Faz 2: Backtest motoru (aynı strateji kodu) ve dürüst metrikler.
+
+## [0.2.0] - 2026-09-19
+
+Faz 1 — gözetimsiz paper trading. Sistem artık bir seansı baştan sona kendi
+başına yürütüyor. 100 → 209 test.
+
+### Eklendi
+- **Göstergeler** (`features/indicators.py`): ATR (Wilder), EMA, seans VWAP,
+  bağıl hacim, açılış aralığı. Hepsi saf fonksiyon; veri yetmiyorsa `None`
+  döner, tahmin üretmez.
+- **Seans durumu** (`features/context.py`): gün içindeki aşama (açılış öncesi /
+  açılış aralığı / normal / kapanış tamponu / kapalı). Yaz saati geçişleri
+  zaman dilimi veritabanına bırakıldı, sabit saat farkı varsayılmıyor.
+- **Strateji protokolü ve ORB stratejisi**: parametre setleri içeriğine göre
+  parmak izi üretiyor (`orb-3f2a9c11`), böylece bir işlemin hangi ayarlarla
+  açıldığı tahmine değil kayda dayanıyor.
+- **Risk kapısı** (`risk/gate.py`): hesap sağlığı, günlük zarar kill-switch'i,
+  seans aşaması, sembol başına tek pozisyon, eşzamanlı pozisyon sınırı, PDT
+  sayacı, asgari fiyat, spread ve çapraz piyasa kontrolü, asgari stop mesafesi,
+  risk bazlı boyutlandırma, brüt maruziyet ve alım gücü tavanı. Kurallar kısa
+  devre yapmaz: tüm veto sebepleri toplanır ve kaydedilir.
+- **Bracket emir gönderimi**: giriş, stop ve hedef tek paket. Bot çökse bile
+  koruma emirleri borsada durmaya devam eder.
+- **Mutabakat** (`engine/reconciler.py`): broker gerçekleşmelerinden kapanan
+  işlemler üretilir. İşlem kimliği giriş/çıkış emirlerinden türetildiği için
+  yeniden başlatma mükerrer kayıt oluşturmaz. Slippage ölçülüyor.
+- **Seans döngüsü** (`engine/runner.py`): mutabakat → kill-switch → gün sonu
+  kapanışı → değerlendirme. Tek turun hatası döngüyü öldürmez.
+- **CLI**: `tlab run` (+ `--dry-run`, `--once`), `tlab summary`.
+- Ruff'ın `S` (bandit) güvenlik kural seti açıldı.
+
+### Güvenlik
+- Canlı para modunda çalışmak için `--i-understand-live` bayrağı gerekiyor.
+- Journal'a yazılan kolon adları SQL metnine gömülmeden önce doğrulanıyor.
+
 ### Değişti
 - **Desteklenen Python sürümü 3.12'ye sabitlendi** (önceden 3.11 + 3.12). CI,
   Docker imajının kullandığı sürümün aynısını denetliyor. İki sürüm
@@ -17,8 +54,6 @@ sürüme geri dönmek tek komutluk iştir. Ayrıntı için `CONTRIBUTING.md`.
   ve PEP 695 sözdizimi içeriyor; mypy'ye hedef olarak 3.11 verildiğinde bu
   stub'ı ayrıştıramıyordu.
 
-### Planlanan
-- Faz 1: ORB stratejisi, tam risk kapısı, bracket order ile gözetimsiz koşu.
 
 ## [0.1.1] - 2026-09-19
 
