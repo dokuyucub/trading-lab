@@ -12,6 +12,8 @@ from tlab.core.types import (
     BracketOrder,
     Decision,
     EntryType,
+    ExitReason,
+    Fill,
     GateVerdict,
     Intent,
     OrderRef,
@@ -20,6 +22,7 @@ from tlab.core.types import (
     Side,
     Timeframe,
     TimeInForce,
+    Trade,
     round_price,
 )
 
@@ -30,6 +33,8 @@ __all__ = [
     "Clock",
     "Decision",
     "EntryType",
+    "ExitReason",
+    "Fill",
     "GateVerdict",
     "Intent",
     "LiveClock",
@@ -40,5 +45,6 @@ __all__ = [
     "SimClock",
     "TimeInForce",
     "Timeframe",
+    "Trade",
     "round_price",
 ]

@@ -11,7 +11,7 @@ Tasarim kurallari:
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Annotated, Any, Self
 
@@ -50,6 +50,21 @@ class Timeframe(StrEnum):
     M15 = "15Min"
     H1 = "1Hour"
     D1 = "1Day"
+
+    @property
+    def duration(self) -> timedelta:
+        """Barin kapsadigi sure.
+
+        Olusmakta olan bari ayiklamak icin gerekli: bir barin
+        kapanisini kapanmadan once bilmek, gelecegi bilmektir.
+        """
+        return {
+            Timeframe.M1: timedelta(minutes=1),
+            Timeframe.M5: timedelta(minutes=5),
+            Timeframe.M15: timedelta(minutes=15),
+            Timeframe.H1: timedelta(hours=1),
+            Timeframe.D1: timedelta(days=1),
+        }[self]
 
 
 class EntryType(StrEnum):
@@ -411,6 +426,144 @@ class BracketOrder(Frozen):
             stop_loss=round_price(intent.stop_loss),
             take_profit=round_price(intent.take_profit),
         )
+
+
+class ExitReason(StrEnum):
+    """Pozisyonun neden kapandigi.
+
+    Ogrenme katmani icin kritik bir ayrim: hedefe ulasarak kapanan
+    islemle gun sonu zorunlu kapanisla biten islem ayni sey degildir.
+    Ikincisi stratejinin dogru oldugunu da yanlis oldugunu da
+    kanitlamaz, sadece zamanin dolduguna isaret eder.
+    """
+
+    TARGET = "target"
+    STOP = "stop"
+    EOD_FLATTEN = "eod_flatten"
+    KILL_SWITCH = "kill_switch"
+    MANUAL = "manual"
+    UNKNOWN = "unknown"
+
+
+class Fill(Frozen):
+    """Gerceklesmis bir emir (ya da emir bacagi).
+
+    Islem kayitlari broker'in bildirdigi gerceklesmelerden uretilir,
+    bizim ne gonderdigimizden degil. Gonderilen fiyat ile gerceklesen
+    fiyat arasindaki fark (slippage) stratejinin kagit uzerindeki
+    performansi ile gercek performansi arasindaki farktir ve
+    olculmeden yonetilemez.
+    """
+
+    broker_order_id: str
+    client_order_id: str
+    symbol: str
+    side: Side
+    qty: Annotated[float, Field(gt=0)]
+    price: PositivePrice
+    filled_at: datetime
+    order_type: str = "market"
+    """Gerceklesen emrin tipi: limit / stop / market.
+
+    Bracket bacaklarinda cikis sebebini ayirt etmeye yarar: limit
+    bacagi hedefe, stop bacagi stop'a isaret eder.
+    """
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if self.filled_at.tzinfo is None:
+            msg = "Fill.filled_at timezone icermeli"
+            raise ValueError(msg)
+        return self
+
+
+class Trade(Frozen):
+    """Kapanmis bir pozisyon: ogrenme katmaninin okudugu asil kayit."""
+
+    trade_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    run_id: str
+    decision_id: str | None = None
+    symbol: str
+    strategy_id: str
+    params_version: str
+    side: Side
+    qty: Annotated[float, Field(gt=0)]
+    entry_ts: datetime
+    entry_price: PositivePrice
+    exit_ts: datetime
+    exit_price: PositivePrice
+    planned_stop: PositivePrice
+    planned_target: PositivePrice
+    fees: NonNegative = 0.0
+    exit_reason: ExitReason = ExitReason.UNKNOWN
+    mae: float | None = None
+    mfe: float | None = None
+    entry_slippage_bps: float | None = None
+    exit_slippage_bps: float | None = None
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if self.exit_ts < self.entry_ts:
+            msg = f"{self.symbol}: cikis girisden once olamaz"
+            raise ValueError(msg)
+        return self
+
+    @property
+    def gross_pnl(self) -> float:
+        """Maliyet dusulmemis kar/zarar."""
+        return (self.exit_price - self.entry_price) * self.qty * self.side.sign
+
+    @property
+    def net_pnl(self) -> float:
+        return self.gross_pnl - self.fees
+
+    @property
+    def planned_risk_per_share(self) -> float:
+        return abs(self.entry_price - self.planned_stop)
+
+    @property
+    def r_multiple(self) -> float:
+        """Kar/zararin PLANLANAN riske orani.
+
+        Farkli buyuklukteki islemleri karsilastirmanin tek dogru
+        yolu. 100 $ kar, 50 $ riskle alindiysa +2R'dir; 500 $ riskle
+        alindiysa +0,2R. Mutlak rakam bu farki gizler, R gostermez.
+        """
+        risk = self.planned_risk_per_share * self.qty
+        return 0.0 if risk <= 0 else self.net_pnl / risk
+
+    @property
+    def holding_seconds(self) -> int:
+        return int((self.exit_ts - self.entry_ts).total_seconds())
+
+    def to_row(self, *, run_id: str | None = None) -> dict[str, Any]:
+        """Journal'a yazilacak duz sozluk gosterimi."""
+        return {
+            "trade_id": self.trade_id,
+            "decision_id": self.decision_id,
+            "run_id": run_id or self.run_id,
+            "symbol": self.symbol,
+            "strategy_id": self.strategy_id,
+            "params_version": self.params_version,
+            "side": self.side.value,
+            "qty": self.qty,
+            "entry_ts": self.entry_ts.astimezone(UTC).isoformat(),
+            "entry_price": self.entry_price,
+            "exit_ts": self.exit_ts.astimezone(UTC).isoformat(),
+            "exit_price": self.exit_price,
+            "planned_stop": self.planned_stop,
+            "planned_target": self.planned_target,
+            "gross_pnl": self.gross_pnl,
+            "fees": self.fees,
+            "net_pnl": self.net_pnl,
+            "r_multiple": self.r_multiple,
+            "mae": self.mae,
+            "mfe": self.mfe,
+            "entry_slippage_bps": self.entry_slippage_bps,
+            "exit_slippage_bps": self.exit_slippage_bps,
+            "exit_reason": self.exit_reason.value,
+            "holding_seconds": self.holding_seconds,
+        }
 
 
 class OrderRef(Frozen):
