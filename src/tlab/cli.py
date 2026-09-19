@@ -151,8 +151,7 @@ def _doctor_summary(problems: list[str]) -> int:
 
 def cmd_account(args: argparse.Namespace) -> int:
     """Hesap ozetini ve acik pozisyonlari gosterir."""
-    config, secrets = _load(args.root)
-    secrets.require()
+    secrets = load_secrets(args.root).require()
     broker = AlpacaBroker(
         secrets.alpaca_api_key, secrets.alpaca_secret_key, paper=secrets.alpaca_paper
     )
@@ -171,7 +170,7 @@ def cmd_account(args: argparse.Namespace) -> int:
     print(f"\nAcik pozisyonlar: {len(positions)}")
     for position in positions:
         print(
-            f"  {position.symbol:<6} {position.side.value:<4} {position.qty:>6} adet"
+            f"  {position.symbol:<6} {position.side.value:<4} {position.qty:>9,.4g} adet"
             f" @ {position.avg_entry_price:>9,.2f}"
             f"  simdi {position.current_price:>9,.2f}"
             f"  P/L {position.unrealized_pl:>+10,.2f}"
@@ -181,7 +180,6 @@ def cmd_account(args: argparse.Namespace) -> int:
     print(f"\nBorsa: {'ACIK' if clock.is_open else 'KAPALI'}")
     print(f"  sonraki acilis : {clock.next_open}")
     print(f"  sonraki kapanis: {clock.next_close}")
-    _ = config
     return 0
 
 
