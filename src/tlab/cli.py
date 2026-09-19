@@ -12,6 +12,7 @@ import argparse
 import logging
 import sys
 from datetime import UTC, datetime, timedelta
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
@@ -56,12 +57,14 @@ def cmd_config(args: argparse.Namespace) -> int:
     print("\n[session]")
     print(f"  seans             : {config.session.regular_open} - {config.session.regular_close}")
     print(f"  kapanis tamponu   : {config.session.flatten_before_close_minutes} dk")
+    print(f"  giris emri omru   : {config.session.entry_order_ttl_minutes} dk")
     print(f"  uzatilmis seans   : {config.session.allow_extended_hours}")
     print("\n[risk]")
     print(f"  islem basi risk   : %{config.risk.max_risk_per_trade_pct}")
     print(f"  gunluk zarar siniri: %{config.risk.max_daily_loss_pct}")
     print(f"  es zamanli pozisyon: {config.risk.max_concurrent_positions}")
     print(f"  azami spread      : {config.risk.max_spread_bps} bps")
+    print(f"  asgari stop       : {config.risk.min_stop_bps} bps")
     print(f"  PDT kurali        : {'acik' if config.risk.enforce_pdt else 'kapali'}")
     print("\n[journal]")
     print(f"  veritabani        : {config.journal_path}")
@@ -249,7 +252,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     --dry-run her seyi yapar ama emir GONDERMEZ: kararlar journal'a
     yazilir, boylece sistemin ne yapacagi once gozlemlenebilir.
     """
-    _setup_logging(args.verbose)
+    _setup_logging(args.verbose, args.log_file)
     config, secrets = _load(args.root)
     secrets.require()
 
@@ -270,7 +273,8 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     conn = connect(config.journal_path)
     apply_migrations(conn)
-    writer = JournalWriter(conn)
+    clock = LiveClock()
+    writer = JournalWriter(conn, clock)
 
     strategy = OpeningRangeBreakout(ORBParams())
     mode = "paper" if secrets.alpaca_paper else "live"
@@ -291,10 +295,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         writer=writer,
         conn=conn,
         config=config,
-        clock=LiveClock(),
+        clock=clock,
         run_id=run_id,
         opening_range_minutes=strategy.params.opening_range_minutes,
         timeframe=config.data.default_timeframe,
+        entry_order_ttl_minutes=config.session.entry_order_ttl_minutes,
         dry_run=args.dry_run,
     )
 
@@ -356,11 +361,28 @@ def _print_summary(conn: Any, run_id: str) -> None:
             print(f"    {count:>3}x  {reason}")
 
 
-def _setup_logging(verbose: bool) -> None:
+def _setup_logging(verbose: bool, log_file: Path | None = None) -> None:
+    """Gunluk yapilandirmasi.
+
+    Dosyaya yazarken donen dosya (rotating) kullaniliyor: gunlerce
+    calisan bir surecin gunlugu sinirsiz buyuyup diski doldurmamali.
+    Disk dolarsa journal yazamaz, journal yazamazsa sistem islem
+    acmayi birakir - yani gunluk dosyasi dolayli olarak isleme
+    engel olabilir.
+    """
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    if log_file is not None:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(
+            RotatingFileHandler(
+                log_file, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
+            )
+        )
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)-7s %(name)s  %(message)s",
-        datefmt="%H:%M:%S",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        handlers=handlers,
     )
 
 
@@ -407,6 +429,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--once", action="store_true", help="Tek tur calistir ve cik")
     run.add_argument("--poll", type=int, default=60, help="Turlar arasi bekleme (saniye)")
     run.add_argument("--verbose", action="store_true", help="Ayrintili gunluk")
+    run.add_argument(
+        "--log-file",
+        type=Path,
+        help="Gunlugu dosyaya da yaz (donen dosya, 10 MB x 5). Uzun kosular icin.",
+    )
     run.add_argument(
         "--i-understand-live",
         action="store_true",

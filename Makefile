@@ -15,7 +15,7 @@ fmt:
 	ruff format .
 
 typecheck:
-	mypy --strict src/tlab
+	mypy
 
 check: lint typecheck test
 

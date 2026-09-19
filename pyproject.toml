@@ -56,13 +56,26 @@ ignore = ["RUF001", "RUF002", "RUF003"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q --strict-markers"
+# Uyarilar hata sayiliyor: kendi kodumuzda olusan bir DeprecationWarning
+# sessizce birikip bir gun calismayi durdurmasin. Ucuncu taraf
+# kutuphanelerin kendi uyarilari muaf - onlari duzeltmek bizim elimizde
+# degil ve CI'yi bizimle ilgisiz sebeplerle kirarlar.
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning:websockets.*",
+    "ignore::DeprecationWarning:alpaca.*",
+]
 markers = [
     "network: ag erisimi gerektiren testler (varsayilan olarak calistirilmaz)",
 ]
 
 [tool.mypy]
 python_version = "3.12"
-packages = ["tlab"]
+# Testler de denetleniyor. Sebebi sadece titizlik degil: sahte
+# broker ve veri kaynagi, protokollere yapisal olarak uyduklari icin
+# calisiyor. Protokol degisip de sahteler geride kalirsa bunu
+# calisma aninda degil, tip denetiminde gormek istiyoruz.
+files = ["src/tlab", "tests"]
 mypy_path = "src"
 strict = true
 warn_unreachable = true
