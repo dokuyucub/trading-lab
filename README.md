@@ -124,6 +124,28 @@ Döngü her turda sırasıyla şunları yapar — ve **sıra tesadüfi değil**:
 
 Her karar — izin verilen de **veto edilen de** — journal'a yazılır.
 
+## Kesintisiz çalışma
+
+Sistem günlerce gözetimsiz dönmek üzere tasarlandı. Uzun koşuda sessizce
+bozulan şeylere karşı alınmış önlemler:
+
+| Risk | Önlem |
+|---|---|
+| Dolmayan emrin üstüne ikincisi | Bekleyen emirler pozisyon gibi maruziyet sayılır; strateji ve risk kapısı ikisi de engeller |
+| Süreç yeniden başlayınca kill-switch unutulur | Gün kapatma kararı veritabanına yazılır, belleğe değil |
+| Gönderim ile kayıt arası çökme | Emir brokera gitmeden **önce** journal'a yazılır (write-ahead) |
+| Broker cevabı kaybolur | Kesinleşmemiş emir sembolü geçici olarak kapatır, süre dolunca serbest bırakılır |
+| Bekleyen emirler okunamaz | Döngü "bilinmiyor" ile "boş" ayrımını yapar ve o turda giriş yapmaz |
+| Bayat giriş emri gün boyu asılı kalır | Belirlenen süre sonunda iptal edilir (koruma bacakları asla) |
+| Journal yazılamaz | O sembolde işlem açılmaz — kaydedilmeyen işlem öğrenilemez |
+| Aynı hata dakikada bir tekrarlar | Ardışık hatalarda bekleme kademeli uzar, bir başarılı tur sıfırlar |
+| Günlük dosyası diski doldurur | `--log-file` ile dönen dosya (10 MB × 5) |
+
+Bunların her biri gözlemlenmiş bir kusurun karşılığı ve her biri için regresyon
+testi var. Ayrıca `tests/test_soak.py` tam bir seansı dakika dakika (400 tur)
+işletip değişmezleri doğruluyor: tek emir, tek işlem kaydı, kopuk referans yok,
+gün sonunda açık pozisyon yok.
+
 ## Komutlar
 
 | Komut | Ne yapar |

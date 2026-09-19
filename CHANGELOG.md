@@ -12,6 +12,49 @@ sürüme geri dönmek tek komutluk iştir. Ayrıntı için `CONTRIBUTING.md`.
 ### Planlanan
 - Faz 2: Backtest motoru (aynı strateji kodu) ve dürüst metrikler.
 
+## [0.2.1] - 2026-09-19
+
+Faz 1 dayanıklılık denetimi. Sistem uzun süreli, gözetimsiz çalışma gözüyle
+yeniden okundu. İki kritik hata, bir mimari ihlal ve dört boşluk bulundu.
+209 → 237 test.
+
+### Düzeltildi
+- **Dolmayan emrin üstüne ikinci emir gönderiliyordu.** Limit emri dolana kadar
+  ortada pozisyon yoktur; yalnızca pozisyon listesine bakan döngü her turda
+  yenisini gönderiyordu. Bir saat dolmayan bir emir 60 kat pozisyon demek.
+  Bekleyen emirler artık pozisyon gibi maruziyet sayılıyor.
+- **Kill-switch süreç yeniden başlayınca unutuluyordu.** Bellekteki bayrak
+  süreci aşmaz: systemd yeniden başlattığında sistem günü kapattığını unutup
+  tekrar işlem açıyordu. Karar artık veritabanında.
+- **`JournalWriter` enjekte edilen saati atlıyordu.** `datetime.now()`
+  çağırıyordu; canlıda fark etmez ama backtest'te (Faz 2) kayıtlar bugünün
+  tarihini taşır ve istatistikler zaman ekseninde yerinden oynardı. Saat artık
+  dışarıdan veriliyor.
+
+### Eklendi
+- **Write-ahead emir kaydı**: emir brokera gitmeden önce journal'a yazılıyor.
+  `orders` tablosunun birincil anahtarı `client_order_id` oldu — onu biz
+  üretiyoruz, broker'ın verdiği kimlik ise ancak cevap gelince biliniyor.
+- **Kesinleşmemiş emir çözümlemesi**: gönderim ile kayıt arasında süreç ölürse
+  kalan satır her turda broker'a karşı çözümleniyor; bulunursa kesinleşiyor,
+  bulunmazsa süre sonunda kayıp sayılıp sembolün önü açılıyor.
+- **Bayat giriş emri iptali**: dolmayan giriş emirleri yapılandırılabilir süre
+  sonunda iptal ediliyor. Koruma bacakları bu kuralın dışında.
+- **Gerçekleşme denetim izi**: `fills` tablosu artık gerçekten yazılıyor.
+- **Protokol uyum testleri**: Faz 0 ile Faz 1 arasındaki sözleşmeler hem statik
+  (mypy) hem çalışma anında doğrulanıyor. Testler de tip denetimine dahil
+  edildi — sahte broker ve veri kaynağı, protokollerden ayrışırsa mypy duruyor.
+- **Soak testi**: tam bir seans dakika dakika (400 tur) işletiliyor ve
+  değişmezler doğrulanıyor.
+- Ardışık hatalarda kademeli bekleme, `--log-file` ile dönen günlük dosyası,
+  pytest'te uyarıların hata sayılması.
+
+### Güvenlik
+- Journal yazılamadığında o sembolde işlem açılmıyor: kaydedilmeyen bir işlem
+  öğrenilemez ve mutabakatı bozar.
+- Bekleyen emirler okunamadığında yeni giriş yapılmıyor — "boş liste" ile
+  "bilinmiyor" ayrımı açıkça yapılıyor.
+
 ## [0.2.0] - 2026-09-19
 
 Faz 1 — gözetimsiz paper trading. Sistem artık bir seansı baştan sona kendi
