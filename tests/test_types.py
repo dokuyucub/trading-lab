@@ -53,7 +53,7 @@ def test_bar_accepts_valid_ohlc() -> None:
 def test_bar_is_immutable() -> None:
     bar = Bar(symbol="SPY", ts=TS, open=100, high=101, low=99, close=100.5, volume=1000)
     with pytest.raises(ValidationError):
-        bar.close = 200  # type: ignore[misc]
+        bar.close = 200
 
 
 @pytest.mark.parametrize(
