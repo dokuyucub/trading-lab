@@ -34,6 +34,9 @@ risk:
   # Spread'i genis, fiyati dusuk enstrumanlar "ufak marj" stratejisini oldurur.
   min_price: 5.0
   max_spread_bps: 15
+  # Kapi seviyesinde asgari stop mesafesi. Stratejinin kendi kurali
+  # olsa da kapi ona guvenmez: cok dar bir stop gurultuyle tetiklenir.
+  min_stop_bps: 5
   # Pattern Day Trader kurali: 25.000 $ alti hesapta 5 is gununde 3 day trade.
   enforce_pdt: true
   pdt_equity_threshold: 25000

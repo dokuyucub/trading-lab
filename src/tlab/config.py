@@ -136,6 +136,7 @@ class RiskSection(Strict):
     max_gross_exposure_pct: Percent = 50.0
     min_price: Annotated[float, Field(gt=0)] = 5.0
     max_spread_bps: Annotated[float, Field(gt=0)] = 15.0
+    min_stop_bps: Annotated[float, Field(gt=0)] = 5.0
     enforce_pdt: bool = True
     pdt_equity_threshold: Annotated[float, Field(ge=0)] = 25_000.0
     max_day_trades_per_window: Annotated[int, Field(ge=0)] = 3
