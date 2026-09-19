@@ -20,7 +20,7 @@ import logging
 import sqlite3
 import time
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 from tlab.config import Config
 from tlab.core.clock import Clock
@@ -32,21 +32,25 @@ from tlab.core.types import (
     EntryType,
     ExitReason,
     Intent,
+    OrderRef,
     Position,
     Quote,
     Timeframe,
 )
 from tlab.data.market import MarketData
 from tlab.engine.reconciler import build_trade, pair_fills
-from tlab.errors import BrokerError, DataError, TradingLabError
+from tlab.errors import BrokerError, DataError, JournalError, TradingLabError
 from tlab.execution.broker import Broker
 from tlab.features.context import Context, SessionPhase, SessionState, build_session_state
-from tlab.journal.queries import open_entry_orders, recorded_trade_ids
+from tlab.journal.queries import halt_reason, open_entry_orders, unconfirmed_orders
 from tlab.journal.writer import JournalWriter
 from tlab.risk.gate import RiskGate, daily_loss_breached
 from tlab.strategies.base import Strategy
 
 log = logging.getLogger("tlab.runner")
+
+MAX_BACKOFF_FACTOR = 8
+"""Ardisik hatalarda beklemenin en fazla kac katina cikacagi."""
 
 
 @dataclass
@@ -62,6 +66,7 @@ class LoopResult:
     vetoed: int = 0
     trades_recorded: int = 0
     flattened: int = 0
+    cancelled: int = 0
     halted: bool = False
     notes: list[str] = field(default_factory=list)
 
@@ -79,6 +84,8 @@ class LoopResult:
             parts.append(f"kapanan={self.trades_recorded}")
         if self.flattened:
             parts.append(f"kapatilan={self.flattened}")
+        if self.cancelled:
+            parts.append(f"iptal={self.cancelled}")
         if self.halted:
             parts.append("DURDURULDU")
         return " | ".join(parts) + ("  " + "; ".join(self.notes) if self.notes else "")
@@ -102,6 +109,8 @@ class SessionRunner:
         opening_range_minutes: int = 15,
         timeframe: Timeframe = Timeframe.M1,
         history_days: int = 3,
+        entry_order_ttl_minutes: int = 15,
+        unconfirmed_grace_minutes: int = 5,
         dry_run: bool = False,
     ) -> None:
         self.broker = broker
@@ -116,11 +125,9 @@ class SessionRunner:
         self.opening_range_minutes = opening_range_minutes
         self.timeframe = timeframe
         self.history_days = history_days
+        self.entry_order_ttl_minutes = entry_order_ttl_minutes
+        self.unconfirmed_grace_minutes = unconfirmed_grace_minutes
         self.dry_run = dry_run
-
-        # Kill-switch tetiklendiginde gunun geri kalaninda islem yok.
-        # Tarihe bagli tutuluyor: ertesi gun otomatik sifirlanir.
-        self._halted_on: date | None = None
 
     # ------------------------------------------------------------------
     # Ana dongu
@@ -136,17 +143,29 @@ class SessionRunner:
         kalmaz, ama dongunun ayakta kalmasi yine de sart.
         """
         log.info("Dongu basladi (poll=%ss, dry_run=%s)", poll_seconds, self.dry_run)
+        failures = 0
         while True:
             try:
                 log.info("%s", self.run_once().summary())
-            except TradingLabError:
-                log.exception("Tur basarisiz, dongu devam ediyor")
+                failures = 0
             except KeyboardInterrupt:
                 log.info("Dongu elle durduruldu")
                 raise
+            except TradingLabError:
+                failures += 1
+                log.exception("Tur basarisiz (%d ardisik), dongu devam ediyor", failures)
             except Exception:
-                log.exception("Beklenmeyen hata, dongu devam ediyor")
-            time.sleep(poll_seconds)
+                failures += 1
+                log.exception("Beklenmeyen hata (%d ardisik), dongu devam ediyor", failures)
+
+            # Surekli basarisiz olan bir dongu, ayni hatayi dakikada bir
+            # kaydederek gunlugu bogar ve gercek sorunu gorunmez kilar.
+            # Ardisik hatalarda bekleme kademeli olarak uzuyor; tek bir
+            # basarili tur sayaci sifirliyor.
+            delay = (
+                poll_seconds * min(MAX_BACKOFF_FACTOR, 2**failures) if failures else poll_seconds
+            )
+            time.sleep(delay)
 
     def run_once(self) -> LoopResult:
         """Tek tur: mutabakat, kontroller, sembol degerlendirmesi."""
@@ -161,6 +180,12 @@ class SessionRunner:
 
         account = self.broker.get_account()
         positions = {position.symbol: position for position in self.broker.get_positions()}
+        open_orders = self._safe_open_orders()
+
+        # Gonderim ile kayit arasinda kalmis emirler once cozumlenir:
+        # ya kesinlesirler ya da sembolun onunu tikamayi birakirlar.
+        if open_orders is not None:
+            self._resolve_unconfirmed(open_orders, session)
 
         result.trades_recorded = self._reconcile(session)
 
@@ -172,10 +197,19 @@ class SessionRunner:
             result.notes.append("gun sonu zorunlu kapanis")
             return result
 
+        if open_orders is None:
+            # Bekleyen emirleri bilmeden giris yapmak, dolmayi
+            # bekleyen bir emrin uzerine ikincisini gondermek demek.
+            result.notes.append("bekleyen emirler bilinmiyor, yeni giris yapilmadi")
+            return result
+
+        result.cancelled = self._cancel_stale_entries(open_orders, positions, session)
+
         if not session.can_open_new_positions:
             return result
 
-        self._evaluate_universe(session, account, positions, result)
+        pending = self._pending_symbols(open_orders, positions)
+        self._evaluate_universe(session, account, positions, pending, result)
         return result
 
     # ------------------------------------------------------------------
@@ -207,29 +241,144 @@ class SessionRunner:
             log.exception("Gerceklesmeler alinamadi, mutabakat atlandi")
             return 0
 
+        # Her gerceklesme denetim izine dusuyor; tekrarlar yok sayiliyor.
+        for single in fills:
+            self.writer.record_fill(single, self.run_id)
+
         orders = open_entry_orders(self.conn)
-        already = recorded_trade_ids(self.conn)
         recorded = 0
 
         for matched in pair_fills(fills, set(orders)):
-            if matched.trade_id in already:
-                continue
             info = orders.get(matched.entry.client_order_id)
             if info is None:
                 continue
             trade = build_trade(matched, info, run_id=self.run_id, flatten_at=session.flatten_at)
-            if self.writer.record_trade(trade):
-                recorded += 1
-                log.info(
-                    "Islem kapandi: %s %s %.4g adet | %s | net %.2f (%.2fR)",
-                    trade.symbol,
-                    trade.side.value,
-                    trade.qty,
-                    trade.exit_reason.value,
-                    trade.net_pnl,
-                    trade.r_multiple,
-                )
+            # Mukerrer kaydi veritabani engelliyor (INSERT OR IGNORE,
+            # islem kimligi giris/cikis emirlerinden turetilmis).
+            # Her turda tum trades tablosunu taramaya gerek yok.
+            if not self.writer.record_trade(trade):
+                continue
+            recorded += 1
+            self.writer.update_order_status(matched.entry.client_order_id, "closed")
+            log.info(
+                "Islem kapandi: %s %s %.4g adet | %s | net %.2f (%.2fR)",
+                trade.symbol,
+                trade.side.value,
+                trade.qty,
+                trade.exit_reason.value,
+                trade.net_pnl,
+                trade.r_multiple,
+            )
         return recorded
+
+    # ------------------------------------------------------------------
+    # Bekleyen emirler
+    # ------------------------------------------------------------------
+
+    def _safe_open_orders(self) -> list[OrderRef] | None:
+        """Brokerdaki bekleyen emirler; alinamazsa None.
+
+        Bos liste ile "bilinmiyor" arasindaki fark kritik. Bekleyen
+        emirleri goremeyen bir dongu, dolmayi bekleyen emri yok
+        sanip ayni sembole yenisini gonderir. Bu yuzden hata
+        durumunda bos liste DEGIL None donuyor ve cagiran taraf o
+        turda yeni giris yapmiyor.
+        """
+        try:
+            return self.broker.list_open_orders()
+        except BrokerError:
+            log.exception("Bekleyen emirler alinamadi")
+            return None
+
+    def _pending_symbols(
+        self, open_orders: list[OrderRef], positions: dict[str, Position]
+    ) -> frozenset[str]:
+        """Yeni giris kabul etmeyen semboller.
+
+        Uc kaynak birlestiriliyor: brokerdaki bekleyen emirler,
+        journal'da kesinlesmemis kalan emirler ve acik pozisyonlar.
+        Ucu de gerekli - broker listesi kesinlesmemis emri bilmez,
+        journal ise brokerda elle acilmis emri bilmez.
+        """
+        pending = {order.symbol for order in open_orders}
+        pending.update(row["symbol"] for row in unconfirmed_orders(self.conn))
+        pending.update(positions)
+        return frozenset(pending)
+
+    def _resolve_unconfirmed(self, open_orders: list[OrderRef], session: SessionState) -> None:
+        """Gonderim ile kayit arasinda kalmis emirleri cozumler.
+
+        Emir once journal'a yaziliyor, sonra brokera gidiyor. Ikisinin
+        arasinda surec olurse geriye `submitting` durumunda bir satir
+        kaliyor. O satir sonsuza kadar sembolun onunu tikamamali:
+          * emir brokerda bulunduysa kesinlesir,
+          * bulunmadiysa ve uzerinden yeterli sure gectiyse emrin
+            hic ulasmadigi kabul edilip `lost` olarak isaretlenir.
+        """
+        rows = unconfirmed_orders(self.conn)
+        if not rows:
+            return
+
+        by_client = {order.client_order_id: order for order in open_orders}
+        deadline = session.now - timedelta(minutes=self.unconfirmed_grace_minutes)
+
+        for row in rows:
+            client_id = str(row["client_order_id"])
+            found = by_client.get(client_id)
+            if found is not None:
+                self.writer.confirm_order(client_id, found)
+                log.info("Kesinlesmemis emir brokerda bulundu: %s", client_id)
+                continue
+
+            submitted = _parse_ts(str(row["submitted_at"]))
+            if submitted is not None and submitted < deadline:
+                self.writer.update_order_status(client_id, "lost")
+                log.warning(
+                    "Emir brokerda bulunamadi, kayip sayildi: %s (%s)",
+                    client_id,
+                    row["symbol"],
+                )
+
+    def _cancel_stale_entries(
+        self,
+        open_orders: list[OrderRef],
+        positions: dict[str, Position],
+        session: SessionState,
+    ) -> int:
+        """Dolmayan giris emirlerini belirli sure sonra iptal eder.
+
+        Kirilim sinyali zamana baglidir: on dakika once gecerli olan
+        bir giris fiyati artik gecerli degildir. Emri gun boyu asili
+        birakmak, sinyalin ilgisiz kaldigi bir anda dolmasina yol
+        acar. Koruma bacaklari bu kuralin disinda: onlar yalnizca
+        acik pozisyonu olmayan sembollerde ve yalnizca bizim
+        gonderdigimiz girisler icin iptal ediliyor.
+        """
+        if self.dry_run:
+            return 0
+
+        ours = open_entry_orders(self.conn)
+        deadline = session.now - timedelta(minutes=self.entry_order_ttl_minutes)
+        cancelled = 0
+
+        for order in open_orders:
+            if order.symbol in positions or order.client_order_id not in ours:
+                continue
+            if order.submitted_at.astimezone(UTC) >= deadline:
+                continue
+            try:
+                self.broker.cancel_open_orders(order.symbol)
+            except BrokerError:
+                log.exception("%s icin bayat emir iptal edilemedi", order.symbol)
+                continue
+            self.writer.update_order_status(order.client_order_id, "canceled")
+            cancelled += 1
+            log.info(
+                "Bayat giris emri iptal edildi: %s (%d dk dolmadi)",
+                order.symbol,
+                self.entry_order_ttl_minutes,
+            )
+        return cancelled
 
     def _check_kill_switch(
         self,
@@ -241,26 +390,30 @@ class SessionRunner:
         """Gunluk zarar siniri asildiysa gunu bitirir.
 
         Kotu bir gunu erken kapatmak, felakete donusmesini
-        beklemekten iyidir. Karar yeniden acilmaz: gun sonuna kadar
-        hicbir yeni pozisyon girilmez.
+        beklemekten iyidir. Karar VERITABANINA yaziliyor, bellege
+        degil: bellekteki bir bayrak sureci asmaz ve systemd
+        yeniden baslattiginda sistem gunu kapatmis oldugunu unutup
+        tekrar islem acardi.
         """
         today = session.now.date()
-        if self._halted_on == today:
+        existing = halt_reason(self.conn, today)
+        if existing is not None:
             result.halted = True
-            result.notes.append("gun kill-switch ile kapatildi")
+            result.notes.append(f"gun kapali: {existing}")
             return True
 
         if not daily_loss_breached(account, self.config.risk):
             return False
 
-        self._halted_on = today
-        result.halted = True
-        result.flattened = self._flatten_all(positions, ExitReason.KILL_SWITCH)
-        result.notes.append(
-            f"KILL-SWITCH: gunluk zarar %{account.daily_pl_pct:.2f}, "
+        reason = (
+            f"gunluk zarar %{account.daily_pl_pct:.2f}, "
             f"sinir %{self.config.risk.max_daily_loss_pct}"
         )
-        log.warning("%s", result.notes[-1])
+        self.writer.record_halt(today, reason, self.run_id)
+        result.halted = True
+        result.flattened = self._flatten_all(positions, ExitReason.KILL_SWITCH)
+        result.notes.append(f"KILL-SWITCH: {reason}")
+        log.warning("KILL-SWITCH: %s", reason)
         return True
 
     def _flatten_all(self, positions: dict[str, Position], reason: ExitReason) -> int:
@@ -291,6 +444,7 @@ class SessionRunner:
         session: SessionState,
         account: Account,
         positions: dict[str, Position],
+        pending: frozenset[str],
         result: LoopResult,
     ) -> None:
         """Evrendeki her sembolu sirayla degerlendirir.
@@ -300,7 +454,7 @@ class SessionRunner:
         """
         for symbol in self.config.symbols:
             try:
-                ctx = self._build_context(symbol, session, account, positions)
+                ctx = self._build_context(symbol, session, account, positions, pending)
             except (DataError, BrokerError):
                 log.exception("%s icin baglam kurulamadi", symbol)
                 continue
@@ -314,7 +468,15 @@ class SessionRunner:
                 if intent is None:
                     continue
                 result.intents += 1
-                self._handle_intent(intent, ctx, result)
+                try:
+                    self._handle_intent(intent, ctx, result)
+                except JournalError:
+                    # Karar kaydedilemiyorsa emir de gonderilmiyor:
+                    # kaydedilmeyen bir islem ogrenilemez ve mutabakati
+                    # bozar. Kayit yoluna guvenemedigimizde islem
+                    # acmamak, korumasiz islem acmaktan iyidir.
+                    log.exception("%s karari kaydedilemedi, islem acilmadi", symbol)
+                    result.notes.append(f"{symbol}: journal yazilamadi")
                 # Ayni sembolde ilk niyet degerlendirildikten sonra
                 # digerlerine bakmiyoruz: pozisyon acildiysa ikinci
                 # strateji ayni riske tekrar girerdi.
@@ -323,7 +485,6 @@ class SessionRunner:
     def _handle_intent(self, intent: Intent, ctx: Context, result: LoopResult) -> None:
         """Niyeti risk kapisindan gecirir, gerekirse emre cevirir."""
         verdict = self.gate.evaluate(intent, ctx)
-
         decision = Decision(run_id=self.run_id, ts=ctx.session.now, intent=intent, verdict=verdict)
 
         if not verdict.allowed:
@@ -333,22 +494,31 @@ class SessionRunner:
             return
 
         # Emir BIR KEZ uretilir. Her uretim yeni bir client_order_id
-        # dogurur; ikinci kez uretmek, journal'a gonderilenden farkli
+        # dogurur; ikinci kez uretmek journal'a gonderilenden farkli
         # bir kimlik yazar ve mutabakat o islemi bir daha bulamaz.
         order = BracketOrder.from_intent(intent, verdict.qty, EntryType.LIMIT)
+        self.writer.record_decision(decision)
 
         if self.dry_run:
             result.notes.append(f"[dry-run] {intent.symbol} {verdict.qty} adet")
-            self.writer.record_decision(decision)
             return
+
+        # Once kaydet, sonra gonder. Ters sirada calisip da ikisinin
+        # arasinda surec olurse, brokerdaki emir journal'da hic
+        # gorunmez: dolmasindan dogan pozisyon hicbir karara
+        # atfedilemez ve mutabakat onu hesaba katamaz.
+        self.writer.record_order(order, run_id=self.run_id, decision_id=decision.decision_id)
 
         try:
             order_ref = self.broker.submit_bracket(order)
         except BrokerError:
             log.exception("%s emri gonderilemedi", intent.symbol)
-            self.writer.record_decision(decision)
+            # Emir brokera ulasmis da cevabi kaybolmus olabilir.
+            # `submitting` durumunda birakiliyor; bir sonraki turda
+            # brokera karsi cozumlenecek.
             return
 
+        self.writer.confirm_order(order.client_order_id, order_ref)
         result.submitted += 1
         log.info(
             "Emir gonderildi: %s %s %d adet @ %.2f (stop %.2f, hedef %.2f)",
@@ -360,17 +530,13 @@ class SessionRunner:
             order.take_profit,
         )
 
-        # Karar once yazilir: emir kaydi karara yabanci anahtarla bagli.
-        decision = decision.model_copy(update={"order": order_ref})
-        self.writer.record_decision(decision)
-        self.writer.record_order(order, order_ref, decision.decision_id)
-
     def _build_context(
         self,
         symbol: str,
         session: SessionState,
         account: Account,
         positions: dict[str, Position],
+        pending: frozenset[str],
     ) -> Context | None:
         """Bir sembol icin karar baglamini kurar."""
         start = session.now - timedelta(days=self.history_days)
@@ -395,6 +561,7 @@ class SessionRunner:
             account=account,
             positions=positions,
             quote=quote,
+            pending_orders=pending,
         )
 
     def _closed_bars(self, bars: list[Bar], now: datetime) -> list[Bar]:
@@ -407,3 +574,16 @@ class SessionRunner:
         """
         duration = self.timeframe.duration
         return [bar for bar in bars if bar.ts.astimezone(UTC) + duration <= now]
+
+
+def _parse_ts(raw: str) -> datetime | None:
+    """Journal'daki ISO zaman damgasini cozer; bozuksa None.
+
+    Bozuk bir zaman damgasi yuzunden donguyu durdurmuyoruz: en
+    fazla o satirin yasi bilinemez ve bir sonraki turda yeniden
+    denenir.
+    """
+    try:
+        return datetime.fromisoformat(raw).astimezone(UTC)
+    except (TypeError, ValueError):
+        return None
