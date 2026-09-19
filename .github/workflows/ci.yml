@@ -12,17 +12,17 @@ on:
 jobs:
   quality:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12"]
 
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          # Tek surum, Docker imajiyla ayni: uretimde calisacak olan
+          # neyse CI'da denetlenen de o. Iki surum desteklemek, ikisinin
+          # bagimlilik cozumlemesi ayristiginda CI'yi kodla ilgisi
+          # olmayan sebeplerle kirar.
+          python-version: "3.12"
           cache: pip
 
       - name: Bagimliliklari kur

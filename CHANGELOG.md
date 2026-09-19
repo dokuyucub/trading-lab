@@ -9,6 +9,14 @@ sürüme geri dönmek tek komutluk iştir. Ayrıntı için `CONTRIBUTING.md`.
 
 ## [Yayınlanmamış]
 
+### Değişti
+- **Desteklenen Python sürümü 3.12'ye sabitlendi** (önceden 3.11 + 3.12). CI,
+  Docker imajının kullandığı sürümün aynısını denetliyor. İki sürüm
+  desteklemek, bağımlılık çözümlemeleri ayrıştığında CI'yı kodla ilgisi
+  olmayan sebeplerle kırıyordu: numpy 2.5.3 yalnızca 3.12+ için yayınlanıyor
+  ve PEP 695 sözdizimi içeriyor; mypy'ye hedef olarak 3.11 verildiğinde bu
+  stub'ı ayrıştıramıyordu.
+
 ### Planlanan
 - Faz 1: ORB stratejisi, tam risk kapısı, bracket order ile gözetimsiz koşu.
 

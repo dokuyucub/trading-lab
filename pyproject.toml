@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "tlab"
 version = "0.1.0"
 description = "Alpaca tabanli, gozetimsiz calisan ve kendi islemlerinden ogrenen trading sistemi"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "alpaca-py>=0.42",
     "pydantic>=2.9",
@@ -36,7 +36,7 @@ tlab = ["journal/migrations/*.sql"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
@@ -54,7 +54,7 @@ markers = [
 ]
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 packages = ["tlab"]
 mypy_path = "src"
 strict = true
