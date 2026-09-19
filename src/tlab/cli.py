@@ -1,25 +1,34 @@
 """tlab komut satiri arayuzu.
 
-Faz 0 kapsami tamamen SALT OKUNURDUR: hesap okur, veri ceker, journal
-hazirlar. Emir gonderen hicbir komut yoktur - risk kapisi (Faz 1)
-tamamlanmadan sisteme emir yetkisi verilmiyor.
+`run` disindaki tum komutlar salt okunurdur. `run` emir gonderir ve
+varsayilan olarak PAPER hesapta calisir; ilk kez calistirirken
+--dry-run ile baslamak tavsiye edilir: sistem her seyi yapar, emri
+gondermez ve kararlari journal'a yazar.
 """
 
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from tlab import __version__
 from tlab.config import Config, Secrets, load_config, load_secrets
+from tlab.core.clock import LiveClock
 from tlab.core.types import Timeframe
 from tlab.data.cache import BarCache
 from tlab.data.market import AlpacaMarketData
+from tlab.engine.runner import SessionRunner
 from tlab.errors import TradingLabError
 from tlab.execution.alpaca_broker import AlpacaBroker
 from tlab.journal.db import apply_migrations, connect, schema_version
+from tlab.journal.queries import session_summary, top_veto_reasons
+from tlab.journal.writer import JournalWriter, current_git_sha
+from tlab.risk.gate import RiskGate
+from tlab.strategies.orb import OpeningRangeBreakout, ORBParams
 
 OK = "  [ok] "
 FAIL = "  [!!] "
@@ -233,6 +242,128 @@ def cmd_journal_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run(args: argparse.Namespace) -> int:
+    """Seans dongusunu baslatir.
+
+    Varsayilan olarak surekli calisir; --once tek tur yapar.
+    --dry-run her seyi yapar ama emir GONDERMEZ: kararlar journal'a
+    yazilir, boylece sistemin ne yapacagi once gozlemlenebilir.
+    """
+    _setup_logging(args.verbose)
+    config, secrets = _load(args.root)
+    secrets.require()
+
+    if not secrets.alpaca_paper and not args.i_understand_live:
+        print(
+            "\nALPACA_PAPER=false ayarli, yani GERCEK PARA kullanilacak.\n"
+            "Bunu bilerek istiyorsan --i-understand-live bayragini ekle.",
+            file=sys.stderr,
+        )
+        return 1
+
+    broker = AlpacaBroker(
+        secrets.alpaca_api_key, secrets.alpaca_secret_key, paper=secrets.alpaca_paper
+    )
+    market = AlpacaMarketData(
+        secrets.alpaca_api_key, secrets.alpaca_secret_key, feed=config.data.feed
+    )
+
+    conn = connect(config.journal_path)
+    apply_migrations(conn)
+    writer = JournalWriter(conn)
+
+    strategy = OpeningRangeBreakout(ORBParams())
+    mode = "paper" if secrets.alpaca_paper else "live"
+    run_id = writer.start_run(
+        mode=mode,
+        data_feed=config.data.feed,
+        params_version=strategy.params_version,
+        config=config.model_dump(mode="json"),
+        git_sha=current_git_sha(args.root),
+        notes="dry-run" if args.dry_run else None,
+    )
+
+    runner = SessionRunner(
+        broker=broker,
+        market=market,
+        strategies=[strategy],
+        gate=RiskGate(config.risk),
+        writer=writer,
+        conn=conn,
+        config=config,
+        clock=LiveClock(),
+        run_id=run_id,
+        opening_range_minutes=strategy.params.opening_range_minutes,
+        timeframe=config.data.default_timeframe,
+        dry_run=args.dry_run,
+    )
+
+    print(f"Kosu {run_id[:12]} | mod={mode} | strateji={strategy.params_version}")
+    print(f"Evren: {', '.join(config.symbols)}")
+    if args.dry_run:
+        print("DRY-RUN: emir gonderilmeyecek, kararlar yine de kaydedilecek.\n")
+
+    try:
+        if args.once:
+            print(runner.run_once().summary())
+        else:
+            runner.run_forever(poll_seconds=args.poll)
+    except KeyboardInterrupt:
+        print("\nDurduruldu.")
+    finally:
+        writer.end_run(run_id)
+        _print_summary(conn, run_id)
+        conn.close()
+    return 0
+
+
+def cmd_summary(args: argparse.Namespace) -> int:
+    """Bir kosunun ozetini gosterir (varsayilan: en son kosu)."""
+    config, _ = _load(args.root)
+    conn = connect(config.journal_path)
+    apply_migrations(conn)
+
+    run_id = args.run_id
+    if run_id is None:
+        row = conn.execute("SELECT run_id FROM runs ORDER BY started_at DESC LIMIT 1").fetchone()
+        if row is None:
+            print("Henuz kayitli kosu yok.")
+            return 0
+        run_id = str(row["run_id"])
+
+    _print_summary(conn, run_id)
+    conn.close()
+    return 0
+
+
+def _print_summary(conn: Any, run_id: str) -> None:
+    """Kosu ozeti: sabah kalkinca bakilacak rakamlar."""
+    stats = session_summary(conn, run_id)
+    print(f"\nKosu ozeti ({run_id[:12]})")
+    print(f"  degerlendirilen karar : {stats['decisions_allowed'] + stats['decisions_vetoed']}")
+    print(f"    izin verilen        : {stats['decisions_allowed']}")
+    print(f"    veto edilen         : {stats['decisions_vetoed']}")
+    print(f"  kapanan islem         : {stats['trades']}")
+    if stats["trades"]:
+        print(f"    kazanan             : {stats['wins']} (%{stats['win_rate']:.0f})")
+        print(f"    net kar/zarar       : {stats['net_pnl']:+,.2f}")
+        print(f"    toplam R            : {stats['total_r']:+.2f}")
+
+    reasons = top_veto_reasons(conn, run_id)
+    if reasons:
+        print("\n  En sik veto sebepleri:")
+        for reason, count in reasons:
+            print(f"    {count:>3}x  {reason}")
+
+
+def _setup_logging(verbose: bool) -> None:
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format="%(asctime)s %(levelname)-7s %(name)s  %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+
 # --------------------------------------------------------------------------
 # Arguman ayristirma
 # --------------------------------------------------------------------------
@@ -266,6 +397,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Bar periyodu",
     )
     fetch.set_defaults(func=cmd_fetch)
+
+    run = sub.add_parser("run", help="Seans dongusunu baslat")
+    run.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Emir gonderme, sadece degerlendir ve kaydet (ilk calistirma icin onerilir)",
+    )
+    run.add_argument("--once", action="store_true", help="Tek tur calistir ve cik")
+    run.add_argument("--poll", type=int, default=60, help="Turlar arasi bekleme (saniye)")
+    run.add_argument("--verbose", action="store_true", help="Ayrintili gunluk")
+    run.add_argument(
+        "--i-understand-live",
+        action="store_true",
+        help="ALPACA_PAPER=false iken gercek parayla calismayi onayla",
+    )
+    run.set_defaults(func=cmd_run)
+
+    summary = sub.add_parser("summary", help="Kosu ozetini goster")
+    summary.add_argument("--run-id", help="Kosu kimligi (varsayilan: en son kosu)")
+    summary.set_defaults(func=cmd_summary)
 
     journal = sub.add_parser("journal", help="Journal veritabani islemleri")
     journal_sub = journal.add_subparsers(dest="journal_command", required=True)
