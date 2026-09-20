@@ -10,6 +10,18 @@ sürüme geri dönmek tek komutluk iştir. Ayrıntı için `CONTRIBUTING.md`.
 ## [Yayınlanmamış]
 
 ### Eklendi
+- **`requirements.lock` — bağımlılık kilidi.** Tüm sürümler tam olarak
+  sabitlendi (Python 3.12 hedefiyle üretildi, CI'ın kullandığı sürüm). CI'ı
+  kıran `numpy` 2.5.3 dahil 46 paket kilitli. Bir bağımlılık eklendiğinde
+  `make lock` ile tazelenir; kilit ile `pyproject.toml`'un uyumunu test
+  denetliyor.
+- **CI yeniden düzenlendi**: kilitli kurulum, eşzamanlılık grubu (eski koşular
+  iptal edilir), kapsama raporu ve %80 eşiği, haftalık "canary" koşusu —
+  bağımlılıkları sabitlemeden kurar, böylece üst akıştaki bir kırılma rastgele
+  bir PR'ı kırmadan önce bizim seçtiğimiz anda ortaya çıkar.
+- **PR şablonu, CODEOWNERS, Dependabot, pre-commit yapılandırması ve
+  `SECURITY.md`.** pre-commit kancaları CI ile aynı kapıları çalıştırır: farklı
+  olurlarsa yerelde geçen bir değişiklik CI'da kırılır ve döngüyü uzatır.
 - **`AGENTS.md` — ekip sözleşmesi.** Projede birden fazla geliştirici (insan ve
   yapay zekâ ajanı) çalıştığı için dal modeli, push kuralları, değişmezler,
   çakışmaya açık dosyalar ve devir teslim protokolü yazıya döküldü.

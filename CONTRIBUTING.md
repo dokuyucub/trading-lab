@@ -177,8 +177,31 @@ tahmine değil kayda dayanır.
 ## 5. Push etmeden önce
 
 ```bash
-make check    # ruff + mypy --strict + pytest
+make check    # ruff + mypy + pytest
 ```
 
 CI zaten çalıştıracak, ama kırık commit'in geçmişe girmesini engellemek senin
 elinde. Temiz bir geçmiş, `bisect`'in işe yaraması demektir.
+
+`make hooks` ile bu kapılar git kancası olarak da kurulabilir — o zaman
+`git commit` kendiliğinden denetler.
+
+## 6. Sürüm çıkarma
+
+```bash
+# 1. CHANGELOG'da [Yayınlanmamış] bölümünü sürüm başlığına çevir
+# 2. main güncel ve yeşil olsun
+git switch main && git pull
+make check
+
+# 3. Etiketle ve gönder
+git tag -a v0.3.0 -m "Faz 2: backtest motoru"
+git push origin v0.3.0
+```
+
+Etiket, geri dönülebilecek sabit bir noktadır. Faz bittiğinde etiketlenir.
+
+## 7. Ekip çalışması
+
+Birden fazla geliştirici (insan ya da ajan) varsa **`AGENTS.md`** geçerlidir:
+dal modeli, değişmezler ve devir teslim protokolü orada.

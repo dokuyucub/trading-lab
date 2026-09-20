@@ -26,15 +26,31 @@ birleştir. PR'lar küçük tutulur; küçük PR hızlı birleşir, hızlı birl
 `main` üzerinde branch protection açık olmalı (Settings → Branches):
 PR zorunlu, `quality` status check zorunlu, yöneticiler dahil.
 
-## 2. Push etmeden önce
+## 2. Kurulum ve kapılar
+
+İlk kurulum:
 
 ```bash
-make check    # ruff + ruff format + mypy + pytest
+make install-locked   # CI ile AYNI paket sürümleri
+make hooks            # pre-commit kancalarını kur
 ```
 
-CI aynısını çalıştırır. Kırık bir commit'in geçmişe girmesi `git bisect`'i
-işe yaramaz hale getirir — ve "eskiden çalışıyordu" sorusunun tek hızlı cevabı
-odur.
+Push etmeden önce tek komut:
+
+```bash
+make check            # ruff + ruff format + mypy + pytest
+```
+
+CI aynısını çalıştırır. Kırık bir commit'in geçmişe girmesi `git bisect`'i işe
+yaramaz hale getirir — ve "eskiden çalışıyordu" sorusunun tek hızlı cevabı odur.
+
+**Bağımlılık eklediysen `make lock` çalıştır ve `requirements.lock`'u commit'e
+dahil et.** Sabitlenmemiş bir kurulum, aynı commit'in iki hafta arayla farklı
+paket sürümleriyle kurulması demek. Bu bir kez yaşandı: `numpy` 2.5.3
+yayınlandığı gün CI kodla ilgisi olmayan bir sebeple kırıldı.
+
+Kapsama eşiği %80. Amaç oranı yükseltmek değil, gerilemeyi yakalamak: testsiz
+eklenen büyük bir modül burada göze çarpar.
 
 ## 3. Değişmezler
 
@@ -127,6 +143,7 @@ koşuda izlenen dosyaları tarar.
 | `journal/migrations/` | Numara benzersiz ve arasız. Yeni göç eklemeden önce `git fetch` yap ve en yüksek numarayı kontrol et. **Uygulanmış bir göç dosyası asla düzenlenmez** — değişiklik her zaman yeni bir dosyadır. |
 | `CHANGELOG.md` | Sadece `[Yayınlanmamış]` bölümüne ekle, kendi maddeni en alta koy. Çakışırsa ikisini de tut. |
 | `config/base.yaml` | Risk limitlerini tek taraflı değiştirme; PR açıklamasında gerekçesini yaz. |
+| `requirements.lock` | Elle düzenlenmez. `make lock` ile üretilir. Çakışırsa `main`'inkini al, kendi bağımlılığını ekle, yeniden üret. |
 | `core/types.py` | Herkesin tabanı. Alan eklemek serbest, alan silmek/yeniden adlandırmak PR'da tartışılır. |
 
 ## 5. Commit ve PR
@@ -140,11 +157,10 @@ ancak böyle işe yarar.
 Commit gövdesi **ne yapıldığını değil neden yapıldığını** anlatır; ne yapıldığı
 diff'te zaten görünür.
 
-PR açıklamasında bulunması gerekenler:
-- Ne değişti ve neden
-- Hangi değişmezlere dokunuyor (varsa)
-- Nasıl doğrulandı (hangi testler, hangi senaryo)
-- Diğer ajanın bilmesi gereken bir şey var mı
+PR açarken şablon (`.github/pull_request_template.md`) otomatik gelir; boş
+bırakma. Özellikle **"Diğer geliştiricinin bilmesi gerekenler"** bölümü: şema
+göçü eklediysen, ortak dosyaya dokunduysan ya da bir şeyi yarım bıraktıysan
+orada yazmalı.
 
 ## 6. Devir teslim
 
