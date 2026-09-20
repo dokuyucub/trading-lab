@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
 from tlab.config import Config
@@ -35,6 +35,7 @@ from tlab.core.types import (
     OrderRef,
     Position,
     Quote,
+    Side,
     Timeframe,
 )
 from tlab.data.market import MarketData
@@ -170,8 +171,18 @@ class SessionRunner:
     def run_once(self) -> LoopResult:
         """Tek tur: mutabakat, kontroller, sembol degerlendirmesi."""
         now = self.clock.now()
-        session = self._session_state(now)
         market_clock = self.broker.get_market_clock()
+        session = self._session_state(now)
+        if market_clock.is_open:
+            # Broker calendar is authoritative on shortened trading days.
+            close = min(session.session_close, market_clock.next_close)
+            flatten_at = close - timedelta(minutes=self.config.session.flatten_before_close_minutes)
+            session = replace(
+                session,
+                session_close=close,
+                flatten_at=flatten_at,
+                phase=SessionPhase.FLATTEN if now >= flatten_at else session.phase,
+            )
         result = LoopResult(now=now, phase=session.phase, market_open=market_clock.is_open)
 
         if not market_clock.is_open:
@@ -209,7 +220,7 @@ class SessionRunner:
             return result
 
         pending = self._pending_symbols(open_orders, positions)
-        self._evaluate_universe(session, account, positions, pending, result)
+        self._evaluate_universe(session, account, positions, pending, result, open_orders)
         return result
 
     # ------------------------------------------------------------------
@@ -400,6 +411,7 @@ class SessionRunner:
         if existing is not None:
             result.halted = True
             result.notes.append(f"gun kapali: {existing}")
+            result.flattened = self._flatten_all(positions, ExitReason.KILL_SWITCH)
             return True
 
         if not daily_loss_breached(account, self.config.risk):
@@ -428,10 +440,25 @@ class SessionRunner:
                 log.info("[dry-run] %d pozisyon kapatilacakti (%s)", len(positions), reason.value)
             return 0
 
+        # Include entries without positions. Refresh positions after cancellation
+        # so an entry that filled during cancellation is also closed.
+        try:
+            self.broker.cancel_open_orders()
+            remaining = self.broker.list_open_orders()
+            positions = {p.symbol: p for p in self.broker.get_positions()}
+        except BrokerError:
+            log.exception("Kapatma oncesi emir iptali/mutabakat basarisiz; sonraki tur denenecek")
+            return 0
+
+        blocked = {order.symbol for order in remaining}
         closed = 0
         for symbol in positions:
+            if symbol in blocked:
+                # Cancellation can be asynchronous. Never submit a competing
+                # close while a protective leg or entry is still active.
+                log.warning("%s emir iptali kesinlesmedi; kapatma bekliyor", symbol)
+                continue
             try:
-                self.broker.cancel_open_orders(symbol)
                 if self.broker.close_position(symbol) is not None:
                     closed += 1
                     log.info("Pozisyon kapatildi: %s (%s)", symbol, reason.value)
@@ -446,12 +473,14 @@ class SessionRunner:
         positions: dict[str, Position],
         pending: frozenset[str],
         result: LoopResult,
+        open_orders: list[OrderRef],
     ) -> None:
         """Evrendeki her sembolu sirayla degerlendirir.
 
         Bir sembolun hatasi digerlerini etkilemez: veri gelmeyen bir
         hisse yuzunden tum seansi kaybetmek kabul edilemez.
         """
+        exposure, reserved, unknown = self._pending_risk(open_orders, positions)
         for symbol in self.config.symbols:
             try:
                 ctx = self._build_context(symbol, session, account, positions, pending)
@@ -461,6 +490,12 @@ class SessionRunner:
 
             if ctx is None:
                 continue
+            ctx = replace(
+                ctx,
+                reserved_exposure=exposure,
+                reserved_symbols=reserved,
+                unknown_order_risk=unknown,
+            )
             result.evaluated += 1
 
             for strategy in self.strategies:
@@ -477,10 +512,59 @@ class SessionRunner:
                     # acmamak, korumasiz islem acmaktan iyidir.
                     log.exception("%s karari kaydedilemedi, islem acilmadi", symbol)
                     result.notes.append(f"{symbol}: journal yazilamadi")
+                # Reconcile a fresh broker snapshot before spending more risk.
+                # A lost submit response also consumes this cycle's budget.
+                if not self.dry_run and (result.submitted or unconfirmed_orders(self.conn)):
+                    return
                 # Ayni sembolde ilk niyet degerlendirildikten sonra
                 # digerlerine bakmiyoruz: pozisyon acildiysa ikinci
                 # strateji ayni riske tekrar girerdi.
                 break
+
+    def _pending_risk(
+        self, orders: list[OrderRef], positions: dict[str, Position]
+    ) -> tuple[float, frozenset[str], bool]:
+        """Reserve pending entries; unknown external order sizes block new risk.
+
+        Journal fallback deliberately reserves the entire original quantity:
+        older adapters do not expose remaining quantity. This can over-reserve
+        a partial fill but cannot under-reserve it.
+        """
+        known = open_entry_orders(self.conn)
+        exposure = 0.0
+        symbols: set[str] = set()
+        unknown = bool(unconfirmed_orders(self.conn))
+        reduction_budget = {symbol: position.qty for symbol, position in positions.items()}
+        for order in orders:
+            row = known.get(order.client_order_id)
+            qty = order.remaining_qty
+            side = order.side
+            price = order.limit_price
+            if row is not None:
+                qty = float(row["qty"]) if qty is None else qty
+                side = Side(str(row["side"])) if side is None else side
+                price = float(row["limit_price"] or 0) if price is None else price
+            if qty == 0:
+                continue
+            position = positions.get(order.symbol)
+            # Only an identified order that cannot increase this position is
+            # excluded. Missing metadata must never be treated as zero risk.
+            if (
+                row is None
+                and position is not None
+                and side is not None
+                and side is not position.side
+                and qty is not None
+                and qty <= reduction_budget[order.symbol]
+            ):
+                reduction_budget[order.symbol] -= qty
+                continue
+            symbols.add(order.symbol)
+            if qty is None or price is None or price <= 0:
+                unknown = True
+                continue
+            exposure += qty * price
+        return exposure, frozenset(symbols), unknown
 
     def _handle_intent(self, intent: Intent, ctx: Context, result: LoopResult) -> None:
         """Niyeti risk kapisindan gecirir, gerekirse emre cevirir."""

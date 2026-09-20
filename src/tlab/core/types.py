@@ -574,6 +574,9 @@ class OrderRef(Frozen):
     symbol: str
     submitted_at: datetime
     status: str
+    side: Side | None = None
+    remaining_qty: float | None = Field(default=None, ge=0)
+    limit_price: float | None = Field(default=None, gt=0)
 
 
 # --------------------------------------------------------------------------

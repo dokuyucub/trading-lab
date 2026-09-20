@@ -86,10 +86,13 @@ class RiskGate:
             # yeniden gonderilir ve pozisyon kat kat buyur.
             reasons.append(f"{intent.symbol} icin brokerda bekleyen emir var")
 
-        if len(ctx.positions) >= config.max_concurrent_positions:
+        if ctx.unknown_order_risk:
+            reasons.append("bekleyen emrin maruziyeti bilinmiyor")
+
+        occupied = len(set(ctx.positions) | ctx.reserved_symbols)
+        if occupied >= config.max_concurrent_positions:
             reasons.append(
-                f"es zamanli pozisyon siniri dolu ({len(ctx.positions)}/"
-                f"{config.max_concurrent_positions})"
+                f"es zamanli pozisyon siniri dolu ({occupied}/{config.max_concurrent_positions})"
             )
 
         reasons.extend(self._pdt_reasons(account))
@@ -174,7 +177,7 @@ class RiskGate:
         # Toplam maruziyet siniri. Tek islemin riski kucuk olsa da, ayni
         # anda cok sayida pozisyon toplami tehlikeli seviyeye tasiyabilir.
         exposure_cap = account.equity * config.max_gross_exposure_pct / 100
-        current = gross_exposure(ctx.positions)
+        current = gross_exposure(ctx.positions) + ctx.reserved_exposure
         available = exposure_cap - current
         if available <= 0:
             return GateVerdict.veto(

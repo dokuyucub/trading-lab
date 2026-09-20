@@ -586,3 +586,22 @@ def test_doctor_reports_broker_failure_clearly(
     out = capsys.readouterr().out
     assert "SONUC:" in out
     assert "broker" in out
+
+
+def test_pending_order_risk_metadata_survives_real_sdk(
+    broker: AlpacaBroker, stub: tuple[str, StubState]
+) -> None:
+    stub[1].open_orders = [
+        dict(
+            stub[1].open_orders[0],
+            qty="100",
+            filled_qty="30",
+            limit_price="101.25",
+            status="partially_filled",
+            side="buy",
+        )
+    ]
+    order = broker.list_open_orders()[0]
+    assert order.remaining_qty == 70
+    assert order.limit_price == 101.25
+    assert order.side is Side.BUY
