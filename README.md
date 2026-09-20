@@ -1,5 +1,7 @@
 # tlab
 
+[![CI](https://github.com/dokuyucub/trading-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/dokuyucub/trading-lab/actions/workflows/ci.yml)
+
 Alpaca üzerinde çalışan, gözetimsiz işlem yapan ve kendi işlemlerinden öğrenen
 bir alım-satım sistemi.
 
