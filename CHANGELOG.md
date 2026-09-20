@@ -10,7 +10,38 @@ sürüme geri dönmek tek komutluk iştir. Ayrıntı için `CONTRIBUTING.md`.
 ## [Yayınlanmamış]
 
 ### Planlanan
-- Faz 2: Backtest motoru (aynı strateji kodu) ve dürüst metrikler.
+- Faz 3: Gece analizi, walk-forward değerlendirme, shadow mode, terfi kapısı.
+
+## [0.3.0] - 2026-09-20
+
+Faz 2 — backtest motoru. Aynı strateji ve risk kodu geçmiş veri üzerinde
+çalışıyor. 237 → 272 test.
+
+### Eklendi
+- **`SimBroker`**: Broker protokolünü uygulayan simülasyon brokeri. Dolum
+  modeli bilerek kötümser — pasif limit emri fiyatın ötesine geçilmeden
+  dolmaz, aynı barda hem stop hem hedef tetiklenirse stop kabul edilir,
+  gap'lerde dolum aleyhimize yapılır, giriş ve çıkış aynı barda olmaz.
+- **`CachedMarketData`**: parquet önbelleğinden beslenen veri kaynağı.
+  Dilimleme ikili aramayla; kotasyon simülasyon anına bağlı üretiliyor.
+- **`Backtest` motoru**: canlıdaki `SessionRunner`'ı simülasyon brokeri,
+  önbellek verisi ve simülasyon saatiyle sürüyor. Ayrı bir backtest döngüsü
+  yazılmadı — ölçülen şey canlıda çalışacak olanın ta kendisi.
+- **Metrikler**: R katsayısı üzerinden beklenen değer, kâr faktörü, isabet
+  oranı, azami geri çekilme, ortalama tutuş, kayma. Az işlemli sonuçlar için
+  istatistiksel anlamlılık uyarısı.
+- **`tlab backtest`** komutu.
+- Motorun hile yapmadığını sınayan testler: rastgele yürüyüşte pozitif beklenen
+  değer üretememe, geleceğe bakmama (aynı geçmiş + farklı gelecek = aynı
+  kararlar), determinizm, kayma arttıkça sonucun kötüleşmesi.
+
+### Düzeltildi
+- **Giriş emri ters seçime yol açıyordu.** Emir tam kırılım fiyatına konuyordu;
+  güçlü kırılımlarda fiyat geri gelmediği için emir hiç dolmuyor, dolanlar ise
+  fiyatın geri geldiği — yani kırılımın başarısız olduğu — durumlar oluyordu.
+  Sistem sistematik olarak yalnızca çalışmayan kırılımlara giriyordu. Giriş
+  artık kırılımın biraz ötesine konan marketable limit emri
+  (`entry_offset_bps`, varsayılan 5). Sentetik veride dolum oranı %72 → %83.
 
 ## [0.2.1] - 2026-09-19
 

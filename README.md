@@ -3,10 +3,9 @@
 Alpaca üzerinde çalışan, gözetimsiz işlem yapan ve kendi işlemlerinden öğrenen
 bir alım-satım sistemi.
 
-> **Durum: Faz 1 — gözetimsiz paper trading.** Sistem bir seansı başından sonuna
-> kendi başına yürütür: açılış aralığı kırılımlarını arar, risk kapısından
-> geçirir, bracket emri gönderir, gün sonunda pozisyonları kapatır ve her kararı
-> journal'a yazar. Varsayılan olarak **paper** hesapta çalışır.
+> **Durum: Faz 2 — backtest motoru.** Sistem bir seansı başından sonuna
+> kendi başına yürütür ve aynı kodu geçmiş veri üzerinde de çalıştırabilir.
+> Varsayılan olarak **paper** hesapta işlem yapar.
 
 ---
 
@@ -47,6 +46,7 @@ veri → özellik → strateji → RİSK KAPISI → execution → journal → ö
 | `risk/` | Risk kapısı: veto veya boyutlandırma. Tek koruma katmanı. |
 | `execution/` | Broker protokolü ve Alpaca uygulaması. |
 | `engine/` | Mutabakat ve seans döngüsü. |
+| `backtest/` | Simülasyon brokeri, motor ve metrikler. |
 | `journal/` | Karar ve işlem kaydı — öğrenmenin yakıtı. |
 | `config.py` | Davranış ayarları (YAML) + anahtarlar (.env), bilerek ayrı. |
 
@@ -159,6 +159,7 @@ gün sonunda açık pozisyon yok.
 | `tlab run` | Seans döngüsünü başlatır (paper hesap) |
 | `tlab run --once` | Tek tur çalıştırıp çıkar |
 | `tlab summary` | Son koşunun özeti: kararlar, işlemler, veto sebepleri |
+| `tlab backtest --days 60` | Stratejiyi geçmiş veri üzerinde çalıştırır ve ölçer |
 
 ## Yapılandırma
 
@@ -192,14 +193,63 @@ mypy --strict src/tlab
 Testlerin tamamının çevrimdışı çalışabilmesi tesadüf değil: katmanlar doğru
 ayrıldığında çekirdek mantık brokera bağlanmadan doğrulanabilir.
 
+## Backtest
+
+Motorun en dikkat çekici özelliği **ne kadar az şey yaptığı**. Strateji, risk
+kapısı, emir üretimi, mutabakat ve journal kaydı — hepsi canlıda çalışan kodun
+aynısı. Değişen sadece üç parça:
+
+```
+canlı                  backtest
+------------------     --------------------
+AlpacaBroker      ->   SimBroker
+AlpacaMarketData  ->   CachedMarketData
+LiveClock         ->   SimClock
+```
+
+Üstteki hiçbir katman bu değişimi görmez. Ayrı bir backtest motoru yazılsaydı,
+ölçülen ile çalışan arasındaki fark zamanla açılır ve öğrenilen her şey
+doğrulanamaz hale gelirdi.
+
+```bash
+tlab fetch --days 90 --timeframe 1Min   # önce veriyi indir (ağ gerekir)
+tlab backtest --days 60                 # sonra ölç (ağ gerekmez)
+```
+
+### Dolum modeli bilerek kötümser
+
+Backtest'in işi güzel rakamlar üretmek değil, gerçekte olabileceğin **alt
+sınırını** vermektir. İyimser bir simülasyon, canlıya geçince kaybolan bir
+kârlılık gösterir — ve bu, hiç backtest yapmamaktan zararlıdır çünkü yanlış bir
+güven verir.
+
+- Pasif limit emri, fiyata değmek yetmez, **ötesine geçilmeli**.
+- Aynı barda hem stop hem hedef tetiklenirse **stop** kabul edilir.
+- Stop'tan aşağı gap'te çıkış **açılıştan** yapılır; stop bir garanti değil,
+  tetikleyicidir.
+- Hedef lehimize gap yapsa bile hedef fiyatı kullanılır.
+- Giriş ve çıkış **aynı barda olmaz**.
+- Her dolumda kayma aleyhimize uygulanır.
+
+Bunun sınavı `test_backtest.py` içinde: rastgele yürüyüş verisinde motor pozitif
+beklenen değer üretemiyor. Üretebilseydi, kendine bir yerden avantaj sağlıyor
+demekti.
+
+### Bilinen iyimserlik kaynakları
+
+Dürüstlük gereği: geçmiş bar verisi kotasyon içermediği için **spread sentetik**
+üretiliyor (sabit genişlikte). Gerçekte spread gün içinde değişir, açılışta ve
+haber anında açılır. Bu yüzden backtest sonuçları gerçeğin **üst sınırı**
+sayılmalı — özellikle "ufak marj" kovalayan stratejilerde.
+
 ## Yol haritası
 
 | Faz | Kapsam | Durum |
 |---|---|---|
 | 0 | İskelet, config, veri + önbellek, journal şeması, salt okunur broker | **tamam** |
 | 1 | ORB stratejisi, tam risk kapısı, bracket order, mutabakat, gözetimsiz koşu | **tamam** |
-| 2 | Backtest motoru (aynı strateji kodu) ve dürüst metrikler | sırada |
-| 3 | Gece analizi, shadow mode, terfi kapısı | |
+| 2 | Backtest motoru (aynı strateji kodu) ve dürüst metrikler | **tamam** |
+| 3 | Gece analizi, walk-forward, shadow mode, terfi kapısı | sırada |
 | 4 | Bilanço takvimi, haber/katalizör → özellik ve sert bloklar | |
 | 5 | Çoklu strateji, rejim sınıflandırma, dağıtım öğrenmesi | |
 | 6 | Opsiyonel: TradingView webhook, görsel grafik okuma | |
