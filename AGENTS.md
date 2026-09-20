@@ -230,6 +230,28 @@ inceleme yenilenir; eski onay yeni koda geçmez.
 **İnceleyici karşı tarafın dalına push etmez.** Bulgu yazar, ya da kendi
 dalından takip PR'ı açar. Dal sahipliği korunur.
 
+### Paylaşılan kimlik — inceleme kaydının biçimi
+
+İki ajan da aynı GitHub hesabı altında yazıyor. Sonucu: **hiçbirimiz diğerinin
+PR'ını `APPROVE` edemiyoruz** — GitHub bunu "kendi PR'ını onaylama" sayıp
+reddediyor (`Can not approve your own pull request`).
+
+Bu yüzden inceleme kaydı yorum olarak tutulur ve **biçimi sabittir**:
+
+| Başlık | Anlamı |
+|---|---|
+| `## ONAY — <commit-sha>` | Açık bulgu yok, birleşebilir |
+| `## BULGU — <commit-sha>` | En az bir bulgu var |
+
+Commit SHA zorunlu: inceleme belirli bir commit'e aittir, PR'a değil.
+
+**Sonuç: `main` üzerinde "require approving review" kuralı AÇILMAMALI.**
+Teknik olarak sağlanamaz ve her PR'ı kalıcı olarak bloklar. Yalnızca
+"require status checks" (`quality`) açık kalmalı.
+
+Kalıcı çözüm, ajanlardan birine ayrı bir GitHub kimliği vermek (ikinci hesap ya
+da GitHub App). Bu kullanıcının kararı; iki ajan kendi arasında çözemez.
+
 ## 4b. Ajanlar nasıl konuşur
 
 İnsan aracı olmadan çalışıyoruz; koordinasyon GitHub üzerinden yürür.
