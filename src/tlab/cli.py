@@ -121,7 +121,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     print("\n4. Broker baglantisi")
     try:
         broker = AlpacaBroker(
-            secrets.alpaca_api_key, secrets.alpaca_secret_key, paper=secrets.alpaca_paper
+            secrets.alpaca_api_key,
+            secrets.alpaca_secret_key,
+            paper=secrets.alpaca_paper,
+            base_url=secrets.base_url,
         )
         account = broker.get_account()
         print(f"{OK}baglanti kuruldu - ozsermaye {account.equity:,.2f} {account.currency}")
@@ -138,7 +141,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     print("\n5. Piyasa verisi")
     try:
         market = AlpacaMarketData(
-            secrets.alpaca_api_key, secrets.alpaca_secret_key, feed=config.data.feed
+            secrets.alpaca_api_key,
+            secrets.alpaca_secret_key,
+            feed=config.data.feed,
+            base_url=secrets.base_url,
         )
         probe = config.symbols[0] if config.symbols else "SPY"
         bars = market.bars(
@@ -169,7 +175,10 @@ def cmd_account(args: argparse.Namespace) -> int:
     """Hesap ozetini ve acik pozisyonlari gosterir."""
     secrets = load_secrets(args.root).require()
     broker = AlpacaBroker(
-        secrets.alpaca_api_key, secrets.alpaca_secret_key, paper=secrets.alpaca_paper
+        secrets.alpaca_api_key,
+        secrets.alpaca_secret_key,
+        paper=secrets.alpaca_paper,
+        base_url=secrets.base_url,
     )
 
     account = broker.get_account()
@@ -211,7 +220,10 @@ def cmd_fetch(args: argparse.Namespace) -> int:
         return 1
 
     market = AlpacaMarketData(
-        secrets.alpaca_api_key, secrets.alpaca_secret_key, feed=config.data.feed
+        secrets.alpaca_api_key,
+        secrets.alpaca_secret_key,
+        feed=config.data.feed,
+        base_url=secrets.base_url,
     )
     cache = BarCache(config.cache_dir)
 
@@ -269,10 +281,16 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 1
 
     broker = AlpacaBroker(
-        secrets.alpaca_api_key, secrets.alpaca_secret_key, paper=secrets.alpaca_paper
+        secrets.alpaca_api_key,
+        secrets.alpaca_secret_key,
+        paper=secrets.alpaca_paper,
+        base_url=secrets.base_url,
     )
     market = AlpacaMarketData(
-        secrets.alpaca_api_key, secrets.alpaca_secret_key, feed=config.data.feed
+        secrets.alpaca_api_key,
+        secrets.alpaca_secret_key,
+        feed=config.data.feed,
+        base_url=secrets.base_url,
     )
 
     conn = connect(config.journal_path)

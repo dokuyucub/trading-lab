@@ -39,6 +39,13 @@ class Secrets(BaseSettings):
     alpaca_api_key: str = ""
     alpaca_secret_key: str = ""
     alpaca_paper: bool = True
+    alpaca_base_url: str = ""
+    """Alpaca adresini degistirir; bos birakilirsa uretim adresleri.
+
+    Uc kullanimi var: Alpaca'nin sandbox ortami, bir vekil sunucu
+    arkasindan calisma ve testlerde yerel sahte sunucu. Ucunde de
+    kodun geri kalani ayni kalir.
+    """
 
     @property
     def is_configured(self) -> bool:
@@ -55,6 +62,10 @@ class Secrets(BaseSettings):
             raise ConfigError(msg)
         return self
 
+    @property
+    def base_url(self) -> str | None:
+        return self.alpaca_base_url or None
+
     def masked(self) -> dict[str, str]:
         """Loglanabilir, maskelenmis gosterim. Anahtar asla duz yazilmaz."""
 
@@ -67,6 +78,7 @@ class Secrets(BaseSettings):
             "ALPACA_API_KEY": mask(self.alpaca_api_key),
             "ALPACA_SECRET_KEY": mask(self.alpaca_secret_key),
             "ALPACA_PAPER": str(self.alpaca_paper),
+            "ALPACA_BASE_URL": self.alpaca_base_url or "<varsayilan>",
         }
 
 

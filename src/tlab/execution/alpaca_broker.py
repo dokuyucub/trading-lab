@@ -30,11 +30,28 @@ class AlpacaMarketClock:
 class AlpacaBroker:
     """Alpaca hesabina baglanir ve hesap/pozisyon durumunu okur."""
 
-    def __init__(self, api_key: str, secret_key: str, *, paper: bool = True) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        secret_key: str,
+        *,
+        paper: bool = True,
+        base_url: str | None = None,
+    ) -> None:
+        """`base_url` Alpaca'nin adresini degistirir.
+
+        Uretimde bos birakilir. Varlik sebebi, istemciyi Alpaca'nin
+        yanit sekillerini taklit eden yerel bir sunucuya
+        yonlendirebilmek: boylece istek kurulumu, JSON serilestirmesi
+        ve yanit ayristirmasi - yani bizim kodumuzun tum HTTP yuzeyi -
+        ag erisimi olmadan uctan uca dogrulanabiliyor.
+        """
         from alpaca.trading.client import TradingClient
 
         self.paper = paper
-        self._client = TradingClient(api_key=api_key, secret_key=secret_key, paper=paper)
+        self._client = TradingClient(
+            api_key=api_key, secret_key=secret_key, paper=paper, url_override=base_url
+        )
 
     def get_account(self) -> Account:
         try:
