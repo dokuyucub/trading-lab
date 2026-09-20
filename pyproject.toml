@@ -23,6 +23,7 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "types-PyYAML",
+    "pre-commit>=4.0",
 ]
 
 [project.scripts]
@@ -70,6 +71,7 @@ filterwarnings = [
     "ignore::DeprecationWarning:websockets.*",
     "ignore::DeprecationWarning:alpaca.*",
 ]
+
 markers = [
     "network: ag erisimi gerektiren testler (varsayilan olarak calistirilmaz)",
 ]
@@ -88,3 +90,21 @@ warn_unreachable = true
 [[tool.mypy.overrides]]
 module = ["alpaca.*", "pandas.*", "pyarrow.*"]
 ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["tlab"]
+branch = true
+
+[tool.coverage.report]
+# Esik mevcut seviyenin biraz altinda: amac orani yukseltmek degil,
+# gerilemeyi yakalamak. Testsiz eklenen buyuk bir modul burada goze
+# carpar.
+fail_under = 80
+show_missing = true
+skip_covered = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "\\.\\.\\.",
+]

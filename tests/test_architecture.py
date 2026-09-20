@@ -295,3 +295,73 @@ def test_env_file_is_ignored() -> None:
         ["git", "check-ignore", ".env"], cwd=REPO, capture_output=True, text=True, check=False
     )
     assert result.returncode == 0, ".env .gitignore tarafindan dislanmali"
+
+
+# --------------------------------------------------------------------------
+# Bagimlilik kilidi
+# --------------------------------------------------------------------------
+
+
+def declared_dependencies() -> set[str]:
+    """pyproject.toml icindeki dogrudan bagimlilik adlari."""
+    import tomllib
+
+    data = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
+    project = data["project"]
+    raw = list(project.get("dependencies", []))
+    for extra in project.get("optional-dependencies", {}).values():
+        raw.extend(extra)
+
+    names: set[str] = set()
+    for entry in raw:
+        name = re.split(r"[<>=!~\[; ]", entry, maxsplit=1)[0].strip()
+        if name:
+            names.add(name.lower().replace("_", "-"))
+    return names
+
+
+def locked_packages() -> set[str]:
+    lock = REPO / "requirements.lock"
+    if not lock.exists():
+        pytest.skip("requirements.lock yok")
+    names: set[str] = set()
+    for line in lock.read_text(encoding="utf-8").splitlines():
+        if line.startswith(("#", " ", "\t")) or not line.strip():
+            continue
+        name = re.split(r"[<>=!~\[; ]", line, maxsplit=1)[0].strip()
+        if name:
+            names.add(name.lower().replace("_", "-"))
+    return names
+
+
+def test_lock_file_covers_every_declared_dependency() -> None:
+    """Bildirilen her bagimlilik kilitte olmali.
+
+    Bir bagimlilik eklenip kilit tazelenmezse CI kilitli kurulumda
+    o paketi bulamaz. Bu test, hatayi CI'a gitmeden yerelde
+    gosteriyor.
+
+    Kilit tazeleme:  make lock
+    """
+    missing = sorted(declared_dependencies() - locked_packages())
+    assert not missing, (
+        "requirements.lock guncel degil, eksik paketler: "
+        + ", ".join(missing)
+        + "\n  Cozum: make lock"
+    )
+
+
+def test_lock_file_pins_exact_versions() -> None:
+    """Kilitte aralik degil TAM surum olmali.
+
+    '>=' ile sabitlenmis bir kilit, kilit degildir: ayni commit iki
+    hafta arayla farkli surumlerle kurulur ve CI kodla ilgisi
+    olmayan bir sebeple kirilir. Bu bir kez yasandi (numpy 2.5.3).
+    """
+    loose: list[str] = []
+    for line in (REPO / "requirements.lock").read_text(encoding="utf-8").splitlines():
+        if line.startswith(("#", " ", "\t")) or not line.strip():
+            continue
+        if "==" not in line:
+            loose.append(line.strip())
+    assert not loose, "Kilitte tam surum olmayan satirlar:\n  " + "\n  ".join(loose)
