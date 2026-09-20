@@ -277,3 +277,7 @@ bütçesinden ayrılır; bilinmeyen emir riski yeni girişleri durdurur. Her tur
 bir gönderim denenir ve sonraki gönderimden önce broker durumu yeniden okunur.
 OCO grup metadata'sı henüz modellenmediğinden çoklu koruma bacakları yeni
 girişleri muhafazakâr biçimde sınırlayabilir; ayrıntılar devir notundadır.
+
+Tur başına tek gönderim nedeniyle eşzamanlı sinyaller sıraya girer: örneğin
+60 saniyelik döngüde sonraki sembol en erken sonraki turda değerlendirilir.
+Hızlı stratejilerde bu gecikme, backtest ve paper değerlendirmesinde ölçülmelidir.

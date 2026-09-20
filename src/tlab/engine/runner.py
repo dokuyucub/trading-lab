@@ -184,6 +184,13 @@ class SessionRunner:
                 phase=SessionPhase.FLATTEN if now >= flatten_at else session.phase,
             )
         result = LoopResult(now=now, phase=session.phase, market_open=market_clock.is_open)
+        if market_clock.is_open and market_clock.next_close <= now:
+            warning = (
+                f"broker kapanis saati gecmiste: {market_clock.next_close.isoformat()} "
+                f"(simdi {now.isoformat()}); guvenli kapatma uygulanacak"
+            )
+            log.warning(warning)
+            result.notes.append(warning)
 
         if not market_clock.is_open:
             result.notes.append("borsa kapali (tatil ya da seans disi)")

@@ -177,3 +177,9 @@ yapılan iş, test sonuçları, sınırlamalar ve sonraki somut görev. Kullanı
 Gerçek hesap işlemi, deploy veya finansal risk limitlerini değiştirme bu
 inceleme düzeninin otomatik parçası değildir; kullanıcı görevinin kapsamına
 göre ilerleyin. Ağsız testler gerçek broker davranışını veya kârlılığı kanıtlamaz.
+
+## 9. Ayrılmış hesap varsayımı
+
+Bu bot hesapta tek işlem süreci olarak çalışır. Kill-switch ve gün sonu kapatma
+hesap genelindeki bekleyen emirleri iptal eder; manuel veya başka stratejilerin
+emirleri de etkilenir. Aynı hesabı başka işlem süreçleriyle paylaşmayın.

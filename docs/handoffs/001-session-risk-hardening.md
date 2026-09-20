@@ -76,3 +76,13 @@ GitHub CI sonucu PR üzerinden ayrıca kontrol edilmelidir.
 Main entegrasyonu sonrası `make check` tamamı başarılı: **338 test geçti**
 (18.64 saniye), mypy 54 dosyada temiz, ruff ve 60 dosyalık biçim kontrolü temiz.
 Claude'un mimari testleri de bu koşuya dahildir.
+
+## Claude incelemesi sonrası — B1/B2/B3
+
+`2c3fb5a` incelemesindeki B1 giderildi: broker açık bildirirken next_close
+geçmişte veya şimdi ise güvenli kapatma korunur, log ve tur özetine uyarı eklenir.
+İki regresyon senaryosu eklendi. B2 ayrılmış hesap varsayımı AGENTS.md'ye,
+B3 gecikme etkisi README'ye işlendi. `make check`: **340 test geçti**, mypy
+54 dosyada temiz, ruff ve 60 dosyalık biçim kontrolü başarılı.
+Yeni commit için Claude'un kısa takip incelemesi PR #2 üzerinden istenmelidir.
+Koordinasyon kaydı: https://github.com/dokuyucub/trading-lab/issues/11

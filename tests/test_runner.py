@@ -920,3 +920,24 @@ def test_single_identified_exit_does_not_consume_new_entry_budget(
     market = FakeMarket(bars_by_symbol={"SPY": breakout_bars()})
     result = build_runner(config=config, conn=conn, broker=broker, market=market).run_once()
     assert result.submitted == 1
+
+
+@pytest.mark.parametrize("close_offset", [timedelta(hours=-3), timedelta(0)])
+def test_stale_broker_close_is_visible_and_still_flattens(
+    config: Config,
+    conn: sqlite3.Connection,
+    caplog: pytest.LogCaptureFixture,
+    close_offset: timedelta,
+) -> None:
+    broker = FakeBroker(
+        positions=[
+            Position(symbol="SPY", side=Side.BUY, qty=10, avg_entry_price=100, current_price=100)
+        ]
+    )
+    broker.clock.next_close = NOW + close_offset
+    runner = build_runner(config=config, conn=conn, broker=broker, market=FakeMarket())
+    result = runner.run_once()
+    assert result.flattened == 1
+    assert not broker.submitted
+    assert "broker kapanis saati gecmiste" in result.summary()
+    assert "broker kapanis saati gecmiste" in caplog.text
