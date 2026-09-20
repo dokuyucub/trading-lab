@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Alpaca tabanli, gozetimsiz calisan ve kendi islemlerinden ogrenen trading sistemi"
 requires-python = ">=3.12"
 dependencies = [
-    "alpaca-py>=0.42",
+    "alpaca-py>=0.44.0",
     "pydantic>=2.9",
     "pydantic-settings>=2.5",
     "pyyaml>=6.0",
