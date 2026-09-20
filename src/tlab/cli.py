@@ -17,10 +17,14 @@ from pathlib import Path
 from typing import Any
 
 from tlab import __version__
+from tlab.backtest.engine import Backtest
+from tlab.backtest.metrics import Metrics
+from tlab.backtest.sim_broker import SimFillModel
 from tlab.config import Config, Secrets, load_config, load_secrets
 from tlab.core.clock import LiveClock
 from tlab.core.types import Timeframe
 from tlab.data.cache import BarCache
+from tlab.data.cached import CachedMarketData
 from tlab.data.market import AlpacaMarketData
 from tlab.engine.runner import SessionRunner
 from tlab.errors import TradingLabError
@@ -322,6 +326,110 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_backtest(args: argparse.Namespace) -> int:
+    """Gecmis veri uzerinde stratejiyi calistirir.
+
+    Veri ONBELLEKTEN okunur; once `tlab fetch` ile indirilmis olmali.
+    Bu bilincli: backtest'in ag erisimine ihtiyaci olmamasi, ayni
+    veri uzerinde ayni sonucu tekrar tekrar alabilmek demek.
+    """
+    _setup_logging(args.verbose)
+    config, _ = _load(args.root)
+
+    if args.symbols:
+        config = config.model_copy(update={"symbols": tuple(s.upper() for s in args.symbols)})
+
+    end = datetime.now(UTC) if args.to is None else _parse_day(args.to)
+    start = end - timedelta(days=args.days) if args.since is None else _parse_day(args.since)
+
+    journal_path = args.journal or config.journal_path
+    conn = connect(journal_path)
+    apply_migrations(conn)
+
+    strategy = OpeningRangeBreakout(ORBParams())
+    market = CachedMarketData(
+        BarCache(config.cache_dir),
+        timeframe=config.data.default_timeframe,
+        synthetic_spread_bps=args.spread_bps,
+    )
+    backtest = Backtest(
+        config=config,
+        strategy=strategy,
+        market=market,
+        conn=conn,
+        starting_equity=args.equity,
+        fill_model=SimFillModel(slippage_bps=args.slippage_bps, commission_bps=args.commission_bps),
+        timeframe=config.data.default_timeframe,
+        opening_range_minutes=strategy.params.opening_range_minutes,
+        notes=args.notes,
+    )
+
+    print(f"Strateji: {strategy.params_version}")
+    print(f"Veri    : {config.cache_dir}")
+    print(
+        f"Varsayim: kayma {args.slippage_bps} bps, komisyon {args.commission_bps} bps, "
+        f"sentetik spread {args.spread_bps} bps\n"
+    )
+
+    result = backtest.run(start, end)
+    print(result.report())
+
+    if result.metrics is not None:
+        print()
+        for line in _backtest_notes(result.metrics):
+            print(line)
+
+    conn.close()
+    return 0
+
+
+MIN_MEANINGFUL_TRADES = 30
+"""Altinda sonucun tesadufle ayirt edilemedigi islem sayisi."""
+
+
+def _backtest_notes(metrics: Metrics) -> list[str]:
+    """Sonucun nasil okunmasi gerektigine dair uyarilar.
+
+    Bir backtest raporunun en tehlikeli tarafi guzel rakamlarin
+    sorgusuz kabul edilmesidir. Rakamin yanina onu nasil
+    okuyacagini da koyuyoruz.
+    """
+    if metrics.trades == 0:
+        return [
+            "Hic islem acilmadi.",
+            "  'tlab summary --run-id ...' ile veto sebeplerine bak: sistemin neden",
+            "  islem acmadigi orada yazili.",
+        ]
+
+    notes: list[str] = []
+    if metrics.is_profitable:
+        notes.append("Beklenen deger POZITIF.")
+    else:
+        notes.append("Beklenen deger NEGATIF: bu parametrelerle strateji para kaybettiriyor.")
+
+    if metrics.trades < MIN_MEANINGFUL_TRADES:
+        notes.append(
+            f"  UYARI: yalnizca {metrics.trades} islem. Bu sayida sonuc tesadufle ayirt edilemez;"
+        )
+        notes.append(f"  en az ~{MIN_MEANINGFUL_TRADES} islem olmadan bu rakama gore karar verme.")
+
+    if metrics.is_profitable:
+        notes.append("  Sonraki adim: farkli donemlerde de tutuyor mu (walk-forward).")
+
+    notes.append(
+        "  Unutma: sentetik spread ve sabit kayma varsayildi; gercek maliyetler daha yuksek olur."
+    )
+    return notes
+
+
+def _parse_day(raw: str) -> datetime:
+    try:
+        return datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=UTC)
+    except ValueError as exc:
+        msg = f"Tarih 'YYYY-MM-DD' biciminde olmali: {raw!r}"
+        raise TradingLabError(msg) from exc
+
+
 def cmd_summary(args: argparse.Namespace) -> int:
     """Bir kosunun ozetini gosterir (varsayilan: en son kosu)."""
     config, _ = _load(args.root)
@@ -440,6 +548,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="ALPACA_PAPER=false iken gercek parayla calismayi onayla",
     )
     run.set_defaults(func=cmd_run)
+
+    backtest = sub.add_parser("backtest", help="Stratejiyi gecmis veri uzerinde calistir")
+    backtest.add_argument("symbols", nargs="*", help="Semboller (bos: universe.yaml)")
+    backtest.add_argument("--days", type=int, default=30, help="Kac gun geriye (varsayilan 30)")
+    backtest.add_argument("--since", help="Baslangic tarihi (YYYY-MM-DD)")
+    backtest.add_argument("--to", help="Bitis tarihi (YYYY-MM-DD)")
+    backtest.add_argument("--equity", type=float, default=100_000.0, help="Baslangic sermayesi")
+    backtest.add_argument(
+        "--slippage-bps", type=float, default=1.0, help="Dolum basina kayma (varsayilan 1)"
+    )
+    backtest.add_argument(
+        "--commission-bps", type=float, default=0.0, help="Komisyon (Alpaca hissede 0)"
+    )
+    backtest.add_argument("--spread-bps", type=float, default=2.0, help="Sentetik spread genisligi")
+    backtest.add_argument("--journal", type=Path, help="Ayri bir journal dosyasi kullan")
+    backtest.add_argument("--notes", help="Kosuya not ekle")
+    backtest.add_argument("--verbose", action="store_true", help="Ayrintili gunluk")
+    backtest.set_defaults(func=cmd_backtest)
 
     summary = sub.add_parser("summary", help="Kosu ozetini goster")
     summary.add_argument("--run-id", help="Kosu kimligi (varsayilan: en son kosu)")
