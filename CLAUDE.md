@@ -10,3 +10,7 @@ Kısa özet:
 - Mimari değişmezler `tests/test_architecture.py` tarafından denetleniyor;
   biri kırmızıya dönerse sebebini test mesajı söyler.
 - Mimari: `README.md`. Git geri alma rehberi: `CONTRIBUTING.md`.
+
+Kullanıcı "devam et" dediğinde açık PR'ları ve ilgili `docs/handoffs/` notunu
+kontrol et. Codex teslimini bağımsız incele, bulguları PR'a kaydet. Kod düzeltmesi
+gerekiyorsa kendi dalından takip PR'ı aç; diğer ajanın dalına doğrudan push etme.

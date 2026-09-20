@@ -25,7 +25,7 @@ def open_entry_orders(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
     try:
         rows = conn.execute(
             "SELECT o.client_order_id, o.broker_order_id, o.decision_id, o.symbol,"
-            " o.side, o.stop_loss, o.take_profit, o.limit_price,"
+            " o.side, o.qty, o.stop_loss, o.take_profit, o.limit_price,"
             " d.strategy_id, d.params_version"
             " FROM orders o LEFT JOIN decisions d ON d.decision_id = o.decision_id"
         ).fetchall()

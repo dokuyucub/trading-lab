@@ -101,6 +101,11 @@ sürüme geri dönmek tek komutluk iştir. Ayrıntı için `CONTRIBUTING.md`.
 ### Planlanan
 - Faz 3: Gece analizi, walk-forward değerlendirme, shadow mode, terfi kapısı.
 
+### Düzeltildi
+- Broker açık piyasa bildirirken kapanış saati geçmişte veya şu andaysa,
+  güvenli kapatma korunur ve uyarı hem log'a hem tur özetine yazılır (PR #2 B1).
+- Ayrılmış hesap varsayımı ve tur başına tek gönderimin gecikmesi açıklandı.
+
 ## [0.3.0] - 2026-09-20
 
 Faz 2 — backtest motoru. Aynı strateji ve risk kodu geçmiş veri üzerinde

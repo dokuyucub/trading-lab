@@ -164,6 +164,10 @@ class Context:
     her turda yenisini gonderir.
     """
 
+    reserved_exposure: float = 0.0
+    reserved_symbols: frozenset[str] = frozenset()
+    unknown_order_risk: bool = False
+
     @property
     def last_bar(self) -> Bar | None:
         return self.bars[-1] if self.bars else None

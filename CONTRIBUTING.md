@@ -201,7 +201,11 @@ git push origin v0.3.0
 
 Etiket, geri dönülebilecek sabit bir noktadır. Faz bittiğinde etiketlenir.
 
-## 7. Ekip çalışması
+## 7. Ekip çalışması ve devir
 
 Birden fazla geliştirici (insan ya da ajan) varsa **`AGENTS.md`** geçerlidir:
-dal modeli, değişmezler ve devir teslim protokolü orada.
+dal modeli, değişmezler, inceleme kuralları ve koordinasyon kanalları orada.
+Claude için giriş noktası `CLAUDE.md`, yarım kalan işlerin devir notları
+`docs/handoffs/` altında.
+
+Sıra: görev → kendi dalın → test → PR → bağımsız inceleme → birleştirme.
