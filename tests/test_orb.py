@@ -66,12 +66,41 @@ def test_upward_breakout_produces_a_long_intent(strategy: OpeningRangeBreakout) 
 
     assert intent is not None
     assert intent.side is Side.BUY
-    assert intent.reference_price == pytest.approx(100.8)
+    # Giris, kirilim kapanisinin biraz otesinde (marketable limit).
+    assert intent.reference_price == pytest.approx(100.8 * 1.0005)
     # Stop, araligin karsi ucunda: kirilim gecersizse oraya donulur.
     assert intent.stop_loss == pytest.approx(OR_LOW)
     # Hedef, riskin 1,5 kati.
     assert intent.reward_risk == pytest.approx(1.5)
     assert intent.strategy_id == "orb"
+
+
+def test_entry_is_placed_beyond_the_breakout_price(strategy: OpeningRangeBreakout) -> None:
+    """Giris emri tam kirilim fiyatina konmamali.
+
+    Kirilim fiyatina konan limit emri, guclu kirilimlarda HIC
+    DOLMAZ: fiyat geri gelmez. Dolan emirler ise fiyatin geri
+    geldigi, yani kirilimin basarisiz oldugu durumlardir. Bu ters
+    secim, sistemi sistematik olarak yalnizca calismayan
+    kirilimlara sokar.
+    """
+    ctx = make_context(bars=scenario_bars(breakout_close=100.8))
+    intent = strategy.decide(ctx)
+    assert intent is not None
+    assert intent.reference_price > 100.8
+
+    # Stop ve hedef de GERCEK giris fiyatindan turetilmeli; aksi
+    # halde planlanan risk, odenecek fiyatla tutmaz.
+    assert intent.risk_per_share == pytest.approx(intent.reference_price - intent.stop_loss)
+    assert intent.reward_risk == pytest.approx(1.5)
+
+
+def test_offset_can_be_disabled() -> None:
+    """Ofset sifirlanabilir: pasif giris de gecerli bir tercih."""
+    strategy = OpeningRangeBreakout(ORBParams(entry_offset_bps=0.0))
+    intent = strategy.decide(make_context(bars=scenario_bars(breakout_close=100.8)))
+    assert intent is not None
+    assert intent.reference_price == pytest.approx(100.8)
 
 
 def test_downward_breakout_produces_a_short_intent(strategy: OpeningRangeBreakout) -> None:
@@ -201,7 +230,8 @@ def test_stop_keeps_a_minimum_distance_in_a_tight_range() -> None:
     assert without_floor.stop_loss == pytest.approx(structural_stop)
     # Taban devredeyken stop asgari mesafeye itilir (50 bps = %0,5).
     assert with_floor.stop_loss < structural_stop
-    assert with_floor.stop_loss == pytest.approx(100.02 * (1 - 0.005))
+    entry = 100.02 * 1.0005  # marketable limit ofseti
+    assert with_floor.stop_loss == pytest.approx(entry * (1 - 0.005))
     assert with_floor.risk_per_share > without_floor.risk_per_share
 
 

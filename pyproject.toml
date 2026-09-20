@@ -51,7 +51,10 @@ ignore = ["RUF001", "RUF002", "RUF003"]
 # fixture argumanlari pytest deseninin parcasi (ARG001); sahte
 # nesneler ise protokol imzasina uymak zorunda oldugu icin
 # kullanmadiklari parametreleri de tasir (ARG002).
-"tests/*" = ["ARG001", "ARG002", "S101"]
+# S311: testlerde sentetik fiyat serisi uretmek icin random
+# kullaniliyor; kriptografik bir amac yok ve tohum sabit
+# (tekrarlanabilirlik icin sart).
+"tests/*" = ["ARG001", "ARG002", "S101", "S311"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

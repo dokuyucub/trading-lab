@@ -12,6 +12,7 @@ Buradaki testler o kopuklugu derleme ve test zamaninda yakaliyor.
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 from typing import Protocol, get_type_hints
 
 from tlab.core.clock import Clock, LiveClock, SimClock
@@ -58,6 +59,26 @@ def test_alpaca_broker_satisfies_the_broker_protocol() -> None:
 def test_alpaca_market_data_satisfies_the_market_data_protocol() -> None:
     market = AlpacaMarketData("PKTEST", "secret", feed="iex")
     assert _as_market_data(market) is market
+
+
+def test_simulation_components_satisfy_the_same_protocols(tmp_path: Path) -> None:
+    """Backtest ve canli AYNI sozlesmeyi paylasmali.
+
+    Simulasyon brokeri ile canli broker ayni protokole uymazsa,
+    backtest'te olculen sey canlida calisacak olan DEGILDIR ve
+    ogrenilen her sey dogrulanamaz hale gelir.
+    """
+    from tlab.backtest.sim_broker import SimBroker
+    from tlab.data.cache import BarCache
+    from tlab.data.cached import CachedMarketData
+
+    sim = SimBroker()
+    assert _as_broker(sim) is sim
+    assert_signatures_match(Broker, SimBroker)
+
+    cached = CachedMarketData(BarCache(tmp_path))
+    assert _as_market_data(cached) is cached
+    assert_signatures_match(MarketData, CachedMarketData)
 
 
 def test_orb_satisfies_the_strategy_protocol() -> None:
