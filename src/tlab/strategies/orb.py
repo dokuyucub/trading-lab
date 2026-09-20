@@ -61,6 +61,20 @@ class ORBParams(StrategyParams):
     bir stop, piyasa gurultusuyle tetiklenir ve yuvarlandiktan sonra
     girisle cakisabilir."""
 
+    entry_offset_bps: Annotated[float, Field(ge=0, le=100)] = 5.0
+    """Giris emri kirilim fiyatinin bu kadar otesine konur.
+
+    Tam kirilim fiyatina konan bir limit emri, guclu kirilimlarda
+    HIC DOLMAZ: fiyat geri gelmez. Dolan emirler ise fiyatin geri
+    geldigi, yani kirilimin basarisiz oldugu durumlardir. Bu ters
+    secim tek basina stratejiyi oldurur - sistem sistematik olarak
+    yalnizca calismayan kirilimlara girer.
+
+    Emri fiyatin biraz otesine koymak girisi hemen dolabilir hale
+    getirir; odenen bedel bu kucuk fark, karsiliginda alinan ise
+    stratejinin asil kazandigi hareketlere girebilmek.
+    """
+
     allow_short: bool = True
 
 
@@ -122,17 +136,23 @@ class OpeningRangeBreakout:
         if rvol < params.min_rvol:
             return None
 
-        price = last.close
-        if price > or_high:
+        close = last.close
+        if close > or_high:
             side, boundary = Side.BUY, or_high
-        elif price < or_low and params.allow_short:
+        elif close < or_low and params.allow_short:
             side, boundary = Side.SELL, or_low
         else:
             return None
 
         # Kirilim sinirdan cok uzaklastiysa giris yapma.
-        if abs(price - boundary) > params.max_extension_atr * atr_value:
+        if abs(close - boundary) > params.max_extension_atr * atr_value:
             return None
+
+        # Giris fiyati, emrin dolabilmesi icin kirilimin biraz
+        # otesinde. Stop ve hedef de bu fiyattan turetiliyor ki
+        # planlanan risk, GERCEKTEN odenecek fiyata gore olsun.
+        offset = close * params.entry_offset_bps / 10_000
+        price = close + offset if side is Side.BUY else close - offset
 
         stop_loss = self._stop_for(side, price, or_high, or_low, atr_value)
         risk_per_share = abs(price - stop_loss)
@@ -155,8 +175,8 @@ class OpeningRangeBreakout:
             take_profit=take_profit,
             confidence=self._confidence(rvol),
             reason=(
-                f"acilis araligi kirilimi ({side.value}): fiyat {price:.2f}, "
-                f"aralik {or_low:.2f}-{or_high:.2f}, rvol {rvol:.2f}"
+                f"acilis araligi kirilimi ({side.value}): kapanis {close:.2f}, "
+                f"giris {price:.2f}, aralik {or_low:.2f}-{or_high:.2f}, rvol {rvol:.2f}"
             ),
             features=self._features(ctx, last, or_high, or_low, atr_value, rvol, risk_per_share),
         )
