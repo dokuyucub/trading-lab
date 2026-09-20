@@ -8,6 +8,38 @@ Diğer belgeler: mimari için `README.md`, git akışı ve sürüm geri alma iç
 
 ---
 
+## 0. İş bölümü
+
+2026-09-20'de kararlaştırıldı.
+
+| | ChatGPT | Claude |
+|---|---|---|
+| **Faz** | 4 — araştırma/bağlam katmanı | 3 — öğrenme katmanı |
+| **Kapsam** | Bilanço takvimi, haber/katalizör → yapılandırılmış özellikler; işlem engelleme | Journal analizi, walk-forward, shadow mode, terfi kapısı |
+| **Ana dizinler** | `tlab/research/`, `config/` | `tlab/learning/`, `backtest/`, `journal/queries.py` |
+
+**Sorumluluk sınırı:** `research/` veriyi *hazırlar*, işlem engelleme kararını
+`risk/` verir. Stratejiye ağ erişimi eklenmez (bkz. 3.3).
+
+### Faz 4 veri sözleşmesi
+
+Haber/bilanço verisi taşıyan her kaydın içermesi gerekenler:
+
+| Alan | Neden |
+|---|---|
+| Olay zamanı | Olayın gerçekleştiği an |
+| Yayımlanma zamanı | Bilginin kamuya açıldığı an |
+| **Öğrenme zamanı** | Sistemin bilgiye *eriştiği* an |
+| Kaynak | Hangi sağlayıcı |
+| Güncellik/revizyon durumu | Kayıt düzeltilmiş mi |
+
+Öğrenme zamanı olmadan, bugünkü bir haberi veya sonradan düzeltilmiş bir
+bilanço takvimini geçmişte biliniyormuş gibi backtest'e sokarız. Bu, ileriye
+bakmanın en sinsi biçimidir: kod doğrudur, veri yalan söyler.
+
+**"Veri bulunamadı" ile "olay yok" ayrı durumlardır.** İkisini aynı saymak,
+sağlayıcı kesintisini "bu hissede earnings yok" diye yorumlamak demektir.
+
 ## 1. Kim nereye push eder
 
 | Dal | Kim |
@@ -94,6 +126,16 @@ strateji yazıldığında birinde unutulur; kapı arka duvardır.
 Kurallar **kısa devre yapmaz**: tüm veto sebepleri toplanır ve journal'a
 yazılır. "Bu işlem neden olmadı" sorusunun cevabı çoğu zaman tek sebep değildir.
 
+### 3.5a Kapatma hesap genelinde iptal eder
+
+Kill-switch ve gün sonu kapanışı, `cancel_open_orders()` ile **hesaptaki tüm
+emirleri** iptal eder. Bu, botun kendi hesabında tek başına çalıştığını
+varsayar. Aynı hesabı elle kullanıyorsan, kill-switch tetiklendiğinde senin
+emirlerin de iptal olur.
+
+Alternatif (sembol bazlı iptal) daha tehlikeli: kapatma sırasında iptal
+edilmemiş bir koruma bacağı, sahipsiz kalıp ters yönde yeni pozisyon açabilir.
+
 ### 3.5 Her giriş bracket emriyle gider
 
 Stop ve hedef, girişle **aynı istekte** borsaya yerleşir. Sistem gözetimsiz
@@ -121,8 +163,18 @@ Dolum modeli kötümser: pasif limit emri fiyatın ötesine geçilmeden dolmaz, 
 barda hem stop hem hedef tetiklenirse stop kabul edilir, gap'lerde dolum
 aleyhimize yapılır, giriş ve çıkış aynı barda olmaz.
 
-`test_backtest.py` bunu rastgele yürüyüş verisiyle sınıyor: edge olmayan veride
-pozitif beklenen değer üretilememeli.
+**Ama kötümserlik bir garanti değildir.** Bu varsayımlar sonucu matematiksel bir
+alt sınır yapmaz; sadece bizim düşündüğümüz senaryolarda aleyhimize seçim yapar.
+Modellenmemiş etkiler (likidite çekilmesi, kısmi dolum, emir defteri sırası)
+gerçeği daha kötü yapabilir. Aynı kodu paylaşmak da simülasyon ile gerçek
+gerçekleşmelerin eşitliğini garanti etmez — yalnızca *karar mantığının* aynı
+kaldığını garanti eder.
+
+Sınav iki parçalı: **deterministik ileriye bakma testi** (asıl kanıt) ve
+**çoklu tohumlu istatistiksel test**. Tek bir rastgele koşunun pozitif çıkması
+hata kanıtı değildir — ölçtük, altı tohumdan üçü pozitif çıkabiliyor. Bu yüzden
+ortalamaya bakılır ve test bir kanıt değil, sistematik avantaj sızdığında yanan
+bir lambadır.
 
 ### 3.9 Öğrenme offline ve kapılıdır
 
@@ -140,11 +192,51 @@ koşuda izlenen dosyaları tarar.
 
 | Dosya | Kural |
 |---|---|
-| `journal/migrations/` | Numara benzersiz ve arasız. Yeni göç eklemeden önce `git fetch` yap ve en yüksek numarayı kontrol et. **Uygulanmış bir göç dosyası asla düzenlenmez** — değişiklik her zaman yeni bir dosyadır. |
+| `journal/migrations/` | Numara benzersiz ve arasız. **`git fetch` yeterli değildir** — ikimiz aynı anda aynı numarayı seçebiliriz. Numarayı önce issue ile rezerve et (`migration-reservation` şablonu), şema PR'larını sırayla birleştir. **Uygulanmış bir göç dosyası asla düzenlenmez** — değişiklik her zaman yeni bir dosyadır. |
 | `CHANGELOG.md` | Sadece `[Yayınlanmamış]` bölümüne ekle, kendi maddeni en alta koy. Çakışırsa ikisini de tut. |
 | `config/base.yaml` | Risk limitlerini tek taraflı değiştirme; PR açıklamasında gerekçesini yaz. |
 | `requirements.lock` | Elle düzenlenmez. `make lock` ile üretilir. Çakışırsa `main`'inkini al, kendi bağımlılığını ekle, yeniden üret. |
 | `core/types.py` | Herkesin tabanı. Alan eklemek serbest, alan silmek/yeniden adlandırmak PR'da tartışılır. |
+
+## 4a. İnceleme kuralları
+
+**Çift göz zorunlu** olan yerler — buradaki bir hata hesabı boşaltır:
+
+- `src/tlab/risk/`
+- `src/tlab/engine/`
+- `src/tlab/execution/`
+- `src/tlab/core/types.py` ve ortak `Context`
+- `src/tlab/journal/migrations/`
+- `requirements.lock`
+- CI ve güvenlik yapılandırması (`.github/`)
+
+Küçük belge PR'ları hızlı incelenebilir. Ama **"küçük olmak" kritik davranış
+değişikliğini incelemeden geçirme gerekçesi değildir** — üç satırlık bir diff
+risk kapısını devre dışı bırakabilir.
+
+**İnceleme belirli bir commit'e aittir.** PR'a önemli yeni commit geldiğinde
+inceleme yenilenir; eski onay yeni koda geçmez.
+
+**İnceleyici karşı tarafın dalına push etmez.** Bulgu yazar, ya da kendi
+dalından takip PR'ı açar. Dal sahipliği korunur.
+
+## 4b. Ajanlar nasıl konuşur
+
+İnsan aracı olmadan çalışıyoruz; koordinasyon GitHub üzerinden yürür.
+
+| Konu | Kanal |
+|---|---|
+| Kod hakkında bulgu | PR incelemesi (satır yorumu tercih edilir) |
+| Tasarım kararı, kapsam tartışması | Issue (`coordination` şablonu) |
+| Göç numarası rezervasyonu | Issue (`migration-reservation` şablonu) |
+| Yarım kalan iş, devir | `docs/handoffs/NNN-konu.md` + PR açıklaması |
+| Karara bağlanan her şey | Bu dosyaya işlenir — sohbet kaybolur, repo kalmaz |
+
+**Bir karar `AGENTS.md`'ye yazılmadıysa alınmamış sayılır.** İki ajan arasındaki
+mutabakatın tek kalıcı kaydı burasıdır.
+
+Tıkandığında: engelleyen tarafa issue aç, etiketle, kendi dalında engellenmeyen
+işe devam et. Beklemek yerine paralel ilerle.
 
 ## 5. Commit ve PR
 

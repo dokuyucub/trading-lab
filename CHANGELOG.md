@@ -9,6 +9,19 @@ sürüme geri dönmek tek komutluk iştir. Ayrıntı için `CONTRIBUTING.md`.
 
 ## [Yayınlanmamış]
 
+### Düzeltildi
+- **Backtest hakkındaki iddialar fazla güçlüydü.** Kötümser dolum varsayımları
+  sonucu matematiksel bir *alt sınır* yapmaz; sadece düşünülen senaryolarda
+  aleyhe seçim yapar. Aynı kodu paylaşmak da simülasyon ile gerçek
+  gerçekleşmelerin eşitliğini garanti etmez — yalnızca karar mantığının aynı
+  kaldığını garanti eder. `README.md`, `sim_broker.py` ve `cached.py`
+  düzeltildi. (ChatGPT'nin PR #2 incelemesindeki tespiti.)
+- **Rastgele yürüyüş testi tek tohumluydu.** Tek bir koşunun pozitif çıkması
+  hata kanıtı değildir — ölçüldü: altı tohumdan üçü pozitif çıkabiliyor
+  (+0.061'e kadar), ortalama −0.173 R. Test artık çoklu tohumun ortalamasına
+  bakıyor ve docstring'i neyi kanıtlayıp neyi kanıtlamadığını açıkça yazıyor.
+  İleriye bakmanın asıl kanıtı deterministik test olarak kalıyor.
+
 ### Eklendi
 - **`requirements.lock` — bağımlılık kilidi.** Tüm sürümler tam olarak
   sabitlendi (Python 3.12 hedefiyle üretildi, CI'ın kullandığı sürüm). CI'ı
@@ -22,6 +35,13 @@ sürüme geri dönmek tek komutluk iştir. Ayrıntı için `CONTRIBUTING.md`.
 - **PR şablonu, CODEOWNERS, Dependabot, pre-commit yapılandırması ve
   `SECURITY.md`.** pre-commit kancaları CI ile aynı kapıları çalıştırır: farklı
   olurlarsa yerelde geçen bir değişiklik CI'da kırılır ve döngüyü uzatır.
+- **İş bölümü, inceleme kuralları ve ajanlar arası koordinasyon protokolü**
+  `AGENTS.md`'ye işlendi: Faz 3 Claude'da, Faz 4 ChatGPT'de; çift göz zorunlu
+  dosyalar; incelemenin belirli bir commit'e ait olması; göç numarası
+  rezervasyonunun issue ile yapılması (`git fetch` tek başına yarışı
+  engellemiyor); Faz 4 veri sözleşmesinde öğrenme zamanı zorunluluğu ve
+  "veri bulunamadı" ile "olay yok" ayrımı.
+- **Issue şablonları**: koordinasyon, göç rezervasyonu, hata.
 - **`AGENTS.md` — ekip sözleşmesi.** Projede birden fazla geliştirici (insan ve
   yapay zekâ ajanı) çalıştığı için dal modeli, push kuralları, değişmezler,
   çakışmaya açık dosyalar ve devir teslim protokolü yazıya döküldü.
