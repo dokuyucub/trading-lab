@@ -76,10 +76,20 @@ make check            # ruff + ruff format + mypy + pytest
 CI aynısını çalıştırır. Kırık bir commit'in geçmişe girmesi `git bisect`'i işe
 yaramaz hale getirir — ve "eskiden çalışıyordu" sorusunun tek hızlı cevabı odur.
 
-**Bağımlılık eklediysen `make lock` çalıştır ve `requirements.lock`'u commit'e
-dahil et.** Sabitlenmemiş bir kurulum, aynı commit'in iki hafta arayla farklı
-paket sürümleriyle kurulması demek. Bu bir kez yaşandı: `numpy` 2.5.3
-yayınlandığı gün CI kodla ilgisi olmayan bir sebeple kırıldı.
+**Bağımlılık eklediysen `make lock` çalıştır ve iki kilit dosyasını da commit
+et.** Sabitlenmemiş bir kurulum, aynı commit'in iki hafta arayla farklı paket
+sürümleriyle kurulması demek. Bu bir kez yaşandı: `numpy` 2.5.3 yayınlandığı gün
+CI kodla ilgisi olmayan bir sebeple kırıldı.
+
+| Kilit | Kim kullanır |
+|---|---|
+| `requirements.lock` | Docker imajı — yalnızca çalışma zamanı |
+| `requirements-dev.lock` | CI ve yerel geliştirme |
+
+Test her iki kilidin de `pyproject.toml`'daki **sürüm şartlarını gerçekten
+karşıladığını** doğruluyor — ad karşılaştırması yetmez: `pandas>=999` yazıp
+kilitte `pandas==3.0.6` bırakmak, yalnızca adlara bakan bir kapıdan geçerdi.
+Ayrıca ortak paketlerin iki kilitte aynı sürümde olduğu da denetleniyor.
 
 Kapsama eşiği %80. Amaç oranı yükseltmek değil, gerilemeyi yakalamak: testsiz
 eklenen büyük bir modül burada göze çarpar.
@@ -195,7 +205,7 @@ koşuda izlenen dosyaları tarar.
 | `journal/migrations/` | Numara benzersiz ve arasız. **`git fetch` yeterli değildir** — ikimiz aynı anda aynı numarayı seçebiliriz. Numarayı önce issue ile rezerve et (`migration-reservation` şablonu), şema PR'larını sırayla birleştir. **Uygulanmış bir göç dosyası asla düzenlenmez** — değişiklik her zaman yeni bir dosyadır. |
 | `CHANGELOG.md` | Sadece `[Yayınlanmamış]` bölümüne ekle, kendi maddeni en alta koy. Çakışırsa ikisini de tut. |
 | `config/base.yaml` | Risk limitlerini tek taraflı değiştirme; PR açıklamasında gerekçesini yaz. |
-| `requirements.lock` | Elle düzenlenmez. `make lock` ile üretilir. Çakışırsa `main`'inkini al, kendi bağımlılığını ekle, yeniden üret. |
+| `requirements*.lock` | Elle düzenlenmez. `make lock` ile ikisi birden üretilir. Çakışırsa `main`'inkini al, kendi bağımlılığını ekle, yeniden üret. |
 | `core/types.py` | Herkesin tabanı. Alan eklemek serbest, alan silmek/yeniden adlandırmak PR'da tartışılır. |
 
 ## 4a. İnceleme kuralları

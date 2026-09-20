@@ -302,56 +302,194 @@ def test_env_file_is_ignored() -> None:
 # --------------------------------------------------------------------------
 
 
-def declared_dependencies() -> set[str]:
-    """pyproject.toml icindeki dogrudan bagimlilik adlari."""
+TARGET_ENVIRONMENT = {
+    "python_version": "3.12",
+    "python_full_version": "3.12.0",
+    "sys_platform": "linux",
+    "platform_system": "Linux",
+    "os_name": "posix",
+    "implementation_name": "cpython",
+    "platform_machine": "x86_64",
+}
+"""Kilidin uretildigi ve CI'nin kullandigi ortam.
+
+Marker'lar bu ortama gore degerlendiriliyor: yalnizca baska bir
+platformda gecerli olan bir bagimlilik, burada eksik sayilmamali.
+"""
+
+
+def canonical(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def declared_requirements(*, include_extras: bool = True) -> list[str]:
+    """pyproject.toml icindeki dogrudan bagimlilik ifadeleri (ham).
+
+    `include_extras=False` yalnizca calisma zamani bagimliliklarini
+    verir: uretim imaji gelistirme araclarini tasimamali.
+    """
     import tomllib
 
     data = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
     project = data["project"]
-    raw = list(project.get("dependencies", []))
-    for extra in project.get("optional-dependencies", {}).values():
-        raw.extend(extra)
-
-    names: set[str] = set()
-    for entry in raw:
-        name = re.split(r"[<>=!~\[; ]", entry, maxsplit=1)[0].strip()
-        if name:
-            names.add(name.lower().replace("_", "-"))
-    return names
+    entries = list(project.get("dependencies", []))
+    if include_extras:
+        for extra in project.get("optional-dependencies", {}).values():
+            entries.extend(extra)
+    return entries
 
 
-def locked_packages() -> set[str]:
-    lock = REPO / "requirements.lock"
+def declared_dependencies() -> set[str]:
+    """Dogrudan bagimlilik adlari."""
+    from packaging.requirements import Requirement
+
+    return {canonical(Requirement(entry).name) for entry in declared_requirements()}
+
+
+def locked_versions(filename: str = "requirements-dev.lock") -> dict[str, str]:
+    """Kilitteki paket adi -> tam surum."""
+    lock = REPO / filename
     if not lock.exists():
-        pytest.skip("requirements.lock yok")
-    names: set[str] = set()
+        pytest.skip(f"{filename} yok")
+
+    versions: dict[str, str] = {}
     for line in lock.read_text(encoding="utf-8").splitlines():
         if line.startswith(("#", " ", "\t")) or not line.strip():
             continue
-        name = re.split(r"[<>=!~\[; ]", line, maxsplit=1)[0].strip()
-        if name:
-            names.add(name.lower().replace("_", "-"))
-    return names
+        name, separator, version = line.partition("==")
+        if separator:
+            versions[canonical(name.strip())] = version.split(";")[0].strip()
+    return versions
 
 
-def test_lock_file_covers_every_declared_dependency() -> None:
-    """Bildirilen her bagimlilik kilitte olmali.
+def lock_violations(
+    declared: list[str], locked: dict[str, str], environment: dict[str, str]
+) -> list[str]:
+    """Kilidin bildirilen sartlari karsilamadigi noktalar.
 
-    Bir bagimlilik eklenip kilit tazelenmezse CI kilitli kurulumda
-    o paketi bulamaz. Bu test, hatayi CI'a gitmeden yerelde
-    gosteriyor.
+    Ad karsilastirmasi YETMEZ: pyproject'te `pandas>=999` yazip kilitte
+    `pandas==3.0.6` birakmak, yalnizca adlara bakan bir kapidan gecer.
+    Surum sartinin gercekten saglandigi dogrulanmali.
+
+    Fonksiyon saf tutuldu ki hem gercek dosyalarla hem de sentetik
+    girdilerle test edilebilsin - bir kapinin kendisi de test
+    edilmeden guvenilmez.
+    """
+    from packaging.requirements import Requirement
+    from packaging.version import InvalidVersion, Version
+
+    violations: list[str] = []
+    for entry in declared:
+        requirement = Requirement(entry)
+        # Bu ortamda gecerli olmayan bagimlilik (ornegin yalnizca
+        # Windows icin) kilitte aranmaz.
+        if requirement.marker is not None and not requirement.marker.evaluate(environment):
+            continue
+
+        name = canonical(requirement.name)
+        pinned = locked.get(name)
+        if pinned is None:
+            violations.append(f"{name}: kilitte yok (bildirilen: {entry})")
+            continue
+
+        try:
+            version = Version(pinned)
+        except InvalidVersion:
+            violations.append(f"{name}: kilitteki surum okunamadi ({pinned!r})")
+            continue
+
+        if not requirement.specifier.contains(version, prereleases=True):
+            violations.append(f"{name}: kilitteki {pinned} surumu '{entry}' sartini karsilamiyor")
+    return violations
+
+
+def test_dev_lock_satisfies_every_declared_constraint() -> None:
+    """Gelistirme kilidi tum bagimliliklari kapsamali (CI bunu kuruyor).
 
     Kilit tazeleme:  make lock
     """
-    missing = sorted(declared_dependencies() - locked_packages())
-    assert not missing, (
-        "requirements.lock guncel degil, eksik paketler: "
-        + ", ".join(missing)
-        + "\n  Cozum: make lock"
+    violations = lock_violations(
+        declared_requirements(), locked_versions("requirements-dev.lock"), TARGET_ENVIRONMENT
     )
+    assert not violations, "requirements-dev.lock guncel degil:\n  " + "\n  ".join(violations)
 
 
-def test_lock_file_pins_exact_versions() -> None:
+def test_runtime_lock_satisfies_runtime_constraints() -> None:
+    """Calisma zamani kilidi (Docker imaji) calisma bagimliliklarini kapsamali."""
+    violations = lock_violations(
+        declared_requirements(include_extras=False),
+        locked_versions("requirements.lock"),
+        TARGET_ENVIRONMENT,
+    )
+    assert not violations, "requirements.lock guncel degil:\n  " + "\n  ".join(violations)
+
+
+def test_runtime_lock_excludes_development_tools() -> None:
+    """Uretim imaji test ve linter araclarini tasimamali.
+
+    Yalnizca boyut meselesi degil: uretimde bulunmayan bir arac,
+    uretimde calisan bir seyi degistiremez.
+    """
+    runtime = locked_versions("requirements.lock")
+    leaked = sorted({"pytest", "mypy", "ruff", "pre-commit", "coverage"} & set(runtime))
+    assert not leaked, f"calisma zamani kilidinde gelistirme araci: {leaked}"
+
+
+def test_both_locks_agree_on_shared_packages() -> None:
+    """Ortak paketler iki kilitte ayni surumde olmali.
+
+    Ayrisirlarsa, CI'da test edilen surum ile uretimde calisan surum
+    farkli olur - kilit kullanmanin butun amaci bu farki ortadan
+    kaldirmakti.
+    """
+    runtime = locked_versions("requirements.lock")
+    development = locked_versions("requirements-dev.lock")
+    mismatched = sorted(
+        f"{name}: calisma {runtime[name]} != gelistirme {development[name]}"
+        for name in set(runtime) & set(development)
+        if runtime[name] != development[name]
+    )
+    assert not mismatched, "Kilitler ayrismis:\n  " + "\n  ".join(mismatched)
+
+
+def test_lock_gate_catches_a_missing_package() -> None:
+    violations = lock_violations(["pandas>=2.2"], {}, TARGET_ENVIRONMENT)
+    assert violations and "kilitte yok" in violations[0]
+
+
+def test_lock_gate_catches_a_version_that_does_not_satisfy() -> None:
+    """Kapinin asil sinavi: ad dogru ama surum yanlis.
+
+    Bu senaryo gercekten kacmisti - eski kapi yalnizca ad setlerini
+    karsilastirdigi icin pyproject'teki 'pandas>=999' sarti kilitteki
+    'pandas==3.0.6' ile celistigi halde gecmisti.
+    """
+    violations = lock_violations(["pandas>=999"], {"pandas": "3.0.6"}, TARGET_ENVIRONMENT)
+    assert violations and "sartini karsilamiyor" in violations[0]
+
+
+def test_lock_gate_accepts_a_satisfying_version() -> None:
+    assert lock_violations(["pandas>=2.2"], {"pandas": "3.0.6"}, TARGET_ENVIRONMENT) == []
+
+
+def test_lock_gate_normalizes_package_names() -> None:
+    """pyproject'te 'types-PyYAML', kilitte 'types-pyyaml' olabilir."""
+    assert lock_violations(["types-PyYAML"], {"types-pyyaml": "6.0.1"}, TARGET_ENVIRONMENT) == []
+
+
+def test_lock_gate_skips_dependencies_not_active_in_this_environment() -> None:
+    """Yalnizca baska platformda gecerli bir bagimlilik eksik sayilmamali."""
+    assert lock_violations(['colorama; sys_platform == "win32"'], {}, TARGET_ENVIRONMENT) == []
+    assert lock_violations(['tomli; python_version < "3.11"'], {}, TARGET_ENVIRONMENT) == []
+
+
+def test_lock_gate_reports_an_unreadable_pin() -> None:
+    violations = lock_violations(["pandas>=2.2"], {"pandas": "bozuk"}, TARGET_ENVIRONMENT)
+    assert violations and "okunamadi" in violations[0]
+
+
+@pytest.mark.parametrize("filename", ["requirements.lock", "requirements-dev.lock"])
+def test_lock_file_pins_exact_versions(filename: str) -> None:
     """Kilitte aralik degil TAM surum olmali.
 
     '>=' ile sabitlenmis bir kilit, kilit degildir: ayni commit iki
@@ -359,9 +497,9 @@ def test_lock_file_pins_exact_versions() -> None:
     olmayan bir sebeple kirilir. Bu bir kez yasandi (numpy 2.5.3).
     """
     loose: list[str] = []
-    for line in (REPO / "requirements.lock").read_text(encoding="utf-8").splitlines():
+    for line in (REPO / filename).read_text(encoding="utf-8").splitlines():
         if line.startswith(("#", " ", "\t")) or not line.strip():
             continue
         if "==" not in line:
             loose.append(line.strip())
-    assert not loose, "Kilitte tam surum olmayan satirlar:\n  " + "\n  ".join(loose)
+    assert not loose, f"{filename} icinde tam surum olmayan satirlar:\n  " + "\n  ".join(loose)

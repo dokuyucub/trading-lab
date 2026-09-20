@@ -10,6 +10,26 @@ sürüme geri dönmek tek komutluk iştir. Ayrıntı için `CONTRIBUTING.md`.
 ## [Yayınlanmamış]
 
 ### Düzeltildi
+- **CI kurulum komutu geçersizdi.** `pip install --require-hashes=false` — bu
+  bayrak değer almıyor; `quality` işi testlere ulaşmadan duruyordu. Bayrak
+  zaten gereksizdi: kilit dosyasında hash yoksa pip hash istemiyor.
+  (ChatGPT'nin PR #3 incelemesindeki P1 bulgusu.)
+- **Kilit/pyproject uyum kapısı sürüm şartını doğrulamıyordu.** Yalnızca ad
+  setlerini karşılaştırıyordu; `pandas>=999` yazıp kilitte `pandas==3.0.6`
+  bırakmak kapıdan geçiyordu. Artık `packaging` ile sürüm şartı ve ortam
+  marker'ları değerlendiriliyor, negatif testlerle sınanıyor. (P2 bulgusu.)
+- **Docker imajı kilitsiz kuruyordu** — CI'da test edilen sürümlerle üretimde
+  çalışan sürümler ayrışabilirdi. Artık iki kilit var: `requirements.lock`
+  (çalışma zamanı, 23 paket) ve `requirements-dev.lock` (CI ve geliştirme,
+  46 paket). Ortak paketlerin aynı sürümde olduğu test ediliyor.
+- **`make check` kapsama eşiğini ölçmüyordu** ama CI ölçüyordu — "aynı kapı"
+  iddiası yanlıştı. Artık gerçekten aynı.
+- **Makefile araçları PATH'ten çağırıyordu.** Makinede eski bir global `mypy`
+  varsa o bulunuyor ve kilitteki sürümden farklı sonuç veriyordu (sandbox'ta
+  1.19.1 vs 2.3.1). Araçlar artık projenin yorumlayıcısından çağrılıyor.
+- **Canary koşusu yalnızca pytest çalıştırıyordu** — oysa onu doğuran kırılma
+  bir *tip denetimi* kırılmasıydı (numpy stub'ları). Artık ruff ve mypy de
+  çalışıyor.
 - **Backtest hakkındaki iddialar fazla güçlüydü.** Kötümser dolum varsayımları
   sonucu matematiksel bir *alt sınır* yapmaz; sadece düşünülen senaryolarda
   aleyhe seçim yapar. Aynı kodu paylaşmak da simülasyon ile gerçek

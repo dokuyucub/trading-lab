@@ -1,45 +1,56 @@
+# Araclar PATH'ten degil, PROJENIN YORUMLAYICISINDAN cagriliyor.
+# Sebep somut: makinede eski bir global mypy varsa, `mypy` komutu onu
+# bulur ve kilitteki surumden farkli sonuc verir. "Bende calisiyordu"
+# hikayelerinin buyuk kismi bu farktan cikiyor.
+PY ?= python3
+
 .PHONY: install install-locked lock test cov lint fmt typecheck check hooks doctor clean
 
 # Gelistirme kurulumu (guncel surumler)
 install:
-	pip install -e ".[dev]"
+	$(PY) -m pip install -e ".[dev]"
 
 # CI ile AYNI surumler. "Bende calisiyordu" durumunu ortadan kaldirir.
 install-locked:
-	pip install -r requirements.lock
-	pip install --no-deps -e .
+	$(PY) -m pip install -r requirements-dev.lock
+	$(PY) -m pip install --no-deps -e .
 
-# Bagimlilik degistiyse kilidi tazele ve commit et.
+# Iki kilit: calisma zamani (Docker imaji) ve gelistirme (CI, yerel).
+# Bagimlilik degistiyse ikisini de tazele ve commit et.
 lock:
-	uv pip compile pyproject.toml --extra dev --python-version 3.12 \
+	$(PY) -m uv pip compile pyproject.toml --python-version 3.12 \
 		--output-file requirements.lock
+	$(PY) -m uv pip compile pyproject.toml --extra dev --python-version 3.12 \
+		--output-file requirements-dev.lock
 
 test:
-	pytest
+	$(PY) -m pytest
 
 cov:
-	pytest --cov=tlab --cov-report=term-missing:skip-covered
+	$(PY) -m pytest --cov=tlab --cov-report=term-missing:skip-covered
 
 lint:
-	ruff check .
-	ruff format --check .
+	$(PY) -m ruff check .
+	$(PY) -m ruff format --check .
 
 fmt:
-	ruff check --fix .
-	ruff format .
+	$(PY) -m ruff check --fix .
+	$(PY) -m ruff format .
 
 typecheck:
-	mypy
+	$(PY) -m mypy
 
-# Push etmeden once calistirilacak tek komut. CI'nin yaptiginin aynisi.
-check: lint typecheck test
+# Push etmeden once calistirilacak tek komut. CI'nin yaptiginin aynisi -
+# kapsama esigi dahil, cunku "ayni kapi" demek ancak gercekten ayniysa
+# bir sey ifade eder.
+check: lint typecheck cov
 
 # Yerel kapilari git kancasi olarak kur.
 hooks:
-	pre-commit install
+	$(PY) -m pre-commit install
 
 doctor:
-	tlab doctor
+	$(PY) -m tlab.cli doctor
 
 clean:
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +
