@@ -268,3 +268,16 @@ sayılmalı — özellikle "ufak marj" kovalayan stratejilerde.
 Paper trading emirleri gerçekte olacağından daha iyi doldurur; paper sonuçları
 canlıya 1:1 taşınmaz. Bu sistemin ilk hedefi para kazanmak değil, **dürüst
 ölçmektir**. Kârlılık, test edilecek bir hipotezdir — verilmiş bir sonuç değil.
+
+## Ortak geliştirme ve devir
+
+Codex/Claude çalışma kuralları `AGENTS.md`, devir notları `docs/handoffs/`
+altındadır. Bekleyen girişlerin miktarı ve nominal değeri artık portföy
+bütçesinden ayrılır; bilinmeyen emir riski yeni girişleri durdurur. Her turda
+bir gönderim denenir ve sonraki gönderimden önce broker durumu yeniden okunur.
+OCO grup metadata'sı henüz modellenmediğinden çoklu koruma bacakları yeni
+girişleri muhafazakâr biçimde sınırlayabilir; ayrıntılar devir notundadır.
+
+Tur başına tek gönderim nedeniyle eşzamanlı sinyaller sıraya girer: örneğin
+60 saniyelik döngüde sonraki sembol en erken sonraki turda değerlendirilir.
+Hızlı stratejilerde bu gecikme, backtest ve paper değerlendirmesinde ölçülmelidir.

@@ -182,3 +182,14 @@ make check    # ruff + mypy --strict + pytest
 
 CI zaten çalıştıracak, ama kırık commit'in geçmişe girmesini engellemek senin
 elinde. Temiz bir geçmiş, `bisect`'in işe yaraması demektir.
+
+## 6. Asistanlar arası devir
+
+Ortak kurallar `AGENTS.md`, Claude giriş noktası `CLAUDE.md`, teslim notları
+`docs/handoffs/` altındadır. Görev → dal → test → PR → bağımsız inceleme
+sırasını izleyin.
+
+Entegrasyon notu (2026-09-20): bu iş sırasında `main` oluşturuldu ve Claude'un
+mimari testleri/ekip sözleşmesi bu dala alındı (`abade7f`). Düzeltme PR'ının
+hedefi `main` olarak güncellendi. Dal sahipliği ve inceleme kuralları için
+`AGENTS.md` esas alınır. GitHub branch protection ayarları bu işte değiştirilmedi.

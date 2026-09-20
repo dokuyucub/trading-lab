@@ -371,7 +371,7 @@ def test_flatten_window_closes_positions(config: Config, conn: sqlite3.Connectio
     assert broker.closed == ["SPY"]
     # Emirler pozisyondan ONCE iptal edilmeli: sahipsiz kalan bir
     # bracket bacagi ters yonde yeni pozisyon acabilir.
-    assert broker.cancelled == ["SPY"]
+    assert broker.cancelled == [None]
     assert broker.submitted == []
 
 
@@ -569,6 +569,7 @@ def test_halt_lifts_on_the_next_trading_day(config: Config, conn: sqlite3.Connec
     build_runner(config=config, conn=conn, broker=broker, market=market).run_once()
 
     next_day = NOW + timedelta(days=1)
+    broker.clock.next_close += timedelta(days=1)
     broker.account = make_account()
     broker.positions = []
     tomorrow = build_runner(
@@ -700,3 +701,243 @@ def test_fills_are_written_to_the_audit_trail(config: Config, conn: sqlite3.Conn
     assert row is not None
     assert row["symbol"] == "SPY"
     assert row["price"] == pytest.approx(100.8)
+
+
+@pytest.mark.parametrize("restart", [False, True])
+def test_failed_halt_close_is_retried(
+    config: Config, conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, restart: bool
+) -> None:
+    position = Position(symbol="SPY", side=Side.BUY, qty=10, avg_entry_price=100, current_price=95)
+    broker = FakeBroker(
+        account=make_account(equity=97000, last_equity=100000), positions=[position]
+    )
+    runner = build_runner(config=config, conn=conn, broker=broker, market=FakeMarket())
+    close = broker.close_position
+
+    def fail_close(symbol: str) -> OrderRef | None:
+        raise BrokerError("temporary close failure")
+
+    monkeypatch.setattr(broker, "close_position", fail_close)
+    assert runner.run_once().halted
+    assert broker.positions
+    monkeypatch.setattr(broker, "close_position", close)
+    if restart:
+        runner = build_runner(config=config, conn=conn, broker=broker, market=FakeMarket())
+    assert runner.run_once().flattened == 1
+    assert not broker.positions
+
+
+@pytest.mark.parametrize("halt", [False, True])
+def test_shutdown_cancels_entries_without_positions(
+    config: Config, conn: sqlite3.Connection, halt: bool
+) -> None:
+    broker = FakeBroker(account=make_account(equity=97000 if halt else 100000, last_equity=100000))
+    broker.open_orders.append(
+        OrderRef(
+            broker_order_id="pending",
+            client_order_id="manual",
+            symbol="AAPL",
+            submitted_at=NOW,
+            status="new",
+        )
+    )
+    now = NOW if halt else SESSION_OPEN + timedelta(minutes=385)
+    runner = build_runner(config=config, conn=conn, broker=broker, market=FakeMarket(), now=now)
+    runner.run_once()
+    assert broker.cancelled == [None]
+    assert not broker.open_orders
+
+
+def test_early_close_uses_broker_calendar(config: Config, conn: sqlite3.Connection) -> None:
+    broker = FakeBroker(
+        positions=[
+            Position(symbol="SPY", side=Side.BUY, qty=10, avg_entry_price=100, current_price=100)
+        ]
+    )
+    broker.clock.next_close = SESSION_OPEN + timedelta(hours=3, minutes=30)
+    runner = build_runner(
+        config=config,
+        conn=conn,
+        broker=broker,
+        market=FakeMarket(),
+        now=broker.clock.next_close - timedelta(minutes=5),
+    )
+    assert runner.run_once().flattened == 1
+    assert not broker.positions
+
+
+def test_shutdown_waits_for_cancel_confirmation(
+    config: Config, conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    broker = FakeBroker(
+        account=make_account(equity=97000, last_equity=100000),
+        positions=[
+            Position(symbol="SPY", side=Side.BUY, qty=10, avg_entry_price=100, current_price=95)
+        ],
+    )
+    broker.open_orders.append(
+        OrderRef(
+            broker_order_id="stop",
+            client_order_id="stop",
+            symbol="SPY",
+            submitted_at=NOW,
+            status="pending_cancel",
+        )
+    )
+    cancel = broker.cancel_open_orders
+    monkeypatch.setattr(broker, "cancel_open_orders", lambda _symbol=None: 0)
+    runner = build_runner(config=config, conn=conn, broker=broker, market=FakeMarket())
+    assert runner.run_once().flattened == 0
+    assert not broker.closed
+    monkeypatch.setattr(broker, "cancel_open_orders", cancel)
+    assert runner.run_once().flattened == 1
+
+
+def test_shutdown_refreshes_positions_after_cancel(
+    config: Config, conn: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    broker = FakeBroker(account=make_account(equity=97000, last_equity=100000))
+    cancel = broker.cancel_open_orders
+
+    def fill_during_cancel(symbol: str | None = None) -> int:
+        broker.positions.append(
+            Position(symbol="AAPL", side=Side.BUY, qty=10, avg_entry_price=100, current_price=100)
+        )
+        return cancel(symbol)
+
+    monkeypatch.setattr(broker, "cancel_open_orders", fill_during_cancel)
+    runner = build_runner(config=config, conn=conn, broker=broker, market=FakeMarket())
+    assert runner.run_once().flattened == 1
+    assert not broker.positions
+
+
+def pending_ref(symbol: str, qty: float | None, price: float | None) -> OrderRef:
+    return OrderRef(
+        broker_order_id=f"pending-{symbol}",
+        client_order_id=f"pending-{symbol}",
+        symbol=symbol,
+        submitted_at=NOW,
+        status="new",
+        side=Side.BUY,
+        remaining_qty=qty,
+        limit_price=price,
+    )
+
+
+@pytest.mark.parametrize("qty,price", [(500, 100), (None, None)])
+def test_pending_exposure_blocks_other_symbol(
+    config: Config, conn: sqlite3.Connection, qty: float | None, price: float | None
+) -> None:
+    broker = FakeBroker(open_orders=[pending_ref("AAPL", qty, price)])
+    market = FakeMarket(bars_by_symbol={"SPY": breakout_bars()})
+    result = build_runner(config=config, conn=conn, broker=broker, market=market).run_once()
+    assert result.vetoed == 1
+    assert not broker.submitted
+
+
+def test_pending_exposure_reduces_next_order_size(config: Config, conn: sqlite3.Connection) -> None:
+    broker = FakeBroker(open_orders=[pending_ref("AAPL", 490, 100)])
+    market = FakeMarket(bars_by_symbol={"SPY": breakout_bars()})
+    runner = build_runner(config=config, conn=conn, broker=broker, market=market)
+    assert runner.run_once().submitted == 1
+    order = broker.submitted[0]
+    assert 49000 + order.qty * (order.limit_price or 0) <= 50000
+
+
+def test_pending_entries_consume_position_slots(config: Config, conn: sqlite3.Connection) -> None:
+    broker = FakeBroker(open_orders=[pending_ref(s, 1, 100) for s in ("AAPL", "MSFT", "QQQ")])
+    market = FakeMarket(bars_by_symbol={"SPY": breakout_bars()})
+    result = build_runner(config=config, conn=conn, broker=broker, market=market).run_once()
+    assert result.vetoed == 1
+    assert not broker.submitted
+
+
+@pytest.mark.parametrize("fail_submit", [False, True])
+def test_one_submission_attempt_per_snapshot(
+    config: Config, conn: sqlite3.Connection, fail_submit: bool
+) -> None:
+    config = config.model_copy(update={"symbols": ("SPY", "AAPL")})
+    broker = FakeBroker(fail_submit=fail_submit)
+    market = FakeMarket(bars_by_symbol={s: breakout_bars(s) for s in config.symbols})
+    runner = build_runner(config=config, conn=conn, broker=broker, market=market)
+    result = runner.run_once()
+    assert result.intents == 1
+    assert conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 1
+
+
+def test_pending_journal_fallback_reserves_full_order(
+    config: Config, conn: sqlite3.Connection
+) -> None:
+    config = config.model_copy(update={"symbols": ("SPY", "AAPL")})
+    broker = FakeBroker()
+    market = FakeMarket(bars_by_symbol={s: breakout_bars(s) for s in config.symbols})
+    runner = build_runner(config=config, conn=conn, broker=broker, market=market)
+    runner.run_once()
+    first = broker.submitted[0]
+    runner.run_once()
+    assert len(broker.submitted) == 2
+    second = broker.submitted[1]
+    assert first.qty * (first.limit_price or 0) + second.qty * (second.limit_price or 0) <= 50000
+
+
+def test_dry_run_shutdown_does_not_touch_broker(config: Config, conn: sqlite3.Connection) -> None:
+    broker = FakeBroker(
+        account=make_account(equity=97000, last_equity=100000),
+        open_orders=[pending_ref("AAPL", 1, 100)],
+    )
+    runner = build_runner(
+        config=config, conn=conn, broker=broker, market=FakeMarket(), dry_run=True
+    )
+    assert runner.run_once().halted
+    assert not broker.cancelled
+    assert not broker.closed
+    assert broker.open_orders
+
+
+def test_multiple_exit_orders_cannot_each_spend_same_position(
+    config: Config, conn: sqlite3.Connection
+) -> None:
+    position = Position(
+        symbol="AAPL", side=Side.BUY, qty=10, avg_entry_price=100, current_price=100
+    )
+    first = pending_ref("AAPL", 10, None).model_copy(update={"side": Side.SELL})
+    second = first.model_copy(update={"broker_order_id": "other", "client_order_id": "other"})
+    broker = FakeBroker(positions=[position], open_orders=[first, second])
+    market = FakeMarket(bars_by_symbol={"SPY": breakout_bars()})
+    result = build_runner(config=config, conn=conn, broker=broker, market=market).run_once()
+    assert result.vetoed == 1
+    assert not broker.submitted
+
+
+def test_single_identified_exit_does_not_consume_new_entry_budget(
+    config: Config, conn: sqlite3.Connection
+) -> None:
+    position = Position(
+        symbol="AAPL", side=Side.BUY, qty=10, avg_entry_price=100, current_price=100
+    )
+    stop = pending_ref("AAPL", 10, None).model_copy(update={"side": Side.SELL})
+    broker = FakeBroker(positions=[position], open_orders=[stop])
+    market = FakeMarket(bars_by_symbol={"SPY": breakout_bars()})
+    result = build_runner(config=config, conn=conn, broker=broker, market=market).run_once()
+    assert result.submitted == 1
+
+
+@pytest.mark.parametrize("close_offset", [timedelta(hours=-3), timedelta(0)])
+def test_stale_broker_close_is_visible_and_still_flattens(
+    config: Config,
+    conn: sqlite3.Connection,
+    caplog: pytest.LogCaptureFixture,
+    close_offset: timedelta,
+) -> None:
+    broker = FakeBroker(
+        positions=[
+            Position(symbol="SPY", side=Side.BUY, qty=10, avg_entry_price=100, current_price=100)
+        ]
+    )
+    broker.clock.next_close = NOW + close_offset
+    runner = build_runner(config=config, conn=conn, broker=broker, market=FakeMarket())
+    result = runner.run_once()
+    assert result.flattened == 1
+    assert not broker.submitted
+    assert "broker kapanis saati gecmiste" in result.summary()
+    assert "broker kapanis saati gecmiste" in caplog.text

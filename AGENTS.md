@@ -160,3 +160,26 @@ yerel bir sahte sunucuya karşı çalıştırıyor — yani Alpaca'nın kapısı
 her şey doğrulandı, Alpaca'nın kendi davranışı doğrulanmadı.
 
 İlk gerçek bağlantıyı kuran kişi `tlab doctor` çıktısını bu dosyaya not düşsün.
+
+## 8. İnceleme ve kalıcı devir notları
+
+Her görevin issue'sunda kapsam ve kabul şartları, PR'ında doğrulama kanıtı ve
+bilinen sınırlar bulunur. Geliştirici ve bağımsız inceleyici rollerini Codex ve
+Claude dönüşümlü üstlenebilir. İnceleyici önceki asistanın beyanını kanıt saymaz;
+diff'i ve hata senaryolarını kontrol eder. Bulgular PR'a yazılır; geliştirici
+kendi dalında düzeltir. İnceleyicinin kod yazması gerekiyorsa kendi dalından
+ilgili PR dalına küçük bir takip PR'ı açar; dal sahipliği kuralı korunur.
+
+Teslim notları `docs/handoffs/` altındadır: başlangıç commit'i, issue/PR,
+yapılan iş, test sonuçları, sınırlamalar ve sonraki somut görev. Kullanıcı
+"devam et" dediğinde açık PR ve ilgili devir notundan başlayın.
+
+Gerçek hesap işlemi, deploy veya finansal risk limitlerini değiştirme bu
+inceleme düzeninin otomatik parçası değildir; kullanıcı görevinin kapsamına
+göre ilerleyin. Ağsız testler gerçek broker davranışını veya kârlılığı kanıtlamaz.
+
+## 9. Ayrılmış hesap varsayımı
+
+Bu bot hesapta tek işlem süreci olarak çalışır. Kill-switch ve gün sonu kapatma
+hesap genelindeki bekleyen emirleri iptal eder; manuel veya başka stratejilerin
+emirleri de etkilenir. Aynı hesabı başka işlem süreçleriyle paylaşmayın.

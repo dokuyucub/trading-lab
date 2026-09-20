@@ -228,7 +228,18 @@ class AlpacaBroker:
             raise BrokerError(msg)
 
         status = sdk_field(raw, "status", "unknown")
+        side_raw = sdk_field(raw, "side")
+        side_value = str(getattr(side_raw, "value", side_raw)).lower()
+        qty_raw = sdk_field(raw, "qty")
+        price = sdk_float(raw, "limit_price")
         return OrderRef(
+            side=Side(side_value) if side_value in ("buy", "sell") else None,
+            remaining_qty=(
+                max(0.0, sdk_float(raw, "qty") - sdk_float(raw, "filled_qty"))
+                if qty_raw is not None
+                else None
+            ),
+            limit_price=price if price > 0 else None,
             broker_order_id=str(sdk_field(raw, "id", "")),
             client_order_id=str(sdk_field(raw, "client_order_id", "")),
             symbol=str(sdk_field(raw, "symbol", "")),
