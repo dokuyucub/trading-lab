@@ -9,6 +9,29 @@ sürüme geri dönmek tek komutluk iştir. Ayrıntı için `CONTRIBUTING.md`.
 
 ## [Yayınlanmamış]
 
+### Düzeltildi
+- **Bar verisi çekme hiç çalışmıyordu.** `TimeFrameUnit("Minute")` geçersiz —
+  enum'un *adı* `Minute`, *değeri* `Min` ve enum değerle kuruluyor. Yani
+  `tlab fetch` ve canlı veri akışı ilk çağrıda patlardı. 272 testin hiçbiri
+  yakalamamıştı: hepsi çevrimdışıydı ve sahte nesneler bizim *varsaydığımız*
+  şekli döndürüyordu.
+
+### Eklendi
+- **Alpaca sözleşme testleri** (`tests/test_alpaca_contract.py`): gerçek
+  alpaca-py istemcisi, Alpaca'nın yanıt şekillerini taklit eden yerel bir
+  sunucuya karşı çalıştırılıyor. Ağ erişimi yok; doğrulanan şey bizim
+  kodumuzun HTTP yüzeyi — istek kurulumu (özellikle bracket emrinin JSON
+  gövdesi), yanıt ayrıştırması ve hata sarmalama.
+- **Uçtan uca canlı yol testi**: grafik okumadan emir gövdesine kadar tüm
+  zincir gerçek istemciyle koşuyor. Risk kapısının gerçek zincirde de emri
+  engellediği ayrıca doğrulanıyor.
+- **CLI testleri**: `doctor`, `account` ve `fetch` komutları sahte sunucuya
+  karşı çalıştırılıyor. Birim testleri modülleri ayrı ayrı doğruluyor ama
+  komutun onları doğru bağlayıp bağlamadığını görmüyordu.
+- `ALPACA_BASE_URL` ile Alpaca adresi değiştirilebiliyor (sandbox, vekil
+  sunucu veya yerel sahte sunucu için).
+- Her `Timeframe` değerinin gerçek SDK tipine çevrilebildiğini doğrulayan test.
+
 ### Planlanan
 - Faz 3: Gece analizi, walk-forward değerlendirme, shadow mode, terfi kapısı.
 

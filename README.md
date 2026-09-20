@@ -190,8 +190,17 @@ ruff check . && ruff format --check .
 mypy --strict src/tlab
 ```
 
-Testlerin tamamının çevrimdışı çalışabilmesi tesadüf değil: katmanlar doğru
-ayrıldığında çekirdek mantık brokera bağlanmadan doğrulanabilir.
+Testlerin tamamı çevrimdışı çalışır, ama hepsi aynı derinlikte değil:
+
+- **Birim testleri** modülleri ayrı ayrı doğrular (çoğunluk).
+- **Soak testi** tam bir seansı dakika dakika işletip değişmezleri doğrular.
+- **Sözleşme testleri** gerçek alpaca-py istemcisini, Alpaca'nın yanıt
+  şekillerini taklit eden yerel bir sunucuya karşı çalıştırır.
+
+Son grup olmadan bir boşluk kalıyor: sahte nesneler bizim *varsaydığımız* şekli
+döndürür ve gerçek istemcinin serileştirmesini atlar. Bir `Timeframe` çevrim
+hatası tam bu boşluktan kaçmıştı — `tlab fetch` hiç çalışmıyordu ve 272 testin
+hepsi yeşildi.
 
 ## Backtest
 
