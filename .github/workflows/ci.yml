@@ -1,16 +1,28 @@
 name: CI
 
-# Her push ve her PR'da calisir. Amaci tek: "eskiden calisiyordu, artik
-# calismiyor" durumunun main'e hic ulasmamasi. Kirilma an olarak,
-# kiran commit belliyken yakalanir.
+# Amac tek: "eskiden calisiyordu, artik calismiyor" durumunun main'e
+# hic ulasmamasi. Kirilma, kiran commit belliyken yakalanmali.
 
 on:
   push:
     branches: ["**"]
   pull_request:
+  schedule:
+    # Haftalik "kanarya" kosusu: bagimliliklar SABITLENMEDEN kurulur.
+    # Boylece ust akistaki bir kirilma, rastgele bir PR'i kirmadan
+    # once bizim sectigimiz bir anda ortaya cikar.
+    - cron: "0 6 * * 1"
+
+# Ayni dala arka arkaya push gelirse eski kosu iptal edilir:
+# bekleyen kuyruk, geri bildirimi geciktirmenin en sik sebebi.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   quality:
+    name: quality
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
 
     steps:
@@ -19,14 +31,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           # Tek surum, Docker imajiyla ayni: uretimde calisacak olan
-          # neyse CI'da denetlenen de o. Iki surum desteklemek, ikisinin
-          # bagimlilik cozumlemesi ayristiginda CI'yi kodla ilgisi
-          # olmayan sebeplerle kirar.
+          # neyse CI'da denetlenen de o.
           python-version: "3.12"
           cache: pip
 
-      - name: Bagimliliklari kur
-        run: pip install -e ".[dev]"
+      - name: Kilitli bagimliliklari kur
+        # requirements.lock tam surumleri sabitliyor. Sabitlenmemis
+        # bir kurulum, ayni commit'in iki hafta arayla farkli paket
+        # surumleriyle kurulmasi demek - CI bir gun kodla ilgisi
+        # olmayan bir sebeple kirilir.
+        run: |
+          pip install --require-hashes=false -r requirements.lock
+          pip install --no-deps -e .
 
       - name: Linter
         run: ruff check --output-format=github .
@@ -38,4 +54,27 @@ jobs:
         run: mypy
 
       - name: Testler
+        run: pytest --cov=tlab --cov-report=term-missing:skip-covered
+
+  canary:
+    name: canary (guncel bagimliliklar)
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Guncel bagimliliklari kur (kilitsiz)
+        run: pip install -e ".[dev]"
+
+      - name: Testler
         run: pytest -q
+
+      - name: Kilidi tazele ve farki goster
+        if: always()
+        run: pip list --format=freeze | head -50

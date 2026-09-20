@@ -1,0 +1,44 @@
+# Yerel kapilar CI ile AYNI olmali: farkli olurlarsa, yerelde gecen
+# bir degisiklik CI'da kirilir ve donguyu uzatir.
+#
+# Kurulum:  pre-commit install
+# Elle kos: pre-commit run --all-files
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.8
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-toml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: detect-private-key
+      # Buyuk dosya = muhtemelen repoya girmemesi gereken veri.
+      - id: check-added-large-files
+        args: [--maxkb=512]
+
+  - repo: local
+    hooks:
+      # mypy ve pytest yerel ortamda calisir: pre-commit'in kendi
+      # izole ortami projenin bagimliliklarini gormez.
+      - id: mypy
+        name: mypy
+        entry: mypy
+        language: system
+        pass_filenames: false
+        types: [python]
+
+      - id: pytest
+        name: pytest
+        entry: pytest -q
+        language: system
+        pass_filenames: false
+        types: [python]

@@ -1,0 +1,26 @@
+version: 2
+
+updates:
+  # Python bagimliliklari. Kilit dosyasi guncellendigi icin
+  # guncellemeler CI'dan gecmeden birlesmez.
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      # Arac zinciri ayri gruplanıyor: ruff/mypy guncellemeleri
+      # genelde kod degisikligi gerektirir, kutuphane
+      # guncellemeleri gerektirmez.
+      toolchain:
+        patterns: ["ruff", "mypy", "pytest*", "types-*"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "ci(deps)"

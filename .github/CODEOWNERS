@@ -1,0 +1,14 @@
+# Varsayilan sahip: depo sahibi.
+* @dokuyucub
+
+# Sistemin en kritik katmanlari. Buralardaki her degisiklik
+# bilincli bir inceleme gerektirir - stratejinin hatasi kotu bir
+# islem acar, bu dosyalarin hatasi hesabi bosaltir.
+/src/tlab/risk/                     @dokuyucub
+/src/tlab/engine/                   @dokuyucub
+/src/tlab/execution/                @dokuyucub
+/src/tlab/journal/migrations/       @dokuyucub
+
+# Ekip kurallari ve mimari degismezler.
+/AGENTS.md                          @dokuyucub
+/tests/test_architecture.py         @dokuyucub
