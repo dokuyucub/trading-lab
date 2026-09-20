@@ -9,6 +9,20 @@ sürüme geri dönmek tek komutluk iştir. Ayrıntı için `CONTRIBUTING.md`.
 
 ## [Yayınlanmamış]
 
+### Eklendi
+- **`AGENTS.md` — ekip sözleşmesi.** Projede birden fazla geliştirici (insan ve
+  yapay zekâ ajanı) çalıştığı için dal modeli, push kuralları, değişmezler,
+  çakışmaya açık dosyalar ve devir teslim protokolü yazıya döküldü.
+  `CLAUDE.md` buraya yönlendiriyor.
+- **`tests/test_architecture.py` — mimari değişmezleri denetleyen testler.**
+  Yazılı bir kural, onu okumayan birine hiçbir şey yapmaz; çalıştırılabilir
+  bir kural herkese aynı şeyi söyler ve CI'da durur. Denetlenenler: karar
+  yolunda duvar saati çağrısı olmaması, katman bağımlılık yönü, iş
+  katmanlarında satıcı SDK'sı bulunmaması, göç numaralarının benzersiz ve
+  arasız olması, uygulanmış göç dosyalarının düzenlenmemesi ve izlenen hiçbir
+  dosyada API anahtarı bulunmaması. Kontroller metin araması değil AST
+  üzerinden yapılıyor; dördü de kasıtlı ihlallerle sınandı.
+
 ### Düzeltildi
 - **Bar verisi çekme hiç çalışmıyordu.** `TimeFrameUnit("Minute")` geçersiz —
   enum'un *adı* `Minute`, *değeri* `Min` ve enum değerle kuruluyor. Yani

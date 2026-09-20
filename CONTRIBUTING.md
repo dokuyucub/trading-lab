@@ -189,8 +189,7 @@ Ortak kurallar `AGENTS.md`, Claude giriş noktası `CLAUDE.md`, teslim notları
 `docs/handoffs/` altındadır. Görev → dal → test → PR → bağımsız inceleme
 sırasını izleyin.
 
-Geçiş notu (2026-09-20): depoda henüz `main` yok; mevcut varsayılan dal
-`claude/alpaca-trading-bot-design-t7zhp0`. Yukarıdaki ana dal kuralları geçiş
-süresince bu dala uygulanır. Yeni PR'lar güncel varsayılan dala hedeflenir.
-`main` oluşturma/varsayılan dal değişimi ayrı bir repo bakım görevidir;
-bu düzeltmeyle mevcut dal adı veya GitHub koruma ayarları değiştirilmez.
+Entegrasyon notu (2026-09-20): bu iş sırasında `main` oluşturuldu ve Claude'un
+mimari testleri/ekip sözleşmesi bu dala alındı (`abade7f`). Düzeltme PR'ının
+hedefi `main` olarak güncellendi. Dal sahipliği ve inceleme kuralları için
+`AGENTS.md` esas alınır. GitHub branch protection ayarları bu işte değiştirilmedi.

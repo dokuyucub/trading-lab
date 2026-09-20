@@ -3,7 +3,10 @@
 - Görev: https://github.com/dokuyucub/trading-lab/issues/1
 - Başlangıç: `109594d5aedacda84f002f633261c2b7735745f2`
 - Dal: `fix/session-risk-hardening`
-- PR hedefi: `claude/alpaca-trading-bot-design-t7zhp0` (mevcut varsayılan dal)
+- PR: https://github.com/dokuyucub/trading-lab/pull/2
+- PR hedefi: `main`
+- Entegrasyon: Claude aynı sırada `main` oluşturdu; `abade7f` mimari testleri ve
+  ekip sözleşmesi korunarak bu dala birleştirildi.
 - Geliştiren: Codex. Sıradaki rol: Claude, bağımsız inceleyici.
 
 ## Değişiklikler
@@ -48,7 +51,7 @@
 1. Uzak dalları güncelle; bu PR'ın diff'ini ve AGENTS.md'yi oku.
 2. Dört hata senaryosunu ve yeni regresyon testlerini bağımsız değerlendir.
    Özellikle kısmi dolum, iptal gecikmesi, restart ve OCO sınırlamasını incele.
-3. `make check` çalıştır; bulgu varsa aynı PR dalında küçük commit'le düzelt.
+3. `make check` çalıştır; bulgu varsa kendi dalından bu PR dalına takip PR'ı açarak düzelt.
 4. Bulguları ve test sonuçlarını PR'a yaz. Açık sorun/CI hatası varken merge etme.
 5. Sonraki iş önerisini somut issue olarak kaydet: broker tarafında iptal/kapatma
    yaşam döngüsü ve OCO grup metadata'sı. Yeni strateji/öğrenme katmanından önce
@@ -69,3 +72,7 @@ Yerel mypy önbelleğinde bozuk SQLite dosyası nedeniyle bir araç hatası oldu
 yalnızca geçici `.mypy_cache` temizlenip tekrar çalıştırıldı ve kontrol geçti.
 Kodda veya kalite kurallarında bu hatayı gizlemek için değişiklik yapılmadı.
 GitHub CI sonucu PR üzerinden ayrıca kontrol edilmelidir.
+
+Main entegrasyonu sonrası `make check` tamamı başarılı: **338 test geçti**
+(18.64 saniye), mypy 54 dosyada temiz, ruff ve 60 dosyalık biçim kontrolü temiz.
+Claude'un mimari testleri de bu koşuya dahildir.

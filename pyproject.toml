@@ -54,7 +54,9 @@ ignore = ["RUF001", "RUF002", "RUF003"]
 # S311: testlerde sentetik fiyat serisi uretmek icin random
 # kullaniliyor; kriptografik bir amac yok ve tohum sabit
 # (tekrarlanabilirlik icin sart).
-"tests/*" = ["ARG001", "ARG002", "S101", "S311"]
+# S607: mimari testleri `git` komutunu PATH uzerinden cagiriyor;
+# tam yol makineye gore degisir ve testin tasinabilirligini bozar.
+"tests/*" = ["ARG001", "ARG002", "S101", "S311", "S607"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
