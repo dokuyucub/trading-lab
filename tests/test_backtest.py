@@ -209,31 +209,56 @@ def test_journal_timestamps_follow_the_simulated_clock(
 # --------------------------------------------------------------------------
 
 
-def test_no_edge_data_produces_no_edge(
-    bt_config: Config, cache: BarCache, bt_conn: sqlite3.Connection
-) -> None:
-    """Rastgele yuruyuste beklenen deger pozitif CIKMAMALI.
-
-    Rastgele veride kazanc uretebilen bir motor, kendine bir yerden
-    avantaj sagliyor demektir. Bu test o avantajin sizmasini
-    engelleyen en genel korumadir.
-    """
-    rng = random.Random(7)
+def run_random_walk(
+    config: Config, cache: BarCache, conn: sqlite3.Connection, *, seed: int, days: int = 12
+) -> float | None:
+    """Tek tohumla rastgele yuruyus kosusu; beklenen degeri dondurur."""
+    rng = random.Random(seed)
     price = 100.0
     bars: list[Bar] = []
-    for day in range(12):
+    for day in range(days):
         day_bars, price = random_walk_day(day, rng, start_price=price)
         bars.extend(day_bars)
     cache.save("SPY", Timeframe.M1, bars)
 
-    result = make_backtest(bt_config, cache, bt_conn, slippage_bps=1.0).run(
-        session_open(0) - timedelta(days=1), session_open(13)
+    result = make_backtest(config, cache, conn, slippage_bps=1.0).run(
+        session_open(0) - timedelta(days=1), session_open(days + 1)
     )
     assert result.metrics is not None
-    if result.metrics.trades:
-        assert result.metrics.expectancy_r <= 0.25, (
-            f"edge olmayan veride {result.metrics.expectancy_r:+.3f} R uretildi"
-        )
+    return result.metrics.expectancy_r if result.metrics.trades else None
+
+
+def test_no_edge_data_produces_no_edge_on_average(bt_config: Config, tmp_path: Path) -> None:
+    """Rastgele yuruyuste ORTALAMA beklenen deger pozitif cikmamali.
+
+    Bu testin ne kanitladigi ve ne kanitlamadigi konusunda net olalim:
+
+    TEK bir kosunun pozitif cikmasi hata kaniti DEGILDIR - sansla
+    olabilir. Rastgele veride 10-20 islemlik bir orneklem, tesadufen
+    pozitif beklenen deger uretebilir. Bu yuzden birden cok tohumun
+    ORTALAMASINA bakiliyor ve esik gevsek tutuluyor.
+
+    Test bir kanit degil, sistematik bir avantaj sizdiginda yanan bir
+    lambadir. Ileriye bakmanin asil kaniti bir sonraki testte:
+    deterministik ve tesadufe yer birakmiyor.
+    """
+    expectancies: list[float] = []
+    for seed in (3, 7, 11, 19, 23, 31):
+        conn = connect(tmp_path / f"seed{seed}.db")
+        apply_migrations(conn)
+        value = run_random_walk(bt_config, BarCache(tmp_path / f"bars{seed}"), conn, seed=seed)
+        conn.close()
+        if value is not None:
+            expectancies.append(value)
+
+    assert len(expectancies) >= 3, (
+        f"anlamli bir ortalama icin yeterli kosu yok ({len(expectancies)})"
+    )
+    average = sum(expectancies) / len(expectancies)
+    assert average <= 0.10, (
+        f"edge olmayan veride ortalama {average:+.3f} R uretildi "
+        f"(tohumlar: {[round(value, 3) for value in expectancies]})"
+    )
 
 
 def test_future_data_does_not_change_past_decisions(

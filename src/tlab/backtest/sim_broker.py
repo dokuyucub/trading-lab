@@ -4,11 +4,18 @@ Broker protokolunu uygular, ama emirleri gercek bir borsaya degil
 gecmis barlara karsi isletir. Ustteki hicbir katman farki gormez:
 strateji, risk kapisi ve seans dongusu aynen calisir.
 
-DOLUM MODELI BILINCLI OLARAK KOTUMSERDIR. Backtest'in isi guzel
-rakamlar uretmek degil, gercekte olabilecegin ALT sinirini vermektir.
-Iyimser bir simulasyon, canliya gecince kaybolan bir karlilik
-gosterir - ve bu, hic backtest yapmamaktan daha zararlidir cunku
-yanlis bir guven verir.
+DOLUM MODELI BILINCLI OLARAK KOTUMSERDIR. Amac, BILINEN iyimserlik
+kaynaklarini teker teker kapatmak: iyimser bir simulasyon canliya
+gecince kaybolan bir karlilik gosterir ve bu, hic backtest
+yapmamaktan zararlidir cunku yanlis bir guven verir.
+
+Ne oldugu konusunda net olalim: bu varsayimlar sonucu matematiksel
+bir ALT SINIR yapmaz. Sadece bizim dusundugumuz senaryolarda
+aleyhimize secim yapar. Modellenmemis gercek dunya etkileri -
+likidite cekilmesi, kismi dolum, emir defterinde sira, borsa
+kesintisi, veri gecikmesi - gercegi bu simulasyondan daha kotu
+yapabilir. Kotumserlik bir garanti degil, bilinen hatalari
+azaltma yontemidir.
 
 Somut kotumser secimler:
   * Limit emri, barin fiyat araligi limite DOKUNSA bile ancak

@@ -92,10 +92,14 @@ class CachedMarketData:
         ayindaki bir karari Mart ayindaki fiyatla verirdi.
 
         Gecmis bar verisi kotasyon icermedigi icin spread SENTETIK
-        uretiliyor ve bu, backtest'in en iyimser varsayimidir:
+        uretiliyor. Bu, modelin bilinen en buyuk iyimserligi:
         gercekte spread gun icinde degisir, acilista ve haber aninda
-        acilir. Sonuclar bu yuzden gercegin UST siniri sayilmali -
-        ozellikle "ufak marj" kovalayan stratejilerde.
+        acilir. Yani backtest bu kalemde gercekten daha IYIMSER
+        davraniyor - ama bu, sonucun gercegin ust siniri oldugu
+        anlamina gelmez, cunku ters yonde calisan modellenmemis
+        etkiler de var. Yalnizca su soylenebilir: "ufak marj"
+        kovalayan stratejilerde bu varsayim sonucu oldugundan iyi
+        gosterme egilimindedir.
         """
         if self._clock is not None:
             return self.quote_at(symbol, self._clock.now())
