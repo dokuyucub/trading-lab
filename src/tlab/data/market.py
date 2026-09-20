@@ -15,11 +15,17 @@ from tlab.errors import DataError
 from tlab.sdk_compat import sdk_field, sdk_float, sdk_int
 
 # Kendi Timeframe tipimizden Alpaca gosterimine cevrim tablosu.
-# Alpaca'nin tip sistemini ceviriyoruz ki cekirdek tipler saticiya bagimli olmasin.
+# Alpaca'nin tip sistemini ceviriyoruz ki cekirdek tipler saticiya
+# bagimli olmasin.
+#
+# Degerler TimeFrameUnit'in ADI degil DEGERI olmali: enum'da ad
+# "Minute", deger "Min" ve enum degerle kuruluyor. Bu fark, cevrimdisi
+# testlerin goremedigi bir yerdeydi - test_market_contract.py artik
+# her periyodu gercek SDK tipine cevirerek dogruluyor.
 _TIMEFRAME_ARGS: dict[Timeframe, tuple[int, str]] = {
-    Timeframe.M1: (1, "Minute"),
-    Timeframe.M5: (5, "Minute"),
-    Timeframe.M15: (15, "Minute"),
+    Timeframe.M1: (1, "Min"),
+    Timeframe.M5: (5, "Min"),
+    Timeframe.M15: (15, "Min"),
     Timeframe.H1: (1, "Hour"),
     Timeframe.D1: (1, "Day"),
 }
@@ -52,7 +58,15 @@ class AlpacaMarketData:
     sonuclarin neden ayristigi bilinir.
     """
 
-    def __init__(self, api_key: str, secret_key: str, feed: str = "iex") -> None:
+    def __init__(
+        self,
+        api_key: str,
+        secret_key: str,
+        feed: str = "iex",
+        *,
+        base_url: str | None = None,
+    ) -> None:
+        """`base_url` icin bkz. AlpacaBroker: yerel sahte sunucuya yonlendirme."""
         from alpaca.data.enums import DataFeed
         from alpaca.data.historical import StockHistoricalDataClient
 
@@ -62,7 +76,9 @@ class AlpacaMarketData:
             msg = f"Desteklenmeyen veri feed'i: {feed!r}"
             raise DataError(msg) from exc
 
-        self._client = StockHistoricalDataClient(api_key=api_key, secret_key=secret_key)
+        self._client = StockHistoricalDataClient(
+            api_key=api_key, secret_key=secret_key, url_override=base_url
+        )
         self.feed_name = feed
 
     def bars(
