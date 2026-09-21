@@ -1,5 +1,7 @@
 # tlab
 
+[![CI](https://github.com/dokuyucub/trading-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/dokuyucub/trading-lab/actions/workflows/ci.yml)
+
 Alpaca üzerinde çalışan, gözetimsiz işlem yapan ve kendi işlemlerinden öğrenen
 bir alım-satım sistemi.
 
@@ -227,10 +229,15 @@ tlab backtest --days 60                 # sonra ölç (ağ gerekmez)
 
 ### Dolum modeli bilerek kötümser
 
-Backtest'in işi güzel rakamlar üretmek değil, gerçekte olabileceğin **alt
-sınırını** vermektir. İyimser bir simülasyon, canlıya geçince kaybolan bir
-kârlılık gösterir — ve bu, hiç backtest yapmamaktan zararlıdır çünkü yanlış bir
-güven verir.
+Amaç, **bilinen** iyimserlik kaynaklarını teker teker kapatmak. İyimser bir
+simülasyon, canlıya geçince kaybolan bir kârlılık gösterir — ve bu, hiç backtest
+yapmamaktan zararlıdır çünkü yanlış bir güven verir.
+
+Ne olduğu konusunda net olalım: bu varsayımlar sonucu **matematiksel bir alt
+sınır yapmaz.** Sadece bizim düşündüğümüz senaryolarda aleyhimize seçim yapar.
+Modellenmemiş gerçek dünya etkileri — likidite çekilmesi, kısmi dolum, emir
+defterinde sıra, borsa kesintisi, veri gecikmesi — gerçeği bu simülasyondan daha
+kötü yapabilir.
 
 - Pasif limit emri, fiyata değmek yetmez, **ötesine geçilmeli**.
 - Aynı barda hem stop hem hedef tetiklenirse **stop** kabul edilir.
@@ -240,16 +247,31 @@ güven verir.
 - Giriş ve çıkış **aynı barda olmaz**.
 - Her dolumda kayma aleyhimize uygulanır.
 
-Bunun sınavı `test_backtest.py` içinde: rastgele yürüyüş verisinde motor pozitif
-beklenen değer üretemiyor. Üretebilseydi, kendine bir yerden avantaj sağlıyor
-demekti.
+Bunun sınavı `test_backtest.py` içinde ve iki parçalı:
+
+1. **Deterministik ileriye bakma testi** — asıl kanıt bu. Aynı geçmiş, iki
+   farklı gelecekle işletiliyor; geçmişteki kararlar birebir aynı çıkmalı.
+   Farklıysa motor geleceğe bakıyordur.
+2. **Çoklu tohumlu istatistiksel test** — rastgele yürüyüş verisinde ortalama
+   beklenen değer pozitif çıkmamalı. Tek bir koşunun pozitif çıkması hata
+   kanıtı *değildir*, şansla olabilir; bu yüzden birden çok tohumun ortalaması
+   bakılıyor. Bu test bir kanıt değil, sistematik bir avantaj sızdığında yanan
+   bir lambadır.
 
 ### Bilinen iyimserlik kaynakları
 
-Dürüstlük gereği: geçmiş bar verisi kotasyon içermediği için **spread sentetik**
-üretiliyor (sabit genişlikte). Gerçekte spread gün içinde değişir, açılışta ve
-haber anında açılır. Bu yüzden backtest sonuçları gerçeğin **üst sınırı**
-sayılmalı — özellikle "ufak marj" kovalayan stratejilerde.
+Dürüstlük gereği:
+
+- **Spread sentetik.** Geçmiş bar verisi kotasyon içermediği için sabit
+  genişlikte üretiliyor. Gerçekte spread gün içinde değişir, açılışta ve haber
+  anında açılır. Bu kalemde backtest gerçekten daha iyimser davranır ve "ufak
+  marj" kovalayan stratejilerde sonucu olduğundan iyi gösterme eğilimindedir.
+- **Aynı kod, aynı sonuç değildir.** Strateji ve risk kapısı canlıdakiyle aynı
+  olduğu için *karar mantığı* birebir aynıdır. Ama simülasyonun ürettiği
+  *gerçekleşmeler* gerçek gerçekleşmelerle aynı olmak zorunda değildir —
+  paylaşılan kod bunu garanti etmez, sadece kararların aynı kaldığını garanti
+  eder.
+- **Kısmi dolum, emir defteri sırası ve likidite çekilmesi modellenmiyor.**
 
 ## Yol haritası
 

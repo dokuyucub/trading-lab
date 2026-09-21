@@ -295,3 +295,370 @@ def test_env_file_is_ignored() -> None:
         ["git", "check-ignore", ".env"], cwd=REPO, capture_output=True, text=True, check=False
     )
     assert result.returncode == 0, ".env .gitignore tarafindan dislanmali"
+
+
+# --------------------------------------------------------------------------
+# Bagimlilik kilidi
+# --------------------------------------------------------------------------
+
+
+TARGET_ENVIRONMENT = {
+    "python_version": "3.12",
+    "python_full_version": "3.12.0",
+    "sys_platform": "linux",
+    "platform_system": "Linux",
+    "os_name": "posix",
+    "implementation_name": "cpython",
+    "platform_machine": "x86_64",
+}
+"""Kilidin uretildigi ve CI'nin kullandigi ortam.
+
+Marker'lar bu ortama gore degerlendiriliyor: yalnizca baska bir
+platformda gecerli olan bir bagimlilik, burada eksik sayilmamali.
+"""
+
+
+def canonical(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def declared_requirements(*, include_extras: bool = True) -> list[str]:
+    """pyproject.toml icindeki dogrudan bagimlilik ifadeleri (ham).
+
+    `include_extras=False` yalnizca calisma zamani bagimliliklarini
+    verir: uretim imaji gelistirme araclarini tasimamali.
+    """
+    import tomllib
+
+    data = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
+    project = data["project"]
+    entries = list(project.get("dependencies", []))
+    if include_extras:
+        for extra in project.get("optional-dependencies", {}).values():
+            entries.extend(extra)
+    return entries
+
+
+def declared_dependencies() -> set[str]:
+    """Dogrudan bagimlilik adlari."""
+    from packaging.requirements import Requirement
+
+    return {canonical(Requirement(entry).name) for entry in declared_requirements()}
+
+
+def locked_versions(filename: str = "requirements-dev.lock") -> dict[str, str]:
+    """Kilitteki paket adi -> tam surum."""
+    lock = REPO / filename
+    if not lock.exists():
+        pytest.skip(f"{filename} yok")
+
+    versions: dict[str, str] = {}
+    for line in lock.read_text(encoding="utf-8").splitlines():
+        if line.startswith(("#", " ", "\t")) or not line.strip():
+            continue
+        name, separator, version = line.partition("==")
+        if separator:
+            versions[canonical(name.strip())] = version.split(";")[0].strip()
+    return versions
+
+
+def lock_violations(
+    declared: list[str], locked: dict[str, str], environment: dict[str, str]
+) -> list[str]:
+    """Kilidin bildirilen sartlari karsilamadigi noktalar.
+
+    Ad karsilastirmasi YETMEZ: pyproject'te `pandas>=999` yazip kilitte
+    `pandas==3.0.6` birakmak, yalnizca adlara bakan bir kapidan gecer.
+    Surum sartinin gercekten saglandigi dogrulanmali.
+
+    Fonksiyon saf tutuldu ki hem gercek dosyalarla hem de sentetik
+    girdilerle test edilebilsin - bir kapinin kendisi de test
+    edilmeden guvenilmez.
+    """
+    from packaging.requirements import Requirement
+    from packaging.version import InvalidVersion, Version
+
+    violations: list[str] = []
+    for entry in declared:
+        requirement = Requirement(entry)
+        # Bu ortamda gecerli olmayan bagimlilik (ornegin yalnizca
+        # Windows icin) kilitte aranmaz.
+        if requirement.marker is not None and not requirement.marker.evaluate(environment):
+            continue
+
+        name = canonical(requirement.name)
+        pinned = locked.get(name)
+        if pinned is None:
+            violations.append(f"{name}: kilitte yok (bildirilen: {entry})")
+            continue
+
+        try:
+            version = Version(pinned)
+        except InvalidVersion:
+            violations.append(f"{name}: kilitteki surum okunamadi ({pinned!r})")
+            continue
+
+        if not requirement.specifier.contains(version, prereleases=True):
+            violations.append(f"{name}: kilitteki {pinned} surumu '{entry}' sartini karsilamiyor")
+    return violations
+
+
+def test_dev_lock_satisfies_every_declared_constraint() -> None:
+    """Gelistirme kilidi tum bagimliliklari kapsamali (CI bunu kuruyor).
+
+    Kilit tazeleme:  make lock
+    """
+    violations = lock_violations(
+        declared_requirements(), locked_versions("requirements-dev.lock"), TARGET_ENVIRONMENT
+    )
+    assert not violations, "requirements-dev.lock guncel degil:\n  " + "\n  ".join(violations)
+
+
+def test_runtime_lock_satisfies_runtime_constraints() -> None:
+    """Calisma zamani kilidi (Docker imaji) calisma bagimliliklarini kapsamali."""
+    violations = lock_violations(
+        declared_requirements(include_extras=False),
+        locked_versions("requirements.lock"),
+        TARGET_ENVIRONMENT,
+    )
+    assert not violations, "requirements.lock guncel degil:\n  " + "\n  ".join(violations)
+
+
+def test_runtime_lock_excludes_development_tools() -> None:
+    """Uretim imaji test ve linter araclarini tasimamali.
+
+    Yalnizca boyut meselesi degil: uretimde bulunmayan bir arac,
+    uretimde calisan bir seyi degistiremez.
+    """
+    runtime = locked_versions("requirements.lock")
+    leaked = sorted({"pytest", "mypy", "ruff", "pre-commit", "coverage"} & set(runtime))
+    assert not leaked, f"calisma zamani kilidinde gelistirme araci: {leaked}"
+
+
+def test_both_locks_agree_on_shared_packages() -> None:
+    """Ortak paketler iki kilitte ayni surumde olmali.
+
+    Ayrisirlarsa, CI'da test edilen surum ile uretimde calisan surum
+    farkli olur - kilit kullanmanin butun amaci bu farki ortadan
+    kaldirmakti.
+    """
+    runtime = locked_versions("requirements.lock")
+    development = locked_versions("requirements-dev.lock")
+    mismatched = sorted(
+        f"{name}: calisma {runtime[name]} != gelistirme {development[name]}"
+        for name in set(runtime) & set(development)
+        if runtime[name] != development[name]
+    )
+    assert not mismatched, "Kilitler ayrismis:\n  " + "\n  ".join(mismatched)
+
+
+def test_lock_gate_catches_a_missing_package() -> None:
+    violations = lock_violations(["pandas>=2.2"], {}, TARGET_ENVIRONMENT)
+    assert violations and "kilitte yok" in violations[0]
+
+
+def test_lock_gate_catches_a_version_that_does_not_satisfy() -> None:
+    """Kapinin asil sinavi: ad dogru ama surum yanlis.
+
+    Bu senaryo gercekten kacmisti - eski kapi yalnizca ad setlerini
+    karsilastirdigi icin pyproject'teki 'pandas>=999' sarti kilitteki
+    'pandas==3.0.6' ile celistigi halde gecmisti.
+    """
+    violations = lock_violations(["pandas>=999"], {"pandas": "3.0.6"}, TARGET_ENVIRONMENT)
+    assert violations and "sartini karsilamiyor" in violations[0]
+
+
+def test_lock_gate_accepts_a_satisfying_version() -> None:
+    assert lock_violations(["pandas>=2.2"], {"pandas": "3.0.6"}, TARGET_ENVIRONMENT) == []
+
+
+def test_lock_gate_normalizes_package_names() -> None:
+    """pyproject'te 'types-PyYAML', kilitte 'types-pyyaml' olabilir."""
+    assert lock_violations(["types-PyYAML"], {"types-pyyaml": "6.0.1"}, TARGET_ENVIRONMENT) == []
+
+
+def test_lock_gate_skips_dependencies_not_active_in_this_environment() -> None:
+    """Yalnizca baska platformda gecerli bir bagimlilik eksik sayilmamali."""
+    assert lock_violations(['colorama; sys_platform == "win32"'], {}, TARGET_ENVIRONMENT) == []
+    assert lock_violations(['tomli; python_version < "3.11"'], {}, TARGET_ENVIRONMENT) == []
+
+
+def test_lock_gate_reports_an_unreadable_pin() -> None:
+    violations = lock_violations(["pandas>=2.2"], {"pandas": "bozuk"}, TARGET_ENVIRONMENT)
+    assert violations and "okunamadi" in violations[0]
+
+
+@pytest.mark.parametrize("filename", ["requirements.lock", "requirements-dev.lock"])
+def test_lock_file_pins_exact_versions(filename: str) -> None:
+    """Kilitte aralik degil TAM surum olmali.
+
+    '>=' ile sabitlenmis bir kilit, kilit degildir: ayni commit iki
+    hafta arayla farkli surumlerle kurulur ve CI kodla ilgisi
+    olmayan bir sebeple kirilir. Bu bir kez yasandi (numpy 2.5.3).
+    """
+    loose: list[str] = []
+    for line in (REPO / filename).read_text(encoding="utf-8").splitlines():
+        if line.startswith(("#", " ", "\t")) or not line.strip():
+            continue
+        if "==" not in line:
+            loose.append(line.strip())
+    assert not loose, f"{filename} icinde tam surum olmayan satirlar:\n  " + "\n  ".join(loose)
+
+
+# ---------------------------------------------------------------------------
+# Makefile hedefleri
+#
+# Bu bolum iki gercek hatanin karsiligi. Ikisi de `make check` yesilken
+# vardi, cunku test kapisi Makefile hedeflerinin KENDISINI calistirmiyor:
+#
+#   make hooks  ->  $(PY) -m pre-commit install
+#                   "No module named pre-commit" (modul adi pre_commit)
+#   make lock   ->  $(PY) -m uv pip compile ...
+#                   "No module named uv" (uv bagimliliklara yazili degildi)
+#
+# Ders: calistirilmayan bir hedef curur. Araclari yorumlayicidan cagirmak
+# dogru karardi, ama bu kararin bedeli `-m`'in DAGITIM adini degil MODUL
+# adini istemesi. Asagidaki kapi tam bu farki olcuyor.
+# ---------------------------------------------------------------------------
+
+# Tire de yakalaniyor: `-m pre-commit` gibi bir yazim sessizce "pre"ye
+# dusup tesaduefen gecmesin, acik bir kural olarak reddedilsin.
+MODULE_INVOCATION = re.compile(r"\$\(PY\)\s+-m\s+([A-Za-z_][\w.\-]*)")
+
+
+def makefile_modules(text: str) -> set[str]:
+    """Makefile'in yorumlayici uzerinden cagirdigi modul adlari.
+
+    Saf tutuldu: bir kapinin kendisi de test edilmeden guvenilmez -
+    bu ders lock kapisinda ogrenildi, burada tekrarlanmiyor.
+    """
+    return {
+        match.group(1)
+        for line in text.splitlines()
+        if not line.lstrip().startswith("#")
+        for match in MODULE_INVOCATION.finditer(line)
+    }
+
+
+def test_makefile_invokes_only_importable_modules() -> None:
+    """`$(PY) -m X` icindeki her X gercekten ice aktarilabilmeli.
+
+    Bu test `pre-commit` tuzagini dogrudan yakalar: dagitim adi tireli,
+    modul adi alt cizgili. Ayni zamanda `uv` gibi bir aracin
+    bagimliliklara yazilmayi unutulmasini da yakalar - cunku modul
+    ancak kilitten kurulduysa ice aktarilabilir.
+    """
+    from importlib.util import find_spec
+
+    missing: list[str] = []
+    for module in sorted(makefile_modules((REPO / "Makefile").read_text(encoding="utf-8"))):
+        # Tireli ad hicbir zaman gecerli bir modul adi degildir; import
+        # denemesine gerek yok, dogrudan hata.
+        if "-" in module:
+            missing.append(module)
+            continue
+        try:
+            if find_spec(module) is None:
+                missing.append(module)
+        except (ImportError, ValueError):
+            missing.append(module)
+    assert not missing, (
+        "Makefile ice aktarilamayan modul cagiriyor: "
+        + ", ".join(missing)
+        + "\n  `-m` MODUL adi ister (pre_commit), dagitim adini degil (pre-commit);"
+        + "\n  arac gelistirme bagimliliklarinda tanimli ve kilitte olmali."
+    )
+
+
+def test_makefile_gate_finds_the_module_names() -> None:
+    """Kapinin kendi sinavi: hedefleri gercekten ayikliyor mu."""
+    assert makefile_modules("build:\n\t$(PY) -m pytest --cov\n") == {"pytest"}
+    assert makefile_modules("doctor:\n\t$(PY) -m tlab.cli doctor\n") == {"tlab.cli"}
+    assert makefile_modules("a:\n\t$(PY) -m ruff check .\n\t$(PY) -m mypy\n") == {"ruff", "mypy"}
+
+
+def test_makefile_gate_ignores_commented_out_lines() -> None:
+    """Yorum satirindaki ornek bir komut kapiyi kirmamali."""
+    assert makefile_modules("# eskiden: $(PY) -m eski_arac\nx:\n\t$(PY) -m pytest\n") == {"pytest"}
+
+
+def test_makefile_gate_would_catch_a_hyphenated_module_name() -> None:
+    """Yasanan hata sentetik girdiyle de yakalanabilmeli.
+
+    Tireli ad butun olarak ayiklaniyor ve gecersiz sayiliyor. Onemi:
+    ad yalnizca "pre"ye kirpilsaydi, "pre" adli bir paketin ortamda
+    bulunmasi durumunda hata sessizce gecerdi.
+    """
+    assert makefile_modules("hooks:\n\t$(PY) -m pre-commit install\n") == {"pre-commit"}
+
+
+SYSTEM_HOOK_ENTRY = re.compile(r"^\s*entry:\s*(.+?)\s*$")
+
+
+def system_hook_entries(text: str) -> list[str]:
+    """`language: system` kancalarinin calistirdigi komutlar.
+
+    Basit satir tabanli okuma yeterli: config duz ve kisa, YAML
+    ayristiricisi eklemek kapinin kendisine bagimlilik katardi.
+    """
+    entries: list[str] = []
+    pending: str | None = None
+    for line in text.splitlines():
+        match = SYSTEM_HOOK_ENTRY.match(line)
+        if match:
+            pending = match.group(1)
+        elif "language: system" in line and pending is not None:
+            entries.append(pending)
+            pending = None
+    return entries
+
+
+def test_local_hooks_call_tools_through_the_interpreter() -> None:
+    """Kancalar da araci PATH'ten degil yorumlayicidan cagirmali.
+
+    Makefile'da ogrenilen ders bu dosyada tekrarlanmisti: `entry: pytest`
+    PATH'teki pytest'i buluyordu ve o kurulum `tlab` paketini
+    goremedigi icin her commit kanca hatasiyla dusuyordu. Hata
+    gorunmemisti, cunku kancayi kuran hedef (`make hooks`) zaten
+    calismiyordu - iki kusur birbirini gizlemisti.
+    """
+    entries = system_hook_entries((REPO / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
+    assert entries, "yerel kanca bulunamadi - config bicimi mi degisti?"
+
+    bare = [entry for entry in entries if not entry.startswith(("python -m ", "$(PY) -m "))]
+    assert not bare, (
+        "Kanca araci PATH'ten cagiriyor: "
+        + ", ".join(bare)
+        + "\n  `python -m <arac>` kullanin; ciplak ad projenin bagimliliklarini"
+        + "\n  gormeyen baska bir kurulumu bulabilir."
+    )
+
+
+def test_hook_entry_gate_reads_only_system_hooks() -> None:
+    """Kapinin kendi sinavi."""
+    config = (
+        "repos:\n"
+        "  - repo: https://example.invalid\n"
+        "    hooks:\n"
+        "      - id: ruff\n"
+        "  - repo: local\n"
+        "    hooks:\n"
+        "      - id: mypy\n"
+        "        entry: python -m mypy\n"
+        "        language: system\n"
+    )
+    assert system_hook_entries(config) == ["python -m mypy"]
+
+
+def test_hook_entry_gate_catches_a_bare_tool_name() -> None:
+    """Yasanan hata sentetik girdiyle de yakalanmali."""
+    config = (
+        "  - repo: local\n"
+        "    hooks:\n"
+        "      - id: pytest\n"
+        "        entry: pytest -q\n"
+        "        language: system\n"
+    )
+    entries = system_hook_entries(config)
+    assert entries == ["pytest -q"]
+    assert not entries[0].startswith("python -m ")

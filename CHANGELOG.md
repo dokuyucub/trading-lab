@@ -9,7 +9,59 @@ sürüme geri dönmek tek komutluk iştir. Ayrıntı için `CONTRIBUTING.md`.
 
 ## [Yayınlanmamış]
 
+### Düzeltildi
+- **CI kurulum komutu geçersizdi.** `pip install --require-hashes=false` — bu
+  bayrak değer almıyor; `quality` işi testlere ulaşmadan duruyordu. Bayrak
+  zaten gereksizdi: kilit dosyasında hash yoksa pip hash istemiyor.
+  (ChatGPT'nin PR #3 incelemesindeki P1 bulgusu.)
+- **Kilit/pyproject uyum kapısı sürüm şartını doğrulamıyordu.** Yalnızca ad
+  setlerini karşılaştırıyordu; `pandas>=999` yazıp kilitte `pandas==3.0.6`
+  bırakmak kapıdan geçiyordu. Artık `packaging` ile sürüm şartı ve ortam
+  marker'ları değerlendiriliyor, negatif testlerle sınanıyor. (P2 bulgusu.)
+- **Docker imajı kilitsiz kuruyordu** — CI'da test edilen sürümlerle üretimde
+  çalışan sürümler ayrışabilirdi. Artık iki kilit var: `requirements.lock`
+  (çalışma zamanı, 23 paket) ve `requirements-dev.lock` (CI ve geliştirme,
+  46 paket). Ortak paketlerin aynı sürümde olduğu test ediliyor.
+- **`make check` kapsama eşiğini ölçmüyordu** ama CI ölçüyordu — "aynı kapı"
+  iddiası yanlıştı. Artık gerçekten aynı.
+- **Makefile araçları PATH'ten çağırıyordu.** Makinede eski bir global `mypy`
+  varsa o bulunuyor ve kilitteki sürümden farklı sonuç veriyordu (sandbox'ta
+  1.19.1 vs 2.3.1). Araçlar artık projenin yorumlayıcısından çağrılıyor.
+- **Canary koşusu yalnızca pytest çalıştırıyordu** — oysa onu doğuran kırılma
+  bir *tip denetimi* kırılmasıydı (numpy stub'ları). Artık ruff ve mypy de
+  çalışıyor.
+- **Backtest hakkındaki iddialar fazla güçlüydü.** Kötümser dolum varsayımları
+  sonucu matematiksel bir *alt sınır* yapmaz; sadece düşünülen senaryolarda
+  aleyhe seçim yapar. Aynı kodu paylaşmak da simülasyon ile gerçek
+  gerçekleşmelerin eşitliğini garanti etmez — yalnızca karar mantığının aynı
+  kaldığını garanti eder. `README.md`, `sim_broker.py` ve `cached.py`
+  düzeltildi. (ChatGPT'nin PR #2 incelemesindeki tespiti.)
+- **Rastgele yürüyüş testi tek tohumluydu.** Tek bir koşunun pozitif çıkması
+  hata kanıtı değildir — ölçüldü: altı tohumdan üçü pozitif çıkabiliyor
+  (+0.061'e kadar), ortalama −0.173 R. Test artık çoklu tohumun ortalamasına
+  bakıyor ve docstring'i neyi kanıtlayıp neyi kanıtlamadığını açıkça yazıyor.
+  İleriye bakmanın asıl kanıtı deterministik test olarak kalıyor.
+
 ### Eklendi
+- **`requirements.lock` — bağımlılık kilidi.** Tüm sürümler tam olarak
+  sabitlendi (Python 3.12 hedefiyle üretildi, CI'ın kullandığı sürüm). CI'ı
+  kıran `numpy` 2.5.3 dahil 46 paket kilitli. Bir bağımlılık eklendiğinde
+  `make lock` ile tazelenir; kilit ile `pyproject.toml`'un uyumunu test
+  denetliyor.
+- **CI yeniden düzenlendi**: kilitli kurulum, eşzamanlılık grubu (eski koşular
+  iptal edilir), kapsama raporu ve %80 eşiği, haftalık "canary" koşusu —
+  bağımlılıkları sabitlemeden kurar, böylece üst akıştaki bir kırılma rastgele
+  bir PR'ı kırmadan önce bizim seçtiğimiz anda ortaya çıkar.
+- **PR şablonu, CODEOWNERS, Dependabot, pre-commit yapılandırması ve
+  `SECURITY.md`.** pre-commit kancaları CI ile aynı kapıları çalıştırır: farklı
+  olurlarsa yerelde geçen bir değişiklik CI'da kırılır ve döngüyü uzatır.
+- **İş bölümü, inceleme kuralları ve ajanlar arası koordinasyon protokolü**
+  `AGENTS.md`'ye işlendi: Faz 3 Claude'da, Faz 4 ChatGPT'de; çift göz zorunlu
+  dosyalar; incelemenin belirli bir commit'e ait olması; göç numarası
+  rezervasyonunun issue ile yapılması (`git fetch` tek başına yarışı
+  engellemiyor); Faz 4 veri sözleşmesinde öğrenme zamanı zorunluluğu ve
+  "veri bulunamadı" ile "olay yok" ayrımı.
+- **Issue şablonları**: koordinasyon, göç rezervasyonu, hata.
 - **`AGENTS.md` — ekip sözleşmesi.** Projede birden fazla geliştirici (insan ve
   yapay zekâ ajanı) çalıştığı için dal modeli, push kuralları, değişmezler,
   çakışmaya açık dosyalar ve devir teslim protokolü yazıya döküldü.

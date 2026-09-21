@@ -1,0 +1,53 @@
+# Yerel kapilar CI ile AYNI olmali: farkli olurlarsa, yerelde gecen
+# bir degisiklik CI'da kirilir ve donguyu uzatir.
+#
+# Kurulum:  pre-commit install
+# Elle kos: pre-commit run --all-files
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.8
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-toml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: detect-private-key
+      # Buyuk dosya = muhtemelen repoya girmemesi gereken veri.
+      - id: check-added-large-files
+        args: [--maxkb=512]
+
+  - repo: local
+    hooks:
+      # mypy ve pytest yerel ortamda calisir: pre-commit'in kendi
+      # izole ortami projenin bagimliliklarini gormez.
+      #
+      # `python -m <arac>` yaziliyor, cikplak `mypy`/`pytest` degil.
+      # Sebep Makefile'dakiyle ayni: ciplak ad PATH'ten cozulur ve
+      # projenin bagimliliklarini gormeyen baska bir kurulumu bulabilir.
+      # Bu kanca tam bu yuzden kirilmisti - PATH'teki pytest `tlab`
+      # paketini ice aktaramiyordu. `-m` ile arac, `python` hangisiyse
+      # onun ortaminda calisir; iki farkli surum ayrisamaz.
+      #
+      # Onkosul: gelistirme ortami etkin olmali (`make install-locked`).
+      - id: mypy
+        name: mypy
+        entry: python -m mypy
+        language: system
+        pass_filenames: false
+        types: [python]
+
+      - id: pytest
+        name: pytest
+        entry: python -m pytest -q
+        language: system
+        pass_filenames: false
+        types: [python]

@@ -1,27 +1,67 @@
-.PHONY: install test lint fmt typecheck check doctor clean
+# Araclar PATH'ten degil, PROJENIN YORUMLAYICISINDAN cagriliyor.
+# Sebep somut: makinede eski bir global mypy varsa, `mypy` komutu onu
+# bulur ve kilitteki surumden farkli sonuc verir. "Bende calisiyordu"
+# hikayelerinin buyuk kismi bu farktan cikiyor.
+PY ?= python3
 
+.PHONY: install install-locked lock test cov lint fmt typecheck check hooks doctor clean
+
+# Gelistirme kurulumu (guncel surumler)
 install:
-	pip install -e ".[dev]"
+	$(PY) -m pip install -e ".[dev]"
+
+# CI ile AYNI surumler. "Bende calisiyordu" durumunu ortadan kaldirir.
+install-locked:
+	$(PY) -m pip install -r requirements-dev.lock
+	$(PY) -m pip install --no-deps -e .
+
+# Iki kilit: calisma zamani (Docker imaji) ve gelistirme (CI, yerel).
+# Bagimlilik degistiyse ikisini de tazele ve commit et.
+#
+# uv, dev bagimliliklarina yazili oldugu icin kilitli bir gelistirme
+# ortaminda hazir gelir - ve kilidi ureten aracin surumu de kilitte
+# sabittir. Kilit dosyasini ureten aracin kendisi sabitlenmezse,
+# "ayni girdiden ayni kilit cikar" garantisi yoktur.
+lock:
+	$(PY) -m uv pip compile pyproject.toml --python-version 3.12 \
+		--output-file requirements.lock
+	$(PY) -m uv pip compile pyproject.toml --extra dev --python-version 3.12 \
+		--output-file requirements-dev.lock
 
 test:
-	pytest
+	$(PY) -m pytest
+
+cov:
+	$(PY) -m pytest --cov=tlab --cov-report=term-missing:skip-covered
 
 lint:
-	ruff check .
-	ruff format --check .
+	$(PY) -m ruff check .
+	$(PY) -m ruff format --check .
 
 fmt:
-	ruff check --fix .
-	ruff format .
+	$(PY) -m ruff check --fix .
+	$(PY) -m ruff format .
 
 typecheck:
-	mypy
+	$(PY) -m mypy
 
-check: lint typecheck test
+# Push etmeden once calistirilacak tek komut. CI'nin yaptiginin aynisi -
+# kapsama esigi dahil, cunku "ayni kapi" demek ancak gercekten ayniysa
+# bir sey ifade eder.
+check: lint typecheck cov
+
+# Yerel kapilari git kancasi olarak kur.
+#
+# DIKKAT: dagitim adi `pre-commit`, MODUL adi `pre_commit`. Araci
+# yorumlayicidan cagirirken modul adi gerekir; tire yazilirsa komut
+# "No module named pre-commit" ile duser. Ayni tuzak `uv` icin yok
+# (ikisi de `uv`), ama kural genel: `-m` her zaman modul adi ister.
+hooks:
+	$(PY) -m pre_commit install
 
 doctor:
-	tlab doctor
+	$(PY) -m tlab.cli doctor
 
 clean:
 	find . -type d -name __pycache__ -prune -exec rm -rf {} +
-	rm -rf .pytest_cache .ruff_cache .mypy_cache
+	rm -rf .pytest_cache .ruff_cache .mypy_cache .coverage htmlcov

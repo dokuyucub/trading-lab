@@ -177,19 +177,35 @@ tahmine değil kayda dayanır.
 ## 5. Push etmeden önce
 
 ```bash
-make check    # ruff + mypy --strict + pytest
+make check    # ruff + mypy + pytest
 ```
 
 CI zaten çalıştıracak, ama kırık commit'in geçmişe girmesini engellemek senin
 elinde. Temiz bir geçmiş, `bisect`'in işe yaraması demektir.
 
-## 6. Asistanlar arası devir
+`make hooks` ile bu kapılar git kancası olarak da kurulabilir — o zaman
+`git commit` kendiliğinden denetler.
 
-Ortak kurallar `AGENTS.md`, Claude giriş noktası `CLAUDE.md`, teslim notları
-`docs/handoffs/` altındadır. Görev → dal → test → PR → bağımsız inceleme
-sırasını izleyin.
+## 6. Sürüm çıkarma
 
-Entegrasyon notu (2026-09-20): bu iş sırasında `main` oluşturuldu ve Claude'un
-mimari testleri/ekip sözleşmesi bu dala alındı (`abade7f`). Düzeltme PR'ının
-hedefi `main` olarak güncellendi. Dal sahipliği ve inceleme kuralları için
-`AGENTS.md` esas alınır. GitHub branch protection ayarları bu işte değiştirilmedi.
+```bash
+# 1. CHANGELOG'da [Yayınlanmamış] bölümünü sürüm başlığına çevir
+# 2. main güncel ve yeşil olsun
+git switch main && git pull
+make check
+
+# 3. Etiketle ve gönder
+git tag -a v0.3.0 -m "Faz 2: backtest motoru"
+git push origin v0.3.0
+```
+
+Etiket, geri dönülebilecek sabit bir noktadır. Faz bittiğinde etiketlenir.
+
+## 7. Ekip çalışması ve devir
+
+Birden fazla geliştirici (insan ya da ajan) varsa **`AGENTS.md`** geçerlidir:
+dal modeli, değişmezler, inceleme kuralları ve koordinasyon kanalları orada.
+Claude için giriş noktası `CLAUDE.md`, yarım kalan işlerin devir notları
+`docs/handoffs/` altında.
+
+Sıra: görev → kendi dalın → test → PR → bağımsız inceleme → birleştirme.
