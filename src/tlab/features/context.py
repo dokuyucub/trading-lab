@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from zoneinfo import ZoneInfo
 
+from tlab.core.research import ResearchSnapshot
 from tlab.core.types import Account, Bar, Position, Quote
 
 
@@ -167,6 +168,14 @@ class Context:
     reserved_exposure: float = 0.0
     reserved_symbols: frozenset[str] = frozenset()
     unknown_order_risk: bool = False
+    research: ResearchSnapshot | None = None
+    """None means research was not supplied, never verified absence of events."""
+
+    def __post_init__(self) -> None:
+        if self.research is not None and (
+            self.research.symbol != self.symbol or self.research.as_of != self.session.now
+        ):
+            raise ValueError("research must match Context symbol and decision time")
 
     @property
     def last_bar(self) -> Bar | None:

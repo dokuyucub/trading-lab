@@ -246,8 +246,9 @@ Bu yüzden inceleme kaydı yorum olarak tutulur ve **biçimi sabittir**:
 Commit SHA zorunlu: inceleme belirli bir commit'e aittir, PR'a değil.
 
 **Sonuç: `main` üzerinde "require approving review" kuralı AÇILMAMALI.**
-Teknik olarak sağlanamaz ve her PR'ı kalıcı olarak bloklar. Yalnızca
-"require status checks" (`quality`) açık kalmalı.
+Teknik olarak sağlanamaz ve her PR'ı kalıcı olarak bloklar. PR zorunluluğu,
+"require status checks" (`quality`) ve yöneticilere uygulama korunur.
+Mevcut korumalar bu kısıt nedeniyle kaldırılmaz veya bypass edilmez.
 
 Kalıcı çözüm, ajanlardan birine ayrı bir GitHub kimliği vermek (ikinci hesap ya
 da GitHub App). Bu kullanıcının kararı; iki ajan kendi arasında çözemez.
@@ -323,3 +324,31 @@ göre ilerleyin. Ağsız testler gerçek broker davranışını veya kârlılı�
 Bu bot hesapta tek işlem süreci olarak çalışır. Kill-switch ve gün sonu kapatma
 hesap genelindeki bekleyen emirleri iptal eder; manuel veya başka stratejilerin
 emirleri de etkilenir. Aynı hesabı başka işlem süreçleriyle paylaşmayın.
+
+## 10. Research sözleşmesi — issue #12
+
+Codex geliştirir, Claude bağımsız inceler. İlk PR yalnızca ortak tipleri ve
+isteğe bağlı Context alanını ekler; sağlayıcı, göç ve risk davranışı ayrı PR'lardır.
+
+- Olayın zamanı, yayımlanma zamanı ve revizyonun sisteme ulaştığı `known_at`
+  ayrıdır. Provenance OBSERVED / PROVIDER_CLAIMED / BACKFILLED olarak saklanır.
+  OBSERVED olsa bile karar anından sonra öğrenilen bilgi geçmişte kullanılamaz.
+- Snapshot, kaynak/sembol/olay türleri/zaman kapsamı ve güncelliği taşır.
+  AVAILABLE, EMPTY, UNAVAILABLE ve STALE feature yolunda ayrı kalır.
+  EMPTY yalnızca kapsamı tam, başarılı sorguyla doğrulanmış boş sonuçtur.
+- Snapshot kimliği tüm karar içeriğinin sürümlü hash'idir. Olay sırası ve aynı
+  anın UTC offset gösterimi kimliği değiştirmez. Depolama eklendiğinde kayıtlar
+  yalnızca eklenir; eski revizyonlar ve snapshot'lar güncellenmez.
+- Gün hassasiyeti borsa saat dilimindeki tam günü kapsar (DST dahil).
+  BMO / AMC / UNKNOWN kaynak beyanıdır; kesin saat değildir.
+- `has_verified_knowledge` yalnızca research verisinin gerekli uygunluk
+  koşuludur, strateji terfi onayı değildir. Research kullanan Faz 3 koşusu
+  doğrulanmamış veride `promotion_eligible=False` taşımak zorundadır.
+- Context snapshot'ı kendi sembolü ve karar anıyla eşleşmelidir. `None`
+  research sağlanmadığını belirtir, olay yokluğunu değil.
+- Alanlar journal için ilkel değerlerle serileştirilebilir kalır. Tarihsel
+  revizyon seçimi, kapsam doğrulaması, kalıcı kayıt ve risk blokları sonraki
+  PR'larda ayrıca sınanacaktır; bu tipler onları uygulanmış hale getirmez.
+
+Çekirdek tiplerin üçüncü taraf bağımlılık sınırı korunur; snapshot hash ve
+DST sınırları için standart kütüphaneden hashlib/json/zoneinfo izinlidir.
