@@ -107,6 +107,8 @@ typing-inspection==0.4.4
     #   pydantic-settings
 urllib3==2.8.0
     # via requests
+uv==0.12.17
+    # via tlab (pyproject.toml)
 virtualenv==21.9.0
     # via pre-commit
 websockets==17.1

@@ -24,6 +24,7 @@ dev = [
     "mypy>=1.11",
     "types-PyYAML",
     "pre-commit>=4.0",
+    "uv>=0.4",
 ]
 
 [project.scripts]

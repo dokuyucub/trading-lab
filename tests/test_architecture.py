@@ -503,3 +503,162 @@ def test_lock_file_pins_exact_versions(filename: str) -> None:
         if "==" not in line:
             loose.append(line.strip())
     assert not loose, f"{filename} icinde tam surum olmayan satirlar:\n  " + "\n  ".join(loose)
+
+
+# ---------------------------------------------------------------------------
+# Makefile hedefleri
+#
+# Bu bolum iki gercek hatanin karsiligi. Ikisi de `make check` yesilken
+# vardi, cunku test kapisi Makefile hedeflerinin KENDISINI calistirmiyor:
+#
+#   make hooks  ->  $(PY) -m pre-commit install
+#                   "No module named pre-commit" (modul adi pre_commit)
+#   make lock   ->  $(PY) -m uv pip compile ...
+#                   "No module named uv" (uv bagimliliklara yazili degildi)
+#
+# Ders: calistirilmayan bir hedef curur. Araclari yorumlayicidan cagirmak
+# dogru karardi, ama bu kararin bedeli `-m`'in DAGITIM adini degil MODUL
+# adini istemesi. Asagidaki kapi tam bu farki olcuyor.
+# ---------------------------------------------------------------------------
+
+# Tire de yakalaniyor: `-m pre-commit` gibi bir yazim sessizce "pre"ye
+# dusup tesaduefen gecmesin, acik bir kural olarak reddedilsin.
+MODULE_INVOCATION = re.compile(r"\$\(PY\)\s+-m\s+([A-Za-z_][\w.\-]*)")
+
+
+def makefile_modules(text: str) -> set[str]:
+    """Makefile'in yorumlayici uzerinden cagirdigi modul adlari.
+
+    Saf tutuldu: bir kapinin kendisi de test edilmeden guvenilmez -
+    bu ders lock kapisinda ogrenildi, burada tekrarlanmiyor.
+    """
+    return {
+        match.group(1)
+        for line in text.splitlines()
+        if not line.lstrip().startswith("#")
+        for match in MODULE_INVOCATION.finditer(line)
+    }
+
+
+def test_makefile_invokes_only_importable_modules() -> None:
+    """`$(PY) -m X` icindeki her X gercekten ice aktarilabilmeli.
+
+    Bu test `pre-commit` tuzagini dogrudan yakalar: dagitim adi tireli,
+    modul adi alt cizgili. Ayni zamanda `uv` gibi bir aracin
+    bagimliliklara yazilmayi unutulmasini da yakalar - cunku modul
+    ancak kilitten kurulduysa ice aktarilabilir.
+    """
+    from importlib.util import find_spec
+
+    missing: list[str] = []
+    for module in sorted(makefile_modules((REPO / "Makefile").read_text(encoding="utf-8"))):
+        # Tireli ad hicbir zaman gecerli bir modul adi degildir; import
+        # denemesine gerek yok, dogrudan hata.
+        if "-" in module:
+            missing.append(module)
+            continue
+        try:
+            if find_spec(module) is None:
+                missing.append(module)
+        except (ImportError, ValueError):
+            missing.append(module)
+    assert not missing, (
+        "Makefile ice aktarilamayan modul cagiriyor: "
+        + ", ".join(missing)
+        + "\n  `-m` MODUL adi ister (pre_commit), dagitim adini degil (pre-commit);"
+        + "\n  arac gelistirme bagimliliklarinda tanimli ve kilitte olmali."
+    )
+
+
+def test_makefile_gate_finds_the_module_names() -> None:
+    """Kapinin kendi sinavi: hedefleri gercekten ayikliyor mu."""
+    assert makefile_modules("build:\n\t$(PY) -m pytest --cov\n") == {"pytest"}
+    assert makefile_modules("doctor:\n\t$(PY) -m tlab.cli doctor\n") == {"tlab.cli"}
+    assert makefile_modules("a:\n\t$(PY) -m ruff check .\n\t$(PY) -m mypy\n") == {"ruff", "mypy"}
+
+
+def test_makefile_gate_ignores_commented_out_lines() -> None:
+    """Yorum satirindaki ornek bir komut kapiyi kirmamali."""
+    assert makefile_modules("# eskiden: $(PY) -m eski_arac\nx:\n\t$(PY) -m pytest\n") == {"pytest"}
+
+
+def test_makefile_gate_would_catch_a_hyphenated_module_name() -> None:
+    """Yasanan hata sentetik girdiyle de yakalanabilmeli.
+
+    Tireli ad butun olarak ayiklaniyor ve gecersiz sayiliyor. Onemi:
+    ad yalnizca "pre"ye kirpilsaydi, "pre" adli bir paketin ortamda
+    bulunmasi durumunda hata sessizce gecerdi.
+    """
+    assert makefile_modules("hooks:\n\t$(PY) -m pre-commit install\n") == {"pre-commit"}
+
+
+SYSTEM_HOOK_ENTRY = re.compile(r"^\s*entry:\s*(.+?)\s*$")
+
+
+def system_hook_entries(text: str) -> list[str]:
+    """`language: system` kancalarinin calistirdigi komutlar.
+
+    Basit satir tabanli okuma yeterli: config duz ve kisa, YAML
+    ayristiricisi eklemek kapinin kendisine bagimlilik katardi.
+    """
+    entries: list[str] = []
+    pending: str | None = None
+    for line in text.splitlines():
+        match = SYSTEM_HOOK_ENTRY.match(line)
+        if match:
+            pending = match.group(1)
+        elif "language: system" in line and pending is not None:
+            entries.append(pending)
+            pending = None
+    return entries
+
+
+def test_local_hooks_call_tools_through_the_interpreter() -> None:
+    """Kancalar da araci PATH'ten degil yorumlayicidan cagirmali.
+
+    Makefile'da ogrenilen ders bu dosyada tekrarlanmisti: `entry: pytest`
+    PATH'teki pytest'i buluyordu ve o kurulum `tlab` paketini
+    goremedigi icin her commit kanca hatasiyla dusuyordu. Hata
+    gorunmemisti, cunku kancayi kuran hedef (`make hooks`) zaten
+    calismiyordu - iki kusur birbirini gizlemisti.
+    """
+    entries = system_hook_entries((REPO / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
+    assert entries, "yerel kanca bulunamadi - config bicimi mi degisti?"
+
+    bare = [entry for entry in entries if not entry.startswith(("python -m ", "$(PY) -m "))]
+    assert not bare, (
+        "Kanca araci PATH'ten cagiriyor: "
+        + ", ".join(bare)
+        + "\n  `python -m <arac>` kullanin; ciplak ad projenin bagimliliklarini"
+        + "\n  gormeyen baska bir kurulumu bulabilir."
+    )
+
+
+def test_hook_entry_gate_reads_only_system_hooks() -> None:
+    """Kapinin kendi sinavi."""
+    config = (
+        "repos:\n"
+        "  - repo: https://example.invalid\n"
+        "    hooks:\n"
+        "      - id: ruff\n"
+        "  - repo: local\n"
+        "    hooks:\n"
+        "      - id: mypy\n"
+        "        entry: python -m mypy\n"
+        "        language: system\n"
+    )
+    assert system_hook_entries(config) == ["python -m mypy"]
+
+
+def test_hook_entry_gate_catches_a_bare_tool_name() -> None:
+    """Yasanan hata sentetik girdiyle de yakalanmali."""
+    config = (
+        "  - repo: local\n"
+        "    hooks:\n"
+        "      - id: pytest\n"
+        "        entry: pytest -q\n"
+        "        language: system\n"
+    )
+    entries = system_hook_entries(config)
+    assert entries == ["pytest -q"]
+    assert not entries[0].startswith("python -m ")

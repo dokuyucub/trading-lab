@@ -29,16 +29,25 @@ repos:
     hooks:
       # mypy ve pytest yerel ortamda calisir: pre-commit'in kendi
       # izole ortami projenin bagimliliklarini gormez.
+      #
+      # `python -m <arac>` yaziliyor, cikplak `mypy`/`pytest` degil.
+      # Sebep Makefile'dakiyle ayni: ciplak ad PATH'ten cozulur ve
+      # projenin bagimliliklarini gormeyen baska bir kurulumu bulabilir.
+      # Bu kanca tam bu yuzden kirilmisti - PATH'teki pytest `tlab`
+      # paketini ice aktaramiyordu. `-m` ile arac, `python` hangisiyse
+      # onun ortaminda calisir; iki farkli surum ayrisamaz.
+      #
+      # Onkosul: gelistirme ortami etkin olmali (`make install-locked`).
       - id: mypy
         name: mypy
-        entry: mypy
+        entry: python -m mypy
         language: system
         pass_filenames: false
         types: [python]
 
       - id: pytest
         name: pytest
-        entry: pytest -q
+        entry: python -m pytest -q
         language: system
         pass_filenames: false
         types: [python]

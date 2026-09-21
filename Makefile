@@ -17,6 +17,11 @@ install-locked:
 
 # Iki kilit: calisma zamani (Docker imaji) ve gelistirme (CI, yerel).
 # Bagimlilik degistiyse ikisini de tazele ve commit et.
+#
+# uv, dev bagimliliklarina yazili oldugu icin kilitli bir gelistirme
+# ortaminda hazir gelir - ve kilidi ureten aracin surumu de kilitte
+# sabittir. Kilit dosyasini ureten aracin kendisi sabitlenmezse,
+# "ayni girdiden ayni kilit cikar" garantisi yoktur.
 lock:
 	$(PY) -m uv pip compile pyproject.toml --python-version 3.12 \
 		--output-file requirements.lock
@@ -46,8 +51,13 @@ typecheck:
 check: lint typecheck cov
 
 # Yerel kapilari git kancasi olarak kur.
+#
+# DIKKAT: dagitim adi `pre-commit`, MODUL adi `pre_commit`. Araci
+# yorumlayicidan cagirirken modul adi gerekir; tire yazilirsa komut
+# "No module named pre-commit" ile duser. Ayni tuzak `uv` icin yok
+# (ikisi de `uv`), ama kural genel: `-m` her zaman modul adi ister.
 hooks:
-	$(PY) -m pre-commit install
+	$(PY) -m pre_commit install
 
 doctor:
 	$(PY) -m tlab.cli doctor
