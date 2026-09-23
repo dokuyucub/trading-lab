@@ -106,6 +106,11 @@ sürüme geri dönmek tek komutluk iştir. Ayrıntı için `CONTRIBUTING.md`.
   güvenli kapatma korunur ve uyarı hem log'a hem tur özetine yazılır (PR #2 B1).
 - Ayrılmış hesap varsayımı ve tur başına tek gönderimin gecikmesi açıklandı.
 
+### Paper bağlantı kontrolü
+- Yalnızca elle ve main dalında çalışan GitHub Actions kontrolü: paper
+  hesap, borsa saati ve IEX bar verisi. Sabit GET adresleri, zaman aşımı,
+  gizli değerleri/yanıtları göstermeyen çıktı; yerel HTTP sözleşme testleri.
+
 ## [0.3.0] - 2026-09-20
 
 Faz 2 — backtest motoru. Aynı strateji ve risk kodu geçmiş veri üzerinde
