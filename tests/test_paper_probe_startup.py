@@ -1,4 +1,4 @@
-"""Run before dev installation in CI: exercise the actual workflow entrypoint."""
+"""Exercise the workflow entrypoint with third-party site packages disabled."""
 
 import os
 import subprocess
@@ -11,7 +11,7 @@ class PaperProbeStartupTest(unittest.TestCase):
     def test_module_reaches_configuration_check_without_credentials(self) -> None:
         repo = Path(__file__).resolve().parents[1]
         result = subprocess.run(
-            [sys.executable, "-m", "tlab.data.paper_probe"],
+            [sys.executable, "-S", "-m", "tlab.paper_probe"],
             cwd=repo,
             env={
                 **os.environ,

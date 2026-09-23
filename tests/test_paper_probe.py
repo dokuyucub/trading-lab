@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from tlab.data import paper_probe
+from tlab import paper_probe
 
 NOW = datetime(2026, 9, 21, 14, tzinfo=UTC)
 

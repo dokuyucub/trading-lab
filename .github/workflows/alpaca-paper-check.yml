@@ -10,7 +10,7 @@ jobs:
   connection:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 3
     steps:
       - uses: actions/checkout@v4
         with:
@@ -18,10 +18,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install locked runtime dependencies
-        run: python -m pip install -r requirements.lock
       - name: Read paper account, clock and IEX data
         env:
           ALPACA_PAPER_API_KEY: ${{ secrets.ALPACA_PAPER_API_KEY }}
           ALPACA_PAPER_SECRET_KEY: ${{ secrets.ALPACA_PAPER_SECRET_KEY }}
-        run: PYTHONPATH=src python -m tlab.data.paper_probe
+        run: PYTHONPATH=src python -m tlab.paper_probe
