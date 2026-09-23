@@ -112,6 +112,7 @@ class ResearchSnapshot(Evidence):
     knowledge_provenance: KnowledgeProvenance
     status: ResearchStatus
     events: tuple[ResearchEvent, ...] = ()
+    """All visible revisions, including cancellations; use active_events for event presence."""
 
     @model_validator(mode="after")
     def validate_snapshot(self) -> Self:
@@ -146,6 +147,15 @@ class ResearchSnapshot(Evidence):
                 raise ValueError("only one revision per event is allowed")
             seen.add(event.event_id)
         return self
+
+    @property
+    def active_events(self) -> tuple[ResearchEvent, ...]:
+        """Non-cancelled events; cancellations remain in events for audit and identity.
+
+        AVAILABLE describes available evidence, not an active catalyst. Likewise,
+        has_verified_knowledge describes provenance, not whether an event is active.
+        """
+        return tuple(event for event in self.events if not event.cancelled)
 
     @property
     def snapshot_id(self) -> str:

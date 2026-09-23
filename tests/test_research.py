@@ -163,3 +163,22 @@ def test_dst_fold_orders_instants_not_wall_clock_labels() -> None:
     end = datetime(2026, 11, 1, 1, 15, tzinfo=zone, fold=1)
     value = event(event_start=start, event_end=end)
     assert value.event_end - value.event_start == timedelta(minutes=45)
+
+
+def test_cancelled_revisions_are_evidence_not_active_events() -> None:
+    cancelled = event(cancelled=True)
+    active = event(event_id="active-event")
+    value = snapshot(events=(cancelled, active))
+    assert value.active_events == (active,)
+    assert value.events == (cancelled, active)
+    cancellation_only = snapshot(events=(cancelled,))
+    assert cancellation_only.active_events == ()
+    assert cancellation_only.has_verified_knowledge
+    assert cancellation_only.snapshot_id != snapshot().snapshot_id
+
+
+def test_snapshot_v1_identity_is_a_persisted_contract() -> None:
+    # A deliberate schema/identity migration is required if this literal changes.
+    assert snapshot().snapshot_id == (
+        "research-v1:c6a83386c9f9ce05261629823cd33086f625691a9c885f902ce03a62567cc45a"
+    )
