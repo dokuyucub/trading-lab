@@ -12,6 +12,7 @@ sartidir. Kirilirsa, kapi ise yaramiyor demektir.
 from __future__ import annotations
 
 import random
+from typing import Any
 
 import pytest
 
@@ -23,8 +24,10 @@ from tlab.learning import (
     bootstrap_mean_ci,
     compare,
     decide_promotion,
+    required_iterations,
     required_trades,
 )
+from tlab.learning.evidence import DEFAULT_ITERATIONS
 
 FAST = PromotionPolicy(iterations=400)
 """Testlerde daha az bootstrap tekrari. Karari degistirmiyor,
@@ -148,9 +151,14 @@ def test_the_gate_reports_every_failing_check_not_just_the_first() -> None:
 def test_considering_many_candidates_tightens_the_gate() -> None:
     """Ne kadar cok adaya bakarsan, gurultude o kadar cok desen gorursun."""
     single = PromotionPolicy(iterations=400)
-    twenty = PromotionPolicy(iterations=400, candidates_considered=20)
+    # Yirmi aday, daha dar bir kuyruk demek - ve o kuyrugu olcmek icin
+    # cok daha fazla tekrar. Butce yetmezse politika kurulmuyor bile.
+    budget = required_iterations(1.0 - (1.0 - single.confidence) / 20)
+    twenty = PromotionPolicy(iterations=budget, candidates_considered=20)
+
     assert twenty.effective_confidence > single.effective_confidence
     assert single.effective_confidence == single.confidence
+    assert budget > single.iterations
 
 
 # --------------------------------------------------------------------------
@@ -194,7 +202,7 @@ def test_inconclusive_is_not_treated_as_proven() -> None:
 def test_empty_samples_are_insufficient_not_zero(values: list[float]) -> None:
     assert assess(values).verdict is Verdict.INSUFFICIENT_DATA
     assert compare(values, [1.0] * 200).verdict is Verdict.INSUFFICIENT_DATA
-    with pytest.raises(ValueError, match="bos orneklem"):
+    with pytest.raises(ValueError, match="en az iki gozlem"):
         bootstrap_mean_ci(values)
 
 
@@ -209,3 +217,83 @@ def test_report_is_readable() -> None:
     text = result.report()
     assert "PROMOTE" in text
     assert "R" in text
+
+
+# --------------------------------------------------------------------------
+# Kapinin kendi ayarlari da girdidir
+#
+# Asagidaki iki bolum Codex'in #15 incelemesindeki B1 ve B2 bulgulari.
+# Ikisi de yeniden uretildi ve ikisi de gercekti.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"min_trades": 0}, "min_trades"),
+        ({"min_trades": -1}, "min_trades"),
+        ({"candidates_considered": 0}, "candidates_considered"),
+        ({"iterations": 0}, "iterations"),
+        ({"confidence": 1.0}, "confidence"),
+        ({"min_edge_r": float("inf")}, "sonlu"),
+        ({"min_absolute_r": float("nan")}, "sonlu"),
+    ],
+)
+def test_a_nonsensical_policy_is_rejected_at_construction(
+    changes: dict[str, Any], message: str
+) -> None:
+    """Dogrulanmayan bir politika kapinin amacini tersine cevirebiliyordu.
+
+    `min_trades=0` kabul ediliyordu ve TEK BIR ISLEMLE terfi
+    verilebiliyordu - bu kapinin varlik sebebinin tam tersi.
+    """
+    with pytest.raises(ValueError, match=message):
+        PromotionPolicy(**changes)
+
+
+def test_a_single_observation_can_never_promote() -> None:
+    """Tek gozlemin yayilimi olculemez; kanit uretemez."""
+    result = decide_promotion([1.0], [0.0], FAST)
+    assert result.decision is not PromotionDecision.PROMOTE
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_values_are_rejected_not_silently_absorbed(bad: float) -> None:
+    """Tek bir NaN butun olcumu sessizce bozar.
+
+    Eskiden `assess` ham bir AttributeError ile duruyordu; sebebi
+    hata mesajindan anlasilmiyordu.
+    """
+    with pytest.raises(ValueError, match="sonlu"):
+        assess([bad] + [1.0] * 150, iterations=400)
+    with pytest.raises(ValueError, match="sonlu"):
+        compare([bad] + [1.0] * 150, [0.0] * 150, iterations=400)
+
+
+def test_a_confidence_the_bootstrap_cannot_measure_is_refused() -> None:
+    """Nominal guven seviyesi olcum cozunurlugunu asamaz.
+
+    Bu en sinsi bulguydu. 2.000 tekrarla 1.000 ve 1.000.000 aday
+    denendiginde raporlanan guven %99,995 ve %99,99999 oluyordu ama
+    ARALIK IKISINDE DE AYNIYDI: istenen kuyruk yuzdeligi 2.000
+    cekilisle orneklenemedigi icin indeks en uc degere sabitleniyordu.
+
+    Yani kapi, sahip olmadigi bir hassasiyeti raporluyordu. Simdi
+    kurulum aninda, sessizce degil, yuksek sesle duruyor.
+    """
+    with pytest.raises(ValueError, match="tekrar gerekir"):
+        PromotionPolicy(candidates_considered=1000, iterations=DEFAULT_ITERATIONS)
+
+    # Yeterli butce verilirse kabul ediliyor.
+    enough = required_iterations(1.0 - (1.0 - 0.95) / 1000)
+    assert PromotionPolicy(candidates_considered=1000, iterations=enough).iterations == enough
+
+
+def test_required_iterations_grows_as_the_tail_gets_thinner() -> None:
+    assert required_iterations(0.95) < required_iterations(0.99)
+    assert required_iterations(0.99) < required_iterations(0.9999)
+
+
+def test_bootstrap_refuses_a_budget_it_cannot_honour() -> None:
+    with pytest.raises(ValueError, match="olculemez"):
+        bootstrap_mean_ci([1.0, 2.0, 3.0], confidence=0.99, iterations=50)

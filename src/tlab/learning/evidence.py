@@ -10,6 +10,14 @@ Sonuc su: "beklenen deger pozitif" bir kanit degildir. Kanit, farkin
 orneklem gurultusuyle aciklanamayacak kadar buyuk olmasidir. Bu
 dosya o ayrimi yapar; kapilar da yalnizca buna bakar.
 
+BILINEN SINIR - bagimsizlik varsayimi: buradaki yeniden ornekleme
+islemleri BAGIMSIZ kabul eder. Gercek islemler degildir; ayni gunun
+islemleri ayni piyasa rejimini paylasir ve birlikte iyi ya da birlikte
+kotu gider. Bu durumda gercek belirsizlik olculenden BUYUKTUR, yani
+kapi olmasi gerektiginden biraz gevsek davranir. Journal'a baglanirken
+gun/blok bazli yeniden ornekleme gerekiyor; o zamana kadar buradaki
+araliklar iyimser taraftan okunmali.
+
 Neden bootstrap, neden t-testi degil: R katsayilarinin dagilimi
 simetrik degil. Asagi tarafi stop seviyesinde sinirli (kayiplar
 -1R civarinda kumelenir), yukari tarafi ise acik uclu. t-testi
@@ -24,6 +32,7 @@ import random
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from math import isfinite
 from statistics import NormalDist, fmean, pstdev
 
 DEFAULT_ITERATIONS = 2_000
@@ -36,9 +45,49 @@ yine de testlerin hizli kosmasi degerli.
 """
 
 
+MIN_TAIL_SAMPLES = 10
+"""Bir kuyruk yuzdeligini olcmek icin gereken asgari ornek sayisi.
+
+Bootstrap'in cozunurlugu 1/tekrar ile sinirli. %99,995 guven istemek,
+kuyrukta 0,00005'lik bir yuzdelik istemek demektir; 2.000 tekrarla bu
+yuzdelik ORNEKLENEMEZ ve indeks en uc degere sabitlenir. Sonuc sinsi:
+arac daha dar bir guven bildirir ama aslinda hala 2.000 cekilisin en
+ucundaki sayiyi gosterir - yani sahip olmadigi bir hassasiyeti
+raporlar.
+
+10 asgari bir taban, garanti degil: daha az kuyruk orneginde yuzdelik
+tahmini cok oynak olur.
+"""
+
+
 def _check_confidence(confidence: float) -> None:
     if not 0.0 < confidence < 1.0:
         raise ValueError(f"guven seviyesi (0, 1) araliginda olmali: {confidence}")
+
+
+def required_iterations(confidence: float) -> int:
+    """Bu guven seviyesini GERCEKTEN olcebilmek icin gereken tekrar sayisi."""
+    _check_confidence(confidence)
+    tail = (1.0 - confidence) / 2.0
+    return int(-(-MIN_TAIL_SAMPLES // tail))
+
+
+def _check_budget(confidence: float, iterations: int) -> None:
+    """Istenen guven seviyesi mevcut tekrar butcesiyle olculebiliyor mu."""
+    needed = required_iterations(confidence)
+    if iterations < needed:
+        raise ValueError(
+            f"%{confidence * 100:.5f} guven seviyesi {iterations} tekrarla olculemez; "
+            f"en az {needed} gerekir. Daha dar bir guven bildirmek, sahip olunmayan "
+            f"bir hassasiyeti raporlamak olur."
+        )
+
+
+def _check_finite(values: Sequence[float], label: str) -> None:
+    """NaN/sonsuz bir R degeri sessizce butun olcumu bozar."""
+    for index, value in enumerate(values):
+        if not isfinite(value):
+            raise ValueError(f"{label}[{index}] sonlu bir sayi degil: {value!r}")
 
 
 def _z_for(confidence: float) -> float:
@@ -119,11 +168,16 @@ def bootstrap_mean_ci(
     bir sonucun neden degistigini sormayi imkansiz hale getirir -
     kod mu degisti, strateji mi, yoksa zar mi belli olmaz.
     """
-    if not values:
-        raise ValueError("bos orneklem icin guven araligi hesaplanamaz")
+    if len(values) < 2:
+        raise ValueError(
+            "guven araligi icin en az iki gozlem gerekir; "
+            f"verilen: {len(values)} (tek gozlemin yayilimi olculemez)"
+        )
     _check_confidence(confidence)
     if iterations < 1:
         raise ValueError("bootstrap tekrar sayisi en az 1 olmali")
+    _check_budget(confidence, iterations)
+    _check_finite(values, "orneklem")
 
     # S311: kriptografik amac yok - istatistiksel yeniden orneklemede
     # TEKRARLANABILIRLIK gerekiyor, ongorulemezlik degil. Guvenli bir
@@ -176,8 +230,9 @@ def assess(
     istatistik degil; az islem cogu zaman tek bir piyasa rejimini
     gorur. Gurultuyu degil, gecmis ayin havasini ogrenmis oluruz.
     """
+    _check_finite(values, "orneklem")
     trades = len(values)
-    if trades == 0:
+    if trades < 2:
         return Evidence(
             trades=0,
             mean_r=0.0,
@@ -244,7 +299,9 @@ def compare(
     Iki gurultu kumesinden biri her zaman digerinden yuksek cikar.
     Sorulan soru, FARKIN guven araliginin esigi asip asmadigi.
     """
-    if not candidate or not baseline:
+    _check_finite(candidate, "aday")
+    _check_finite(baseline, "temel")
+    if len(candidate) < 2 or len(baseline) < 2:
         return Evidence(
             trades=min(len(candidate), len(baseline)),
             mean_r=0.0,
@@ -256,6 +313,7 @@ def compare(
             trades_needed=min_trades,
         )
     _check_confidence(confidence)
+    _check_budget(confidence, iterations)
 
     difference = fmean(candidate) - fmean(baseline)
     # Kucuk olan kume belirleyici: 1.000 islemlik bir temel, 12

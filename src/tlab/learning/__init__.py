@@ -14,6 +14,7 @@ from tlab.learning.evidence import (
     assess,
     bootstrap_mean_ci,
     compare,
+    required_iterations,
     required_trades,
 )
 from tlab.learning.promotion import (
@@ -33,5 +34,6 @@ __all__ = [
     "bootstrap_mean_ci",
     "compare",
     "decide_promotion",
+    "required_iterations",
     "required_trades",
 ]

@@ -18,8 +18,16 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from math import isfinite
 
-from tlab.learning.evidence import DEFAULT_ITERATIONS, Evidence, Verdict, assess, compare
+from tlab.learning.evidence import (
+    DEFAULT_ITERATIONS,
+    Evidence,
+    Verdict,
+    assess,
+    compare,
+    required_iterations,
+)
 
 
 class PromotionDecision(StrEnum):
@@ -107,6 +115,37 @@ class PromotionPolicy:
 
     iterations: int = DEFAULT_ITERATIONS
     seed: int = 0
+
+    def __post_init__(self) -> None:
+        """Anlamsiz bir politika sessizce kabul edilmemeli.
+
+        Dogrulanmadiginda `min_trades=0` kabul ediliyordu ve TEK BIR
+        ISLEMLE terfi verilebiliyordu - kapinin butun amacinin tersi.
+        Bir kapinin kendi ayarlari da girdidir ve dogrulanmasi gerekir.
+        """
+        if self.min_trades < 2:
+            raise ValueError(f"min_trades en az 2 olmali: {self.min_trades}")
+        if self.candidates_considered < 1:
+            raise ValueError(f"candidates_considered en az 1 olmali: {self.candidates_considered}")
+        if self.iterations < 1:
+            raise ValueError(f"iterations en az 1 olmali: {self.iterations}")
+        if not isfinite(self.min_edge_r) or not isfinite(self.min_absolute_r):
+            raise ValueError("esikler sonlu sayilar olmali")
+        if not 0.0 < self.confidence < 1.0:
+            raise ValueError(f"confidence (0, 1) araliginda olmali: {self.confidence}")
+
+        # Coklu karsilastirma duzeltmesi nominal guven seviyesini
+        # yukseltir, ama olcum cozunurlugunu YUKSELTMEZ. Ikisi ayrismaya
+        # basladiginda kapi sahip olmadigi bir hassasiyeti raporlar; bu
+        # yuzden burada, sessizce degil, kurulum aninda duruyor.
+        needed = required_iterations(self.effective_confidence)
+        if self.iterations < needed:
+            raise ValueError(
+                f"{self.candidates_considered} aday icin efektif guven "
+                f"%{self.effective_confidence * 100:.5f}; bunu olcmek icin en az "
+                f"{needed} tekrar gerekir (su an {self.iterations}). "
+                f"iterations degerini yukseltin ya da daha az aday sinayin."
+            )
 
     @property
     def effective_confidence(self) -> float:
