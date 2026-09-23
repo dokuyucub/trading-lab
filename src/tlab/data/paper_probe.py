@@ -42,8 +42,12 @@ def _get(host: str, path: str, headers: dict[str, str]) -> dict[str, Any]:
 
 
 def run(key: str, secret: str, now: datetime) -> int:
-    if not key.strip() or not secret.strip():
+    key, secret = key.strip(), secret.strip()
+    if not key or not secret:
         print("FAIL configuration: paper key and secret are required")
+        return 1
+    if any(not 33 <= ord(char) <= 126 for value in (key, secret) for char in value):
+        print("FAIL configuration: key/secret contains invalid characters")
         return 1
     headers = {"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret}
     if now.tzinfo is None or now.utcoffset() is None:

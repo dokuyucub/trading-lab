@@ -104,3 +104,23 @@ def test_network_error_hides_exception_details(
     monkeypatch.setattr(HTTPConnection, "request", fail)
     assert paper_probe.run("dummy-key", "dummy-secret", NOW) == 1
     assert "DO-NOT-PRINT" not in capsys.readouterr().out
+
+
+def test_pasted_credentials_are_trimmed(endpoint: dict[str, Any]) -> None:
+    assert paper_probe.run(" dummy-key\n", "\tdummy-secret\r\n", NOW) == 0
+    for _, _, headers in endpoint["requests"]:
+        assert headers["APCA-API-KEY-ID"] == "dummy-key"
+        assert headers["APCA-API-SECRET-KEY"] == "dummy-secret"
+
+
+@pytest.mark.parametrize("invalid", ["dummy\nkey", "dummy\x00key", "dummy key", "dummy\u0131key"])
+@pytest.mark.parametrize("field", ["key", "secret"])
+def test_invalid_credentials_fail_before_network(
+    endpoint: dict[str, Any], capsys: pytest.CaptureFixture[str], invalid: str, field: str
+) -> None:
+    key, secret = (invalid, "dummy-secret") if field == "key" else ("dummy-key", invalid)
+    assert paper_probe.run(key, secret, NOW) == 1
+    assert not endpoint["requests"]
+    output = capsys.readouterr().out
+    assert "FAIL configuration:" in output
+    assert invalid not in output
