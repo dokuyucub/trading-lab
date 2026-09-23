@@ -42,6 +42,13 @@ sürüme geri dönmek tek komutluk iştir. Ayrıntı için `CONTRIBUTING.md`.
   bakıyor ve docstring'i neyi kanıtlayıp neyi kanıtlamadığını açıkça yazıyor.
   İleriye bakmanın asıl kanıtı deterministik test olarak kalıyor.
 
+- **Paper bağlantı kontrolü API çağrısından önce pandas importunda çöküyordu.**
+  Prob `tlab/data/` altında durduğu için `-m` ile çalıştırmak paketin
+  `__init__` zincirini yüklüyor, o da pandas'ı çekiyordu; `LiveClock` importu
+  da pydantic'i zorunlu kılıyordu. Modül paketin köküne taşındı ve `tlab`
+  importları kaldırıldı — araç artık gerçekten hiçbir kurulum istemiyor.
+  CI her koşuda komutun bağımlılıksız başlayabildiğini çalıştırarak doğruluyor.
+
 ### Eklendi
 - **`requirements.lock` — bağımlılık kilidi.** Tüm sürümler tam olarak
   sabitlendi (Python 3.12 hedefiyle üretildi, CI'ın kullandığı sürüm). CI'ı
