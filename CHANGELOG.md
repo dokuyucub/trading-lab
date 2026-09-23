@@ -42,6 +42,11 @@ sürüme geri dönmek tek komutluk iştir. Ayrıntı için `CONTRIBUTING.md`.
   bakıyor ve docstring'i neyi kanıtlayıp neyi kanıtlamadığını açıkça yazıyor.
   İleriye bakmanın asıl kanıtı deterministik test olarak kalıyor.
 
+- **Paper bağlantı kontrolü API çağrısından önce pandas importunda çöküyordu.**
+  Claude'un düzeltmesi probu bağımsız `tlab.paper_probe` modülüne taşıdı.
+  Mimari kapısına ek olarak gerçek modül başlangıcı üçüncü taraf paketler
+  kapalıyken (`python -S`) sınanıyor.
+
 ### Eklendi
 - **`requirements.lock` — bağımlılık kilidi.** Tüm sürümler tam olarak
   sabitlendi (Python 3.12 hedefiyle üretildi, CI'ın kullandığı sürüm). CI'ı
@@ -112,6 +117,11 @@ sürüme geri dönmek tek komutluk iştir. Ayrıntı için `CONTRIBUTING.md`.
   isteğe bağlı; sağlayıcı ve risk davranışı sonraki PR'larda.
 - İlk paper bağlantısı için anahtarları paylaşmadan uygulanabilen rehber:
   `docs/alpaca-paper-check.md`.
+
+### Paper bağlantı kontrolü
+- Yalnızca elle ve main dalında çalışan GitHub Actions kontrolü: paper
+  hesap, borsa saati ve IEX bar verisi. Sabit GET adresleri, zaman aşımı,
+  gizli değerleri/yanıtları göstermeyen çıktı; yerel HTTP sözleşme testleri.
 
 ## [0.3.0] - 2026-09-20
 

@@ -111,6 +111,12 @@ Backtest'te zamanı biz kontrol ediyoruz; duvar saatine bakan kod geçmiş veri
 ile alıyordu. Canlıda fark edilmiyordu ama backtest kayıtları bugünün tarihini
 taşıyordu.
 
+Bağımsız `tlab.paper_probe` bağlantı tanısı karar yoluna dahil değildir.
+Yalnızca CLI girişinde `datetime.now(UTC)` kullanır; `run()` zamanı dışarıdan
+alır. Bu dar istisna, `tlab.core` paketinin pydantic bağımlılığını tanı
+aracına taşımamak içindir. Mimari testi ve `python -S` başlangıç testi
+bağımsızlığı denetler. Strateji/risk/engine için saat kuralı değişmez.
+
 ### 3.2 Katmanlar aşağı doğru bağımlıdır
 
 ```

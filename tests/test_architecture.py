@@ -15,6 +15,7 @@ from __future__ import annotations
 import ast
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -88,6 +89,10 @@ CLOCK_ALLOWLIST = {
     "core/clock.py",  # LiveClock'un kendisi
     "cli.py",  # komut satiri varsayilanlari
     "backtest/engine.py",  # default_range yardimcisi
+    # Baglanti tanisi; karar yolu degil. Clock enjekte etmek tlab.core'u
+    # - dolayisiyla pydantic'i - zorunlu kilar ve aracin bagimsizligini
+    # bozardi (bkz. test_the_connection_probe_needs_no_dependencies).
+    "paper_probe.py",
 }
 
 
@@ -674,3 +679,69 @@ def test_hook_entry_gate_catches_a_bare_tool_name() -> None:
     entries = system_hook_entries(config)
     assert entries == ["pytest -q"]
     assert not entries[0].startswith("python -m ")
+
+
+# --------------------------------------------------------------------------
+# Baglanti tanisinin bagimsizligi
+# --------------------------------------------------------------------------
+
+
+def test_the_connection_probe_needs_no_dependencies() -> None:
+    """Paper baglanti probu yalnizca standart kutuphaneyi ictegi.
+
+    Bu arac tam da baska seyler bozukken "anahtarlar ve ag saglam mi"
+    sorusunu cevaplayabilmek icin var. Kurulum gerektirseydi,
+    kurulumun bozuk oldugu durumda - yani en cok ihtiyac duyuldugu
+    anda - susardi.
+
+    Kural yazili olarak vardi ama DENETLENMIYORDU, ve ilk gercek
+    kosuda kirildi:
+
+        PYTHONPATH=src python -m tlab.data.paper_probe
+        ModuleNotFoundError: No module named 'pandas'
+
+    Modul `tlab/data/` altinda durdugu icin, `-m` ile calistirmak
+    `tlab.data` paketini ice aktariyor, o da onbellek modulu uzerinden
+    pandas'i cekiyordu. Probun kendi kodunda tek bir ucuncu taraf
+    importu yoktu - paketin konumu yetti.
+
+    Bu yuzden test yalnizca dosyanin importlarina degil, ICE AKTARMA
+    ZINCIRININ TAMAMINA bakiyor: modulun bulundugu paketlerin
+    __init__ dosyalari da sayiliyor.
+    """
+    probe = SRC / "paper_probe.py"
+    assert probe.exists(), (
+        "paper_probe.py tlab paketinin KOKUNDE olmali. Bir alt pakete "
+        "tasinirsa o paketin __init__ dosyasi da yuklenir ve arac "
+        "sessizce bagimlilik kazanir."
+    )
+
+    # Probun kendisi + kok paketin __init__'i: calistirmada yuklenen her sey.
+    chain = [probe, SRC / "__init__.py"]
+    third_party = sorted(
+        {
+            module.split(".")[0]
+            for path in chain
+            for module in imports_of(path)
+            if module.split(".")[0] not in sys.stdlib_module_names and not module.startswith("tlab")
+        }
+    )
+    assert not third_party, (
+        "Baglanti probu ucuncu taraf paket ictegi: "
+        + ", ".join(third_party)
+        + "\n  Bu arac kurulum olmadan calisabilmeli."
+    )
+
+
+def test_the_probe_does_not_import_the_tlab_package() -> None:
+    """Prob `tlab` icinden de bir sey ice aktarmamali.
+
+    `tlab.core` pydantic'e, `tlab.data` pandas'a bagli. Ikisi de
+    kurulum gerektirir; biri ice aktarildiginda bagimsizlik biter.
+    """
+    offenders = sorted(m for m in imports_of(SRC / "paper_probe.py") if m.startswith("tlab"))
+    assert not offenders, (
+        "Baglanti probu tlab paketinden ice aktariyor: "
+        + ", ".join(offenders)
+        + "\n  Bu importlar kurulum gerektiren bagimliliklari zincirle getirir."
+    )
