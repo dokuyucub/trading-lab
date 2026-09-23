@@ -3,18 +3,27 @@
 Standalone stdlib transport keeps this diagnostic independent of the trading
 engine. Endpoints are fixed, redirects are not followed, and only GET is used.
 This is a connectivity check, not an SDK/order lifecycle certification.
+
+BAGIMLILIK ISTEMEZ - ve bu tesaduf degil, tasarimin kendisi. Bu arac tam
+da baska seyler bozukken "anahtarlar ve ag saglam mi" sorusunu
+cevaplayabilmek icin var; kurulum gerektirseydi, kurulumun bozuk oldugu
+durumda susardi.
+
+Bu yuzden modul `tlab` paketinin KOKUNDE duruyor, `data/` altinda degil:
+`tlab.data` paketi ice aktarildiginda onbellek modulu uzerinden pandas'i
+da cekiyor. Bir kez yasandi - ilk gercek kosuda
+"ModuleNotFoundError: No module named 'pandas'" ile dustu.
+`tests/test_architecture.py` artik bu sinirin korundugunu denetliyor.
 """
 
 from __future__ import annotations
 
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from http.client import HTTPException, HTTPSConnection
 from typing import Any
 from urllib.parse import urlencode
-
-from tlab.core.clock import LiveClock
 
 
 class ProbeError(Exception):
@@ -94,7 +103,10 @@ def main() -> int:
     return run(
         os.environ.get("ALPACA_PAPER_API_KEY", ""),
         os.environ.get("ALPACA_PAPER_SECRET_KEY", ""),
-        LiveClock().now(),
+        # Duvar saati bilincli: burasi karar yolu degil, bir baglanti
+        # tanisi. Clock enjekte etmek `tlab.core`'u - dolayisiyla
+        # pydantic'i - zorunlu kilardi ve aracin bagimsizligini bozardi.
+        datetime.now(UTC),
     )
 
 
