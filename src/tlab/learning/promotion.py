@@ -66,17 +66,30 @@ class PromotionPolicy:
         %99 guven, esik 0,10 R  ->  yanlis terfi %0,  0,3R avantaji %51 yakalaniyor
 
     Tablonun soyledigi sey sezgiye aykiri: koruyan sey GUVEN SEVIYESI
-    DEGIL, POZITIF ESIK. Guveni %95'ten %99'a cikarmak yanlis terfiyi
-    azaltmadi, yalnizca gercek avantaji kacirma oranini ikiye katladi.
-    Esigi 0,10 R'ye cekmek ise yanlis terfiyi sifirladi.
+    DEGIL, POZITIF ESIK. Guveni %95'ten %99'a cikarmak olculen yanlis
+    terfi oranini dusurmedi, yalnizca gercek avantaji kacirma oranini
+    ikiye katladi. Esigi 0,10 R'ye cekince 100 denemenin hicbirinde
+    yanlis terfi GORULMEDI.
+
+    Bu ifadeye dikkat: "gorulmedi", "sifir" DEGIL. 100 denemede sifir
+    gozlem, gercek olasiligin sifir oldugunu gostermez - yalnizca kabaca
+    %3'un altinda oldugunu soyler. Bu ayrimi Codex isaret etti ve hakliydi
+    (#15 inceleme kaydi).
 
     Sebebi sade: sifir esikle, gurultunun 2 standart hatalik siradan
     bir dalgalanmasi yetiyor. 0,10 R esikle ayni sonucu uretmek icin
     gurultunun 3 standart hatayi asmasi gerekiyor ki bu cok daha nadir.
 
-    Pratik anlami da var: 0,10 R'nin altindaki bir avantaj zaten
-    komisyon ve kaymayla silinir. Kapiyi ayirt EDEBILDIGI degil,
-    ISE YARADIGI seviyeye kuruyoruz.
+    OLCUMUN SINIRLARI. Rakamlar SENTETIK bir senaryodan geliyor:
+    bagimsiz N(0,1) cekilisler, n=300. Gercek islemlerimiz bu degil.
+    R dagilimimiz daha dar ya da genis olabilir, ve ayni gunun islemleri
+    bagimsiz degil (bkz. evidence.py'deki bagimsizlik notu). Journal'dan
+    gercek R dagilimi cikinca bu esikler YENIDEN olculmeli.
+
+    0,10 R'nin maliyetleri karsiladigi da genel bir iddia DEGIL:
+    komisyon ve kaymanin R karsiligi, islem basina riske ve stratejiye
+    gore degisir. Esik, gercek maliyet verisi cikana kadar olculmus
+    senaryoya dayanan bir baslangic degeri olarak okunmali.
     """
 
     candidates_considered: int = 1
@@ -108,9 +121,13 @@ class PromotionPolicy:
 
     Kotu bir temeli birakmak dogru olabilir - ama yerine KANITI
     OLMAYAN bir sey koymak, hicbir sey yapmamaktan iyi degil. Kucuk
-    bir pozitif taban bu boslugu kapatiyor; 0,05 R, islem
-    maliyetlerinin altinda kalan bir avantajin zaten gercek
-    olmadigini soyluyor.
+    bir pozitif taban bu boslugu kapatti: ayni 100 denemede terfi
+    GORULMEDI ve gercek avantaji yakalama gucu degismedi.
+
+    min_edge_r'deki ayni uyari burada da gecerli: "gorulmedi" ile
+    "olamaz" ayni sey degil, ve 0,05 R'nin maliyetleri karsiladigi
+    genel bir iddia degil. Gercek R dagilimi ve gercek maliyet verisi
+    cikinca bu taban yeniden olculmeli.
     """
 
     iterations: int = DEFAULT_ITERATIONS
