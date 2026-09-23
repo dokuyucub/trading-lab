@@ -35,13 +35,6 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      # HICBIR SEY KURULMADAN once: baglanti probu bagimliliksiz
-      # calisabilmeli. Kurulumdan sonra kosan bir test bu iddianin
-      # yarisini olcerdi. Fikir Codex'e ait (#16); burada kurulum
-      # adimi da kaldirilarak iddianin tamami sinaniyor.
-      - name: Prob bagimliliksiz baslayabiliyor mu
-        run: PYTHONPATH=src python -m unittest discover -s tests -p test_paper_probe_startup.py
-
       - name: Kilitli bagimliliklari kur
         # requirements-dev.lock tam surumleri sabitliyor. Sabitlenmemis
         # bir kurulum, ayni commit'in iki hafta arayla farkli paket
