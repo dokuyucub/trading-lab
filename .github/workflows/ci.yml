@@ -35,6 +35,11 @@ jobs:
           python-version: "3.12"
           cache: pip
 
+      - name: Probe startup with runtime dependencies only
+        run: |
+          python -m pip install -r requirements.lock
+          PYTHONPATH=src python -m unittest discover -s tests -p test_paper_probe_startup.py
+
       - name: Kilitli bagimliliklari kur
         # requirements-dev.lock tam surumleri sabitliyor. Sabitlenmemis
         # bir kurulum, ayni commit'in iki hafta arayla farkli paket

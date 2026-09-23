@@ -38,6 +38,11 @@ Kapalı borsa bağlantı hatası değildir. 401 kimlik doğrulama; 403 yetki/fee
 veya ağ engeli; 429 hız sınırı; network/TLS/response error bağlantı veya yanıt
 sorunudur. Bunlar sabit tanı mesajlarıdır; uzak yanıt ve hata gövdeleri basılmaz.
 
-Kontrol en fazla üç dakika çalışır; her isteğin timeout'u 15 saniyedir.
+Önce `requirements.lock` içindeki çalışma zamanı bağımlılıkları kurulur.
+Probun HTTP taşıyıcısı standart kütüphaneyi kullanır; paket başlangıcı pandas
+ve pydantic gibi proje bağımlılıklarını da yükler. CI, geliştirme bağımlılıkları
+kurulmadan aynı komutun anahtarsız başlayabildiğini kontrol eder.
+
+Kurulum dahil kontrol en fazla beş dakika çalışır; her isteğin timeout'u 15 saniyedir.
 Yönlendirmeler takip edilmez. Yerel testler gerçek HTTP istemcisini yerel
 sunucuya karşı çalıştırır; gerçek Alpaca anahtarlarıyla test henüz yapılmadı.
