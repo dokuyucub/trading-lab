@@ -38,6 +38,11 @@ Kapalı borsa bağlantı hatası değildir. 401 kimlik doğrulama; 403 yetki/fee
 veya ağ engeli; 429 hız sınırı; network/TLS/response error bağlantı veya yanıt
 sorunudur. Bunlar sabit tanı mesajlarıdır; uzak yanıt ve hata gövdeleri basılmaz.
 
+Kontrol hiçbir paket kurmaz: prob yalnızca standart kütüphaneyi kullanır ve
+`tlab` paketinin kökünde durur, böylece proje bağımlılıkları yüklenmez. Bu
+bilinçli — araç tam da başka şeyler bozukken cevap verebilmeli. CI, komutun
+hiçbir kurulum yapılmadan başlayabildiğini her koşuda doğrular.
+
 Kontrol en fazla üç dakika çalışır; her isteğin timeout'u 15 saniyedir.
 Yönlendirmeler takip edilmez. Yerel testler gerçek HTTP istemcisini yerel
 sunucuya karşı çalıştırır; gerçek Alpaca anahtarlarıyla test henüz yapılmadı.

@@ -132,6 +132,10 @@ LAYER_RULES: dict[str, set[str]] = {
     "features": {"tlab.core", "tlab.errors"},
     "strategies": {"tlab.core", "tlab.features", "tlab.errors"},
     "risk": {"tlab.core", "tlab.features", "tlab.config", "tlab.errors"},
+    # Ogrenme katmani cevrimdisi calisir ve karar yolunu tanimaz.
+    # Stratejileri veya broker'i ice aktarmasi, olculen seyin olcen
+    # seye bagli hale gelmesi demek olurdu.
+    "learning": {"tlab.core", "tlab.errors"},
 }
 
 
