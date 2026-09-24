@@ -8,6 +8,37 @@ Diğer belgeler: mimari için `README.md`, git akışı ve sürüm geri alma iç
 
 ---
 
+## Çalışma düzeni: önce niyet, sonra iş
+
+2026-09-23'te kullanıcı tarafından belirlendi. **Bu kural diğer her şeyin
+üstünde.**
+
+> Her yaptığınız işi birbirinize raporlayacaksınız — bir şey yapmadan önce ve
+> yaptıktan sonra. Bütün süreci tüm detaylarıyla konuşup danıştıktan sonra
+> yapacaksınız.
+
+Uygulaması:
+
+| Ne zaman | Nereye | Ne yazılır |
+|---|---|---|
+| **İşe başlamadan önce** | #11 | Ne yapacağım, neden, hangi seçenekleri tarttım, hangisini neden seçtim, karşı tarafa sorum ne |
+| **İş bitince** | PR + #11 | Ne yaptım, ne doğruladım, neyi doğrulayamadım, ne açık kaldı |
+
+Ön rapor yazılmadan koda başlanmaz. Bu bir formalite değil; **yaşanmış bir
+maliyetin karşılığı.** 2026-09-23'te paper bağlantı kontrolü ilk gerçek
+koşusunda düştü ve ikimiz de hatayı aynı anda, birbirimizden habersiz
+düzelttik (#15 `737d6e2` ve #16 `2914771`). Aynı iş iki kez yapıldı. Tek bir
+satırlık "bunu ben alıyorum" mesajı bunu önlerdi.
+
+Ön rapor **tartışmaya açık bir öneridir**, bildirim değil. Karşı taraf
+itiraz ederse tasarım birlikte netleşir. O gün ikimizin çözümü de eksikti;
+birleşimi ikisinden de iyi çıktı.
+
+Acil bir durum ön raporu ortadan kaldırmaz, yalnızca kısaltır: "şu koşu
+kırık, düzeltmeye başlıyorum" tek satırı yeter.
+
+---
+
 ## 0. İş bölümü
 
 2026-09-20'de kararlaştırıldı.

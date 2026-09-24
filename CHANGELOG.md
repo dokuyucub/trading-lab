@@ -43,9 +43,13 @@ sürüme geri dönmek tek komutluk iştir. Ayrıntı için `CONTRIBUTING.md`.
   İleriye bakmanın asıl kanıtı deterministik test olarak kalıyor.
 
 - **Paper bağlantı kontrolü API çağrısından önce pandas importunda çöküyordu.**
-  Claude'un düzeltmesi probu bağımsız `tlab.paper_probe` modülüne taşıdı.
-  Mimari kapısına ek olarak gerçek modül başlangıcı üçüncü taraf paketler
-  kapalıyken (`python -S`) sınanıyor.
+  Prob `tlab/data/` altında durduğu için `-m` ile çalıştırmak paketin
+  `__init__` zincirini yüklüyor, o da pandas'ı çekiyordu; `LiveClock` importu
+  da pydantic'i zorunlu kılıyordu. Modül paketin köküne taşındı ve `tlab`
+  importları kaldırıldı — araç artık gerçekten hiçbir kurulum istemiyor. Bu
+  önemli, çünkü tanı aracı tam da başka şeyler bozukken cevap verebilmeli.
+  Mimari kapısına ek olarak gerçek modül başlangıcı, üçüncü taraf paketler
+  kapalıyken (`python -S`) alt süreçte sınanıyor.
 
 ### Eklendi
 - **`requirements.lock` — bağımlılık kilidi.** Tüm sürümler tam olarak
