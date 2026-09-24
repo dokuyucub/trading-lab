@@ -148,6 +148,27 @@ alır. Bu dar istisna, `tlab.core` paketinin pydantic bağımlılığını tanı
 aracına taşımamak içindir. Mimari testi ve `python -S` başlangıç testi
 bağımsızlığı denetler. Strateji/risk/engine için saat kuralı değişmez.
 
+Aynı dar istisna `tlab.sdk_probe` için de geçerli. İkisi **farklı sorular**
+sorar ve ikisi de gereklidir:
+
+| | `paper_probe` | `sdk_probe` |
+|---|---|---|
+| Soru | Anahtarlar geçerli mi, ağ açık mı | **Bizim kodumuz** Alpaca ile konuşuyor mu |
+| Yol | Elle kurulmuş URL, stdlib | Gerçek `AlpacaBroker` / `AlpacaMarketData` |
+| Kurulum | Yok | `requirements.lock` |
+
+Birincisi "bizde mi onlarda mı" sorusunu, kurulum bozuk olsa bile tek başına
+cevaplayabilmeli — bu yüzden bağımsızlığı korunur. İkincisi gerçek SDK'yı
+çalıştırmak zorunda, çünkü yakalaması gereken hata sınıfı (`TimeFrameUnit`
+çevrim hataları gibi) yalnızca orada görünür.
+
+**Her ikisi de hiçbir sayısal hesap değeri basmaz.** `doctor` ve `account`
+komutları özsermaye basar ve bu yerel kullanımda doğrudur; depo herkese açık
+olduğu için genel bir koşuya taşınamazlar. Bu kural kaynak incelemesiyle
+değil, `tests/test_sdk_probe.py` içinde sunucu yanıtlarına konan sahte sır
+işaretleriyle denetlenir: tüm çıktı akışları yakalanır ve hiçbir işaretin
+geçmediği doğrulanır — başarı ve hata yollarının her ikisinde de.
+
 ### 3.2 Katmanlar aşağı doğru bağımlıdır
 
 ```
