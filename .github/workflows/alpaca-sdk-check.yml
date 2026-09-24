@@ -1,0 +1,53 @@
+# Bu kontrol ile `alpaca-paper-check.yml` FARKLI sorular soruyor.
+#
+#   paper-check : "anahtarlar gecerli mi, ag acik mi"  -> stdlib, kurulum yok
+#   sdk-check   : "BIZIM KODUMUZ Alpaca ile konusuyor mu" -> gercek adaptorler
+#
+# Ikincisi kurulum gerektiriyor cunku gercek SDK'yi calistiriyor. Bu,
+# paper-check'in bagimsizligini bozmaz: o hala hicbir sey kurmadan
+# kosuyor ve "bizde mi onlarda mi" sorusunu tek basina cevaplayabiliyor.
+name: Alpaca SDK read-path check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sdk:
+    # Yalnizca main: baska bir dalda degistirilmis kod anahtarlara
+    # erisemesin.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Sinir tahmin degil, hesap:
+    #   istek basina en kotu durum  = 5 sn baglanti + 15 sn okuma = 20 sn
+    #   asama basina (1 tekrar + 3 sn bekleme)        = 43 sn
+    #   dort asama                                    = ~3 dk
+    #   kilitli kurulum                               = ~1 dk
+    # Zaman asimlari SDK'nin kendisinde YOK; prob bunlari
+    # `sdk_compat.bound_transport` ile koyuyor ve bir test uygulandigini
+    # dogruluyor. Buradaki sinir yalnizca son dis kapi.
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # CI'da test edilen surumlerin aynisi. Farkli bir surum,
+      # dogruladigimiz seyin uretimde calisan sey olmadigi anlamina
+      # gelirdi.
+      - name: Kilitli calisma zamani bagimliliklarini kur
+        run: |
+          python -m pip install -r requirements.lock
+          python -m pip check
+      # Secret'lar YALNIZCA bu adimda. Prob hicbir sayisal hesap
+      # degeri, uzak yanit govdesi veya istisna metni basmaz; bunu
+      # tests/test_sdk_probe.py sahte sir isaretleriyle dogruluyor.
+      - name: Hesap, borsa saati ve bar verisini gercek SDK ile oku
+        env:
+          ALPACA_PAPER_API_KEY: ${{ secrets.ALPACA_PAPER_API_KEY }}
+          ALPACA_PAPER_SECRET_KEY: ${{ secrets.ALPACA_PAPER_SECRET_KEY }}
+        run: PYTHONPATH=src python -m tlab.sdk_probe

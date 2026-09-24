@@ -61,3 +61,109 @@ def sdk_bool(source: Any, name: str, *, default: bool = False) -> bool:
     if isinstance(raw, str):
         return raw.strip().lower() in {"true", "1", "yes"}
     return bool(raw)
+
+
+# ---------------------------------------------------------------------------
+# Tasima katmani hatalarinin siniflandirilmasi
+#
+# Burada durmasinin sebebi dosyanin kendi gerekcesi: SDK'nin sisteme
+# sizdigi tek nokta burasi olsun. Hata TIPLERI de SDK bilgisidir.
+# ---------------------------------------------------------------------------
+
+MAX_CAUSE_DEPTH = 20
+"""Istisna zincirinde en fazla bu kadar derine inilir.
+
+`__cause__` zincirleri dongu olusturabilir (elle kurulmus zincirlerde
+gorulur). Sinir olmadan tani araci sonsuz donguye girerdi - hata
+ayiklamak icin yazilmis bir aracin en kotu davranisi.
+"""
+
+
+def _chain(error: BaseException) -> list[BaseException]:
+    """Istisna ve onu doguran butun istisnalar, donguye karsi korumali."""
+    found: list[BaseException] = []
+    seen: set[int] = set()
+    current: BaseException | None = error
+    while current is not None and len(found) < MAX_CAUSE_DEPTH:
+        if id(current) in seen:
+            break
+        seen.add(id(current))
+        found.append(current)
+        current = current.__cause__ or current.__context__
+    return found
+
+
+def http_status_of(error: BaseException) -> int | None:
+    """Zincirdeki ilk HTTP durum kodu.
+
+    alpaca-py `APIError.status_code` alanini zaten sunuyor ve
+    adaptorlerimiz `raise ... from exc` ile zinciri koruyor. Yani
+    kod METINDE aranmak zorunda degil - ki aranmasi hataliydi.
+    """
+    from alpaca.common.exceptions import APIError
+
+    for item in _chain(error):
+        if isinstance(item, APIError):
+            status = item.status_code
+            if isinstance(status, int):
+                return status
+        response = getattr(item, "response", None)
+        status = getattr(response, "status_code", None)
+        if isinstance(status, int):
+            return status
+    return None
+
+
+def is_network_error(error: BaseException) -> bool:
+    """Zincirde ag/TLS/zaman asimi hatasi var mi - TIPE bakarak."""
+    import requests
+
+    network_types = (
+        requests.exceptions.Timeout,
+        requests.exceptions.ConnectionError,
+        requests.exceptions.SSLError,
+    )
+    return any(isinstance(item, network_types) for item in _chain(error))
+
+
+CONNECT_TIMEOUT_SECONDS = 5.0
+READ_TIMEOUT_SECONDS = 15.0
+
+
+def bound_transport(client: Any, *, retries: int = 1) -> None:
+    """Istemcinin HTTP cagrilarina SONLU bir zaman asimi ve retry butcesi koyar.
+
+    Kilitli alpaca-py surumunde `RESTClient._one_request`,
+    `self._session.request(method, url, **opts)` cagriyor ve `opts`
+    icinde timeout YOK. Yani sessiz bir sunucu karsisinda istek
+    suresiz asili kalir.
+
+    Bunun bir tani araci icin bedeli buyuk: ilk asama asili kalirsa
+    digerleri hic calismaz ve "her asama ayri sonuc verir" ozelligi -
+    aracin butun degeri - kaybolur. Workflow'un kendi sure siniri
+    yalnizca dis kapidir; oraya gelindiginde hicbir satir basilmamis
+    olur.
+
+    Oturumun `request` metodu sariliyor: cagiran timeout vermediyse
+    varsayilan konuyor, verdiyse dokunulmuyor. Sarmalayici
+    idempotent - iki kez uygulanmasi ikinci bir katman eklemez.
+    """
+    session = getattr(client, "_session", None)
+    if session is None:  # pragma: no cover - surum degisikligine karsi
+        return
+
+    if not getattr(session.request, "_tlab_bounded", False):
+        original = session.request
+
+        def request(method: str, url: str, **kwargs: Any) -> Any:
+            kwargs.setdefault("timeout", (CONNECT_TIMEOUT_SECONDS, READ_TIMEOUT_SECONDS))
+            return original(method, url, **kwargs)
+
+        request._tlab_bounded = True  # type: ignore[attr-defined]
+        session.request = request
+
+    # Kalici 429 karsisinda varsayilan 3 deneme x 3 saniye bekleme,
+    # dort asamada toplam butceyi gereksiz buyutuyor. Tani icin bir
+    # tekrar yeterli: sorunun gecici mi kalici mi oldugunu soyler.
+    if hasattr(client, "_retry"):
+        client._retry = retries

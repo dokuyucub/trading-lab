@@ -93,6 +93,10 @@ CLOCK_ALLOWLIST = {
     # - dolayisiyla pydantic'i - zorunlu kilar ve aracin bagimsizligini
     # bozardi (bkz. test_the_connection_probe_needs_no_dependencies).
     "paper_probe.py",
+    # Ayni dar istisna: SDK okuma yolu tanisi da karar yolu degil.
+    # `run()` zamani disaridan alir ve testler enjekte eder; yalnizca
+    # CLI girisi duvar saatine bakar.
+    "sdk_probe.py",
 }
 
 
