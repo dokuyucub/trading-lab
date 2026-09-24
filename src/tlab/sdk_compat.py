@@ -127,7 +127,19 @@ def is_network_error(error: BaseException) -> bool:
 
 
 CONNECT_TIMEOUT_SECONDS = 5.0
+
 READ_TIMEOUT_SECONDS = 15.0
+"""Okuma zaman asimi - DIKKAT: toplam sure DEGIL.
+
+`requests` icin bu deger, iki veri parcasi arasinda beklenecek en uzun
+suredir. Damla damla yanit gonderen bir sunucu, her aralikta sinirin
+altinda kalarak toplamda cok daha uzun surebilir.
+
+Yani bu sinir "istek en fazla 15 saniye surer" demiyor; "sunucu 15
+saniye boyunca hic veri gondermezse vazgecilir" diyor. Sonsuz asili
+kalmayi onler, sureyi garanti etmez. Gercek ust sinir workflow'un
+kendi zaman asimidir.
+"""
 
 
 def bound_transport(client: Any, *, retries: int = 1) -> None:
