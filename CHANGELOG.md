@@ -115,6 +115,13 @@ sürüme geri dönmek tek komutluk iştir. Ayrıntı için `CONTRIBUTING.md`.
   güvenli kapatma korunur ve uyarı hem log'a hem tur özetine yazılır (PR #2 B1).
 - Ayrılmış hesap varsayımı ve tur başına tek gönderimin gecikmesi açıklandı.
 
+### Research sözleşmesi
+- Olay/revizyon bilgisi, as-of doğrulaması, veri durumu ve içerik kimliği
+  taşıyan değişmez ortak research tipleri eklendi. Context research alanı
+  isteğe bağlı; sağlayıcı ve risk davranışı sonraki PR'larda.
+- İlk paper bağlantısı için anahtarları paylaşmadan uygulanabilen rehber:
+  `docs/alpaca-paper-check.md`.
+
 ### Paper bağlantı kontrolü
 - Yalnızca elle ve main dalında çalışan GitHub Actions kontrolü: paper
   hesap, borsa saati ve IEX bar verisi. Sabit GET adresleri, zaman aşımı,

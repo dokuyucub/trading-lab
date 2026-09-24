@@ -193,7 +193,19 @@ def test_core_has_no_third_party_dependency_beyond_pydantic() -> None:
     core/ tum sistemin tabani; buraya giren her bagimlilik her yere
     bulasir.
     """
-    allowed_roots = {"tlab", "pydantic", "typing", "datetime", "enum", "uuid", "__future__"}
+    # Research content IDs and calendar-day boundaries use only these stdlib modules.
+    allowed_roots = {
+        "tlab",
+        "pydantic",
+        "typing",
+        "datetime",
+        "enum",
+        "uuid",
+        "__future__",
+        "hashlib",
+        "json",
+        "zoneinfo",
+    }
     offenders = [
         f"{path.relative_to(SRC)}: {module}"
         for path in python_files("core")
