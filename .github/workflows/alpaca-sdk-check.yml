@@ -20,9 +20,15 @@ jobs:
     # erisemesin.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    # Kurulum + uc SDK cagrisi; SDK'nin kendi yeniden deneme ve
-    # zaman asimi toplami bu sinira sigacak sekilde secildi.
-    timeout-minutes: 8
+    # Sinir tahmin degil, hesap:
+    #   istek basina en kotu durum  = 5 sn baglanti + 15 sn okuma = 20 sn
+    #   asama basina (1 tekrar + 3 sn bekleme)        = 43 sn
+    #   dort asama                                    = ~3 dk
+    #   kilitli kurulum                               = ~1 dk
+    # Zaman asimlari SDK'nin kendisinde YOK; prob bunlari
+    # `sdk_compat.bound_transport` ile koyuyor ve bir test uygulandigini
+    # dogruluyor. Buradaki sinir yalnizca son dis kapi.
+    timeout-minutes: 6
     steps:
       - uses: actions/checkout@v4
         with:

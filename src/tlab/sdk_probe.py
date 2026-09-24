@@ -38,6 +38,12 @@ PROBE_SYMBOL = "SPY"
 LOOKBACK_DAYS = 10
 """Gunluk barda 10 takvim gunu en az bes seans icerir - tatil haftasinda bile."""
 
+MINUTE_LOOKBACK_DAYS = 5
+"""Dakikalik barda bes takvim gunu en az bir seans icerir.
+
+Uzun tatillerde bile bes gun icinde bir islem gunu bulunur; daha
+genis bir pencere gereksiz yere buyuk yanit indirtir."""
+
 
 @dataclass(frozen=True)
 class StageResult:
@@ -56,24 +62,47 @@ class StageResult:
         return f"OK {self.label}" if self.ok else f"FAIL {self.label}: {self.detail}"
 
 
-def classify(error: Exception) -> str:
-    """Hatayi SABIT bir tani metnine cevirir.
+def classify(error: BaseException) -> str:
+    """Hatayi SABIT bir tani metnine cevirir - METNE DEGIL TIPE bakarak.
 
-    Istisna metni asla disari verilmez. Alpaca'nin hata govdeleri
-    istegin kendisini yankilayabiliyor ve orada anahtar bulunabilir;
-    ayrica hesap kimligi tasiyabiliyorlar.
+    Ilk surum `str(error)` icinde "401" arıyordu. Iki ayri sekilde
+    yaniltti ve ikisini de Codex yeniden uretti (#18 B1):
 
-    Siniflandirma kaba ama ISE YARAR: bu dort durum dort farkli
-    mudahale gerektirir - anahtar yenile, plan/feed degistir, bekle,
-    kodu duzelt.
+      DataError("invalid OHLC value 401.25")
+          -> "kimlik dogrulama reddi" saniliyordu. Fiyatin icinde
+             gecen bir sayi, tani araci icin kimlik hatasi demekti.
+
+      requests.ReadTimeout("dummy")
+          -> "beklenmeyen hata". Metinde ag kelimesi gecmiyor, ama
+             tip bunu zaten soyluyor.
+
+      BrokerError('{"message":"simulated failure"}')  (HTTP 403'ten)
+          -> durum kodu METINDE olmak zorunda degil; sarmalayici
+             yalnizca govdeyi tasiyor.
+
+    Artik durum kodu `APIError.status_code` alanindan, ag hatalari
+    `requests` istisna TIPLERINDEN okunuyor. Adaptorler
+    `raise ... from exc` kullandigi icin zincir korunuyor.
+
+    Istisna metni yine hicbir kosulda disari verilmez.
     """
-    text = str(error).lower()
-    if "401" in text or "unauthorized" in text or "forbidden" in text or "403" in text:
-        return "kimlik dogrulama veya yetki reddi (401/403)"
-    if "429" in text or "rate limit" in text or "too many requests" in text:
+    from tlab.sdk_compat import http_status_of, is_network_error
+
+    # Sira onemli: ag hatasi bir durum kodu URETMEZ, o yuzden once
+    # durum koduna bakilir ve yoksa tasima katmanina inilir.
+    status = http_status_of(error)
+    if status in (401, 403):
+        return f"kimlik dogrulama veya yetki reddi ({status})"
+    if status == 429:
         return "hiz siniri (429)"
-    if any(word in text for word in ("timeout", "connection", "network", "dns", "ssl", "tls")):
-        return "ag veya TLS hatasi"
+    if status is not None and 500 <= status < 600:
+        return f"sunucu hatasi ({status})"
+    if status is not None and 400 <= status < 500:
+        return f"istek reddedildi ({status})"
+
+    if is_network_error(error):
+        return "ag, TLS veya zaman asimi hatasi"
+
     if isinstance(error, TradingLabError):
         return "SDK yanitini bizim tipimize cevirirken hata"
     return "beklenmeyen hata"
@@ -122,7 +151,13 @@ def check_clock(broker: object, now: datetime) -> StageResult:
     return StageResult("borsa saati", ok=True)
 
 
-def check_bars(market: object, now: datetime) -> StageResult:
+def check_bars(
+    market: object,
+    now: datetime,
+    timeframe: Timeframe,
+    lookback: timedelta,
+    label: str,
+) -> StageResult:
     """Asil kiymetli asama: SDK cevrimi.
 
     Bar donmesi yetmez - bizim `Bar` tipimize DONUSMESI gerekiyor.
@@ -136,24 +171,24 @@ def check_bars(market: object, now: datetime) -> StageResult:
     try:
         bars = market.bars(  # type: ignore[attr-defined]
             PROBE_SYMBOL,
-            Timeframe.D1,
-            start=now - timedelta(days=LOOKBACK_DAYS),
+            timeframe,
+            start=now - lookback,
             end=None,
         )
     except Exception as exc:
-        return StageResult("bar verisi", ok=False, detail=classify(exc))
+        return StageResult(label, ok=False, detail=classify(exc))
 
     if not bars:
         # Bos veri bir HATA DEGIL, ayri bir durum: feed, plan veya
         # tarih araligi sorunu olabilir. Ag/kimlik hatasiyla
         # karistirmamak icin ayri metin.
-        return StageResult("bar verisi", ok=False, detail="bar donmedi (feed, plan veya aralik)")
+        return StageResult(label, ok=False, detail="bar donmedi (feed, plan veya aralik)")
     # Burada ayrica alan dogrulamasi YAPILMIYOR ve bu bilincli: `Bar`
     # tipi zaten zaman dilimi ve OHLC tutarliligini kendi kuruluşunda
     # zorunlu kiliyor. Bozuk bir yanit buraya saglam varamaz - liste
     # dolu donduyse cevrim gercekten calismistir. Burada tekrar kontrol
     # etmek, hicbir zaman kirmiziya donmeyecek olu bir dal olurdu.
-    return StageResult("bar verisi", ok=True)
+    return StageResult(label, ok=True)
 
 
 def run(
@@ -188,6 +223,7 @@ def run(
 
     from tlab.data.market import AlpacaMarketData
     from tlab.execution.alpaca_broker import AlpacaBroker
+    from tlab.sdk_compat import bound_transport
 
     try:
         # paper=True SABIT. Bu arac canli hesaba hicbir kosulda
@@ -195,11 +231,27 @@ def run(
         # yanlis gecirilmesi canli hesaba baglanmak demek olurdu.
         broker = AlpacaBroker(key, secret, paper=True, base_url=base_url)
         market = AlpacaMarketData(key, secret, feed=feed, base_url=base_url)
+        # SDK kendi istegine zaman asimi koymuyor; sessiz bir sunucu
+        # ilk asamayi suresiz asar ve digerleri hic kosmaz.
+        for client in (broker._client, market._client):
+            bound_transport(client)
     except Exception as exc:
         print(f"FAIL istemci kurulumu: {classify(exc)}")
         return 1
 
-    results = [check_account(broker), check_clock(broker, now), check_bars(market, now)]
+    results = [
+        check_account(broker),
+        check_clock(broker, now),
+        # IKI zaman dilimi ayri ayri: eslemeler ayri sozluk girdileri ve
+        # biri bozulurken digeri calisabilir. Nitekim hic calismayan
+        # esleme DAKIKALIK olandi ("Minute", gecerli deger "Min") ve
+        # yalnizca gunluk bakan bir prob onu goremezdi.
+        check_bars(market, now, Timeframe.D1, timedelta(days=LOOKBACK_DAYS), "gunluk bar"),
+        # Bot gun ici islem yapiyor; asil kullandigi periyot bu.
+        check_bars(
+            market, now, Timeframe.M1, timedelta(days=MINUTE_LOOKBACK_DAYS), "dakikalik bar"
+        ),
+    ]
     for result in results:
         print(result.line())
     return int(any(not result.ok for result in results))

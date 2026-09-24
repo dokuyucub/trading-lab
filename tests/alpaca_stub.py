@@ -246,6 +246,17 @@ class StubState:
     def __init__(self) -> None:
         self.requests: list[tuple[str, str, dict[str, Any] | None]] = []
         self.fail_next: int | None = None
+        self.fail_paths: dict[str, dict[str, Any]] = {}
+        """Yol bazli, SURELI ya da KALICI hata kurallari.
+
+        `fail_next` tek atimlik ve govdesi sabit. Bir tani aracini
+        sinamak icin yetmiyor: SDK 429'da yeniden deniyor, ikinci
+        istek basariya gecip test sessizce anlamsizlasiyor. Ayrica
+        sabit govde, sizinti testine aranacak malzeme birakmiyor.
+
+        Bicim:  {yol: {"status": int, "times": int | None, "body": dict}}
+        `times=None` kalici demek.
+        """
         self.account: dict[str, Any] = dict(ACCOUNT)
         self.positions: list[dict[str, Any]] = [dict(p) for p in POSITIONS]
         self.clock: dict[str, Any] = dict(CLOCK)
@@ -253,6 +264,25 @@ class StubState:
         self.all_orders: list[dict[str, Any]] = [FILLED_BRACKET]
         self.bars: dict[str, Any] = BARS
         self.quotes: dict[str, Any] = QUOTES
+
+    def fail(
+        self,
+        path: str,
+        status: int,
+        *,
+        times: int | None = None,
+        body: dict[str, Any] | None = None,
+    ) -> None:
+        """Bir yolu belirtilen durum koduyla dusur.
+
+        `times=None` kalici; `times=2` iki istek dusup sonrakiler
+        normale doner (gecici hatayi taklit eder).
+        """
+        self.fail_paths[path] = {
+            "status": status,
+            "times": times,
+            "body": body if body is not None else {"message": "simulated failure"},
+        }
 
     def record(self, method: str, path: str, body: dict[str, Any] | None) -> None:
         self.requests.append((method, path, body))
@@ -289,12 +319,19 @@ def _handler(state: StubState) -> type[BaseHTTPRequestHandler]:
 
         def _route(self, method: str, body: dict[str, Any] | None) -> None:
             state.record(method, self.path, body)
+            path = urlparse(self.path).path
+            rule = state.fail_paths.get(path)
+            if rule is not None and (rule["times"] is None or rule["times"] > 0):
+                if rule["times"] is not None:
+                    rule["times"] -= 1
+                self._send(rule.get("body", {"message": "simulated failure"}), rule["status"])
+                return
+
             if state.fail_next is not None:
                 status, state.fail_next = state.fail_next, None
                 self._send({"message": "simulated failure"}, status)
                 return
 
-            path = urlparse(self.path).path
             query = parse_qs(urlparse(self.path).query)
 
             if path == "/v2/account":
