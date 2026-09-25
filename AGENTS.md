@@ -351,14 +351,47 @@ Bir işi yarım bırakıyorsan PR'ı **taslak** olarak aç ve açıklamasına ş
 nerede kaldın, sıradaki adım ne, hangi varsayımı test etmedin. Yarım kalmış işin
 en pahalı tarafı kodun eksikliği değil, bağlamın kaybolmasıdır.
 
-## 7. Doğrulanmamış olan
+## 7. Doğrulanan ve doğrulanmayan
 
-Sistem **hiç gerçek Alpaca hesabına bağlanmadı**. Tüm testler çevrimdışı.
-Sözleşme testleri (`test_alpaca_contract.py`) gerçek `alpaca-py` istemcisini
-yerel bir sahte sunucuya karşı çalıştırıyor — yani Alpaca'nın kapısına kadar
-her şey doğrulandı, Alpaca'nın kendi davranışı doğrulanmadı.
+Bu bölüm iddiaları **kapsamıyla** tutar. "Bağlandı" tek başına bir şey
+söylemez; hangi yolun, neyi, hangi koşuda doğruladığı söyler.
 
-İlk gerçek bağlantıyı kuran kişi `tlab doctor` çıktısını bu dosyaya not düşsün.
+### Doğrulanan — 2026-09-23 ve 2026-09-24
+
+| Ne | Kanıt | Kapsam |
+|---|---|---|
+| Anahtarlar geçerli, ağ açık | Koşu `35809584609`, iş `107017907456` | Elle kurulmuş GET; **SDK'ya dokunmaz** |
+| **Bizim kodumuz Alpaca ile konuşuyor** | Koşu `36031659146`, iş `107741630086` | Gerçek `AlpacaBroker` + `AlpacaMarketData` |
+
+İkinci koşunun çıktısı, dört aşama da ayrı ayrı:
+
+```
+OK hesap          # hesap okundu ve is_healthy dogrulandi
+OK borsa saati    # takvim cozumlendi, degerler tutarli
+OK gunluk bar     # D1 eslemesi calisiyor, Bar tipine cevriliyor
+OK dakikalik bar  # M1 eslemesi calisiyor - hic calismayan esleme BUYDU
+```
+
+Dakikalık aşamanın ayrı olması tesadüf değil: `_TIMEFRAME_ARGS` içinde
+`"Minute"` yazdığı için `tlab fetch` hiç çalışmıyordu ve 272 test yeşildi.
+Yalnızca günlük bara bakan bir prob o hatayı yine kaçırırdı.
+
+Koşu kayıtları ayrıca sızdırmama kuralını **üretimde** doğruladı: log'da
+dört satırdan başka hiçbir şey yok — bakiye, hesap kimliği, yanıt gövdesi
+hiçbiri geçmedi.
+
+### Hâlâ doğrulanmayan
+
+- **Emir yaşam döngüsü.** Hiç emir gönderilmedi. Dolum, kayma, kısmi dolum,
+  iptal, bracket bacaklarının davranışı — hiçbiri gerçek ortamda görülmedi.
+- **Gözetimsiz seans.** Sistem bir kez bile canlı çalışmadı. Yeniden
+  başlatma/mutabakat, çift emir engeli, gün sonu kapatma gerçek ortamda
+  sınanmadı.
+- **Stratejinin kârlılığı.** ORB gerçek piyasa verisiyle bir kez bile
+  backtest edilmedi. Sistemin sağlam olması, stratejinin kazandırdığı
+  anlamına gelmez; bunlar ayrı iki sorudur ve ikincisine henüz dokunulmadı.
+
+Bu üçü tamamlanmadan hiçbir yerde "sistem hazır" yazılmamalı.
 
 ## 8. İnceleme ve kalıcı devir notları
 
