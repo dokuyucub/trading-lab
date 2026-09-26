@@ -1,9 +1,11 @@
 # Research v2: tarihsel seçim önerisi
 
-Durum: **incelemeye açık taslak; uygulanmış API veya ekip kararı değildir.**
+Durum: **Claude'un ilk incelemesi alındı; takip düzeltmesi incelemede.
+Uygulanmış API değildir.**
 Başlangıç: `259abb0` (#13 birleşmesi). Tartışma: #12; koordinasyon: #11.
 Codex tip/seçim katmanını geliştirir; Claude Faz 3 tüketicisi olarak inceler.
-Mutabakat sonrası kesinleşen kurallar AGENTS.md'ye ayrı küçük PR'da yazılır.
+İlk incelemede kabul edilen yön ve takip açıklamaları bu PR'da AGENTS §10.1'e
+işlenir; takip SHA'sı incelendikten sonra tip PR'ına geçilir.
 
 ## Sorun ve sınır
 
@@ -73,10 +75,22 @@ alınacağı politikada açık olmalıdır; öneri aşağıdaki muhafazakâr ön
 | Tam ve güncel kanıt, kapsamda revizyon yok | EMPTY | yok |
 
 Birden fazla koşul varsa tablodaki ilk uygulanabilir koşul birincil reason'dır;
-diğer bulgular ayrı tanı kaydında tutulabilir. Bu öncelik henüz onaylanmadı.
+T anında görünür kanıttan saptanan **tüm koşullar zorunlu tanı kaydında tutulur**.
+Seçici kısa devreyle diğer koşulları atlamaz. Kodlar tekilleştirilmiş, sıralı
+olarak saklanır; birincil reason bu kümenin öncelik tablosuna göre ilk üyesidir.
+Gelecek kayıtlar tanıya veya snapshot hash'ine de sızamaz. Provenance nedeniyle
+dışlanan ama zaman kapısından geçen girdilerin tanı kodları ayrı evaluation
+tanısında tutulur; bunlar snapshot'ın karar kanıtına dahil edilmez. Böylece
+politika dışında kalan veri değişimi karar hash'ini etkilemez, arıza da gizlenmez.
+Görünürlük eksikliği yüzünden sınanamayan bir koşul yokmuş gibi raporlanmaz;
+hangi denetimlerin değerlendirilemediği de tanıda açıkça kaydedilir.
 Gözlem seçimi de önce zaman, sonra kapsam uygunluğuyla deterministik olmalı;
 aynı zamandaki çelişkili kapsam kayıtları sessiz seçilemez.
 UNAVAILABLE olay taşımaz. STALE eski kanıtı tutabilir fakat uygunluk sağlamaz.
+Son ilgili sorgunun başarısız olması, eski tam ve henüz süresi dolmamış cache
+mevcutken de UNAVAILABLE/provider_error üretir (daha öncelikli neden yoksa).
+Bu bir cache yokluğu iddiası değil, eski cache'e dönmeme politikasıdır.
+STALE ise tam kanıtın süresinin dolmasıdır; öncelikli başarısız sorguyu örtmez.
 EMPTY hata değildir; olayların yalnız filtreyle çıkarılması onu kanıtlamaz.
 Kaynak yanıt gövdesi veya serbest exception metni reason alanına alınmaz.
 
@@ -106,6 +120,22 @@ v2 değerlendirmesinde eksik yerel alım kanıtı varsayımla tamamlanmaz ve v1
 tek başına v2 terfi uygunluğu sağlamaz. Context'in v2 kabulü ayrı tip PR'ında
 çift gözle incelenir. Mevcut v1 tüketicisinin davranışı bu belgede değiştirilmez.
 
+## Gözlem geçmişinin birikmesi
+
+Research-farkındalıklı v2 değerlendirme için geçmişteki her karar noktasında
+gerçekten edinilmiş yeterli olay ve kapsam kanıtı gerekir. Yalnız v1 payload'ı
+received_at kanıtı taşımaz; onu bugünden geriye tarihleyerek v2 uygun geçmiş
+üretemeyiz. Bu nedenle tarihsel pencere ilk doğrulanabilir yerel alım/kapsam
+kaydından itibaren birikir; yalnız şemayı kurmak gözlem toplamak değildir.
+
+Örneğin 60 seanslık bir değerlendirme istiyorsak o karar zamanlarına yayılan
+uygun kanıt gerekir; bugünkü 60 seanslık geriye indirme aynı şey değildir.
+60 seans örnektir, evrensel terfi eşiği değildir. Kısa pencereyle tanı yapılması
+ve research kullanmayan ORB baseline'ı engellenmez. Eksik kanıtı tamamlamak için
+zaman veya provenance kapısı gevşetilmez. V1 audit kayıtları korunur; harici
+eski kanıtın yeterliliği varsa ayrı doğrulama/uyumluluk PR'ında değerlendirilir,
+otomatik dönüşüm yapılmaz. Bu operasyonel sınır AGENTS §10.1'de de kayıtlıdır.
+
 ## Uygulamayı kabul ettirecek testler
 
 - T sonrasında edinilen backfill, aynı T sonucunu dar veya geniş hiçbir
@@ -114,6 +144,11 @@ tek başına v2 terfi uygunluğu sağlamaz. Context'in v2 kabulü ayrı tip PR'�
   filtresinde dışlanır. Bu, zaman kapısından bağımsız filtre sınamasıdır.
 - T anındaki alım görünür; T'den sonraki görünmez. T == fresh_until STALE'dir.
 - Tam kapsam yokken EMPTY üretilemez; yalnız olay filtresiyle EMPTY üretilemez.
+- provider_error ve conflicting_revisions birlikteyken iki koşul da tanıda
+  korunur. Provenance dışlaması görünür bir arızayı gizlemez; gelecekteki
+  çelişki ise ne sonuca ne tanıya girebilir. Denetlenemeyen koşul açıkça ayrılır.
+- Son sorgu başarısızken güncel eski cache bile otomatik servis edilmez;
+  tek başına süresi dolan tam kanıt STALE, başarısız sorgu provider_error'dır.
 - İptal, olay zamanının/sembolünün düzeltilmesi ve eşzamanlı çelişki eski
   revizyonu diriltmez. Girdi sırası sonucu değiştirmez.
 - Aynı kimlik/farklı içerik reddedilir; aynı içerik tekrar alımı tekilleşir.
@@ -122,14 +157,14 @@ tek başına v2 terfi uygunluğu sağlamaz. Context'in v2 kabulü ayrı tip PR'�
 - Research kullanan öğrenme koşusu doğrulanmamış veya stale kanıtta uygun
   sayılmaz; doğrulanmış research tek başına strateji terfi izni vermez.
 
-## Claude'dan beklenen kararlar ve sonraki işler
+## Takip incelemesi ve sonraki işler
 
-1. Yerel zaman kapısını geniş filtrede de koruma, snapshot/manifest kimliklerini
-   ayırma ve v1'i dönüştürmeden okuma önerisini kabul ediyor musun?
-2. Yukarıdaki reason önceliği ve en son başarısız sorguda eski cache'e dönmeme
-   politikası uygun mu? Alternatif gerekiyorsa tip PR'ından önce sabitleyelim.
+Claude ilk incelemede zaman kapısı, kimlik ayrımı, v1 uyumluluğu, reason
+önceliği ve cache'e dönmeme yönünü kabul etti (#20, yorum 5823872629).
+Takip incelemesi zorunlu tüm-koşul tanısı, gözlem geçmişi sınırı ve
+provider_error/cache açıklamasını kapsar; eski onay yeni SHA'ya taşınmaz.
 
-Mutabakat sonrası Codex: AGENTS kaydı + küçük v2 tip PR'ı, ardından saf selector.
+Takip incelemesi sonrası Codex: küçük v2 tip PR'ı, ardından saf selector.
 Claude: Faz 3 uygunluk entegrasyonunu bu sürümlü API'ye göre ayrı PR'da yapar.
 #17 sabit artifact/offline baseline işi Claude'da kalır; bu belge veri indirme,
 emir gönderme veya otomatik terfi uygulamaz.
