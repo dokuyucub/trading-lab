@@ -136,9 +136,10 @@ suredir. Damla damla yanit gonderen bir sunucu, her aralikta sinirin
 altinda kalarak toplamda cok daha uzun surebilir.
 
 Yani bu sinir "istek en fazla 15 saniye surer" demiyor; "sunucu 15
-saniye boyunca hic veri gondermezse vazgecilir" diyor. Sonsuz asili
-kalmayi onler, sureyi garanti etmez. Gercek ust sinir workflow'un
-kendi zaman asimidir.
+saniye boyunca hic veri gondermezse vazgecilir" diyor. SESSIZ bir
+baglantidaki beklemeyi sinirlar; TOPLAM sureyi garanti etmez - damla
+damla veri gonderen bir sunucu hala uzun surebilir. Gercek ust sinir
+workflow'un kendi zaman asimidir.
 """
 
 

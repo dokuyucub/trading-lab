@@ -375,9 +375,11 @@ Dakikalık aşamanın ayrı olması tesadüf değil: `_TIMEFRAME_ARGS` içinde
 `"Minute"` yazdığı için `tlab fetch` hiç çalışmıyordu ve 272 test yeşildi.
 Yalnızca günlük bara bakan bir prob o hatayı yine kaçırırdı.
 
-Koşu kayıtları ayrıca sızdırmama kuralını **üretimde** doğruladı: log'da
-dört satırdan başka hiçbir şey yok — bakiye, hesap kimliği, yanıt gövdesi
-hiçbiri geçmedi.
+Bu paper SDK koşusunun tanı çıktısında hassas değer görülmedi: probun
+bastığı dört satırda bakiye, hesap kimliği veya yanıt gövdesi yok. Bu
+**tek bir başarı koşusudur**; bütün hata yolları için ya da canlı hesap
+için genel bir güvence değildir. Hata yollarındaki sızdırmama güvencesi
+yerel sözleşme testlerinden (`tests/test_sdk_probe.py`) gelir.
 
 ### Hâlâ doğrulanmayan
 
