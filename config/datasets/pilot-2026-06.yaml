@@ -1,0 +1,19 @@
+# Pilot indirme: YALNIZCA erisim ve veri kalitesi denemesi.
+#
+# Tarihler ana veri kumesinin (orb-baseline-2026q3) BASLANGICINDAN
+# ONCE ve onunla ORTUSMUYOR. Bu bilincli: pilotun tarihleri ana
+# kumenin son haftasina denk gelseydi, pilot uzerinde yapilan herhangi
+# bir deneme ana kumenin HOLDOUT'una bakmak olurdu. Ortusmezlik
+# tests/test_dataset_specs.py tarafindan denetleniyor.
+dataset_id: pilot-2026-06
+symbols: [SPY]
+timeframe: 1Min
+feed: iex
+adjustment: raw
+start: 2026-06-08
+end: 2026-06-12
+exchange_timezone: America/New_York
+holdout_fraction: 0.20
+split_unit: session
+settle_minutes: 20
+retention_days: 30
