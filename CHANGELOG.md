@@ -127,6 +127,12 @@ sürüme geri dönmek tek komutluk iştir. Ayrıntı için `CONTRIBUTING.md`.
   hesap, borsa saati ve IEX bar verisi. Sabit GET adresleri, zaman aşımı,
   gizli değerleri/yanıtları göstermeyen çıktı; yerel HTTP sözleşme testleri.
 
+### Research seçim girdileri
+- Yerel alım kanıtını v1 olayından ayrı tutan `ReceivedResearchEvent` ve açık
+  zaman/provenance politikası taşıyan `ResearchQuery` eklendi. Geç edinilmiş
+  veri, keşif filtresi genişletilse de eski karar anında görünür olmaz.
+  V1 snapshot/hash ve Context değişmedi; tam revizyon seçimi sonraki dilimdir.
+
 ## [0.3.0] - 2026-09-20
 
 Faz 2 — backtest motoru. Aynı strateji ve risk kodu geçmiş veri üzerinde
