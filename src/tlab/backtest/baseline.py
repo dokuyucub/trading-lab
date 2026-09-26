@@ -76,8 +76,8 @@ CAVEATS: tuple[str, ...] = (
 )
 
 
-def _config_sha256(config: Config) -> str:
-    return hashlib.sha256(canonical_json(config.model_dump(mode="json"))).hexdigest()
+def _config_sha256(payload: dict[str, Any]) -> str:
+    return hashlib.sha256(canonical_json(payload)).hexdigest()
 
 
 def _r_values(conn: sqlite3.Connection, run_id: str) -> list[float]:
@@ -177,6 +177,7 @@ def run_baseline(
     config = config.model_copy(update={"symbols": tuple(manifest["symbols"])})
     timeframe = Timeframe(manifest["timeframe"])
 
+    semantic = config.semantic_dump()
     results = [
         _run_scenario(verified, config, item, starting_equity=starting_equity, timeframe=timeframe)
         for item in scenarios
@@ -195,7 +196,11 @@ def run_baseline(
         # hatirlamaya davetiyedir.
         "holdout": {"sessions": len(manifest["split"]["holdout"]), "opened": False},
         "code_commit": code_commit,
-        "config_sha256": _config_sha256(config),
+        # Hash tek basina ayarlari yeniden kurdurmaz; tam semantik
+        # ayarlar da raporda. Yerel yollar ikisine de girmez: ayni
+        # ayarlar farkli klasorde ayni raporu vermeli.
+        "config": semantic,
+        "config_sha256": _config_sha256(semantic),
         "deterministic": True,
         "starting_equity": starting_equity,
         "primary_scenario": PRIMARY_SCENARIO,

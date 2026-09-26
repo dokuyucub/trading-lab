@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from datetime import time
 from pathlib import Path
+from typing import get_args
 
 import pytest
+from pydantic import BaseModel
 
-from tlab.config import Secrets, load_config, load_secrets
+from tlab.config import LOCAL_PATH_FIELDS, Config, Secrets, load_config, load_secrets
 from tlab.core.types import Timeframe
 from tlab.errors import ConfigError
 
@@ -133,3 +135,52 @@ def test_paper_mode_defaults_to_true(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.delenv("ALPACA_PAPER", raising=False)
     assert Secrets(_env_file=None).alpaca_paper is True  # type: ignore[call-arg]
+
+
+# --------------------------------------------------------------------------
+# Semantik parmak izi (Codex B4)
+# --------------------------------------------------------------------------
+
+
+def _path_fields(model: type[BaseModel], prefix: tuple[str, ...] = ()) -> set[tuple[str, ...]]:
+    """Modeldeki (ic ice) butun Path tipli alanlar."""
+    found: set[tuple[str, ...]] = set()
+    for name, field in model.model_fields.items():
+        annotation = field.annotation
+        if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+            found |= _path_fields(annotation, (*prefix, name))
+        elif annotation is Path or Path in get_args(annotation):
+            found.add((*prefix, name))
+    return found
+
+
+def test_every_path_field_is_classified_as_local() -> None:
+    """Yeni bir yol alani sessizce olcumun parmak izine giremez.
+
+    Config'e bir Path alani eklenirse bu test onun ya LOCAL_PATH_FIELDS'a
+    eklenmesini ister - ya da bilincli olarak bu testin degistirilmesini.
+    """
+    assert _path_fields(Config) == set(LOCAL_PATH_FIELDS)
+
+
+def test_the_same_settings_in_another_folder_have_the_same_fingerprint(
+    project_root: Path, tmp_path: Path
+) -> None:
+    config = load_config(project_root)
+    moved = config.model_copy(
+        update={
+            "root": tmp_path / "baska-bir-klasor",
+            "data": config.data.model_copy(update={"cache_dir": Path("/elsewhere/bars")}),
+            "journal": config.journal.model_copy(update={"path": Path("/elsewhere/j.db")}),
+        }
+    )
+    assert moved.semantic_dump() == config.semantic_dump()
+    assert str(project_root) not in str(config.semantic_dump())
+
+
+def test_a_behavioural_change_changes_the_fingerprint(project_root: Path) -> None:
+    config = load_config(project_root)
+    riskier = config.model_copy(
+        update={"risk": config.risk.model_copy(update={"max_risk_per_trade_pct": 1.0})}
+    )
+    assert riskier.semantic_dump() != config.semantic_dump()

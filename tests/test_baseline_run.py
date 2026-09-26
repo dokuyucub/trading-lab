@@ -10,6 +10,7 @@ varsayan bir hata burada kirilirdi.
 from __future__ import annotations
 
 import json
+import shutil
 import sqlite3
 from datetime import UTC, date, datetime, time, timedelta
 from itertools import pairwise
@@ -137,6 +138,27 @@ def test_the_same_dataset_gives_a_byte_identical_report(
     first = report_bytes(run_baseline(verified, config, code_commit="c0ffee"))
     second = report_bytes(run_baseline(verified, config, code_commit="c0ffee"))
     assert first == second
+
+
+def test_the_same_settings_in_another_checkout_give_the_same_report(
+    verified: VerifiedBaseline, tmp_path: Path
+) -> None:
+    """Codex B4: yalnizca proje koku degisince rapor degisiyordu.
+
+    Iki farkli klasorde ayni ayarlar -> bayt bayt ayni rapor. Rapor
+    tam semantik ayarlari tasir ama hicbir yerel yolu tasimaz.
+    """
+    source = Path(__file__).resolve().parents[1] / "config"
+    reports = []
+    for name in ("ilk-checkout", "baska/bir/checkout"):
+        root = tmp_path / name
+        shutil.copytree(source, root / "config")
+        reports.append(
+            report_bytes(run_baseline(verified, load_config(root), code_commit="c0ffee"))
+        )
+    assert reports[0] == reports[1]
+    assert str(tmp_path) not in reports[0].decode()
+    assert json.loads(reports[0])["config"]["risk"], "rapor semantik ayarlari tasimali"
 
 
 def test_the_report_does_not_reveal_holdout_dates(
