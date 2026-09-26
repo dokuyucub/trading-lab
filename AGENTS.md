@@ -410,3 +410,35 @@ isteğe bağlı Context alanını ekler; sağlayıcı, göç ve risk davranış�
 
 Çekirdek tiplerin üçüncü taraf bağımlılık sınırı korunur; snapshot hash ve
 DST sınırları için standart kütüphaneden hashlib/json/zoneinfo izinlidir.
+
+### 10.1 Research v2 uygulama sözleşmesi — #20
+
+Bu bölüm sonraki uygulamanın kabul şartıdır; v2 henüz uygulanmış değildir.
+Tasarım: `docs/designs/research-v2-selection.md`. Tip, saf seçim hizmeti,
+sağlayıcı, depolama/göç ve risk entegrasyonu ayrı PR'larla ilerler.
+
+- Her revizyon ve kapsam kanıtı için `known_at <= received_at <= decision_at`
+  korunur. Yerel alım zamanı değişmez; provider tarihi onun yerine geçmez.
+  Varsayılan provenance filtresi yalnız OBSERVED'dir; genişletmek zaman kapısını
+  kaldırmaz. Filtre olaylara ve kapsam kanıtına uygulanır; EMPTY uydurulmaz.
+- Önce görünür son revizyon seçilir, sonra olay kapsamı uygulanır. Tarihi veya
+  sembolü düzeltilen/iptal edilen olayın eski revizyonu diriltilemez.
+- Dört status korunur. Birincil reason yanında T anında görünür kanıttan
+  saptanan tüm tanı koşulları zorunlu kaydedilir; seçim kısa devre yapmaz.
+  Sınanamayan koşullar tanıda ayrı gösterilir. Gelecek bilgi tanıya da giremez.
+- Son ilgili sorgu başarısızsa eski cache'e sessiz dönüş yapılmaz; eski cache
+  tam ve güncel olsa da provider_error koşulu vardır. STALE tam kanıtın süresi
+  dolmasıdır; öncelikli hata varsa onu örtmez. Birincil reason sırası tasarımda
+  sabittir, diğer koşullar onun arkasında kaybolmaz.
+- Snapshot kimliği görünür karar kanıtı, kapsam/zaman, filtre ve politika
+  sürümünü içerir; tam veri evreninin manifest kimliği değerlendirmede ayrıca
+  saklanır. Gelecek/dışlanan girdiler karar hash'ine eklenmez. Zaman kapısından
+  geçmiş ama provenance nedeniyle dışlanmış kanıtın tanısı ayrı evaluation
+  kaydındadır; provider arızası bu yüzden görünmez olmaz.
+- V1 okuyucusu/hash'i korunur; eksik received_at üretilmez ve sessiz v2 dönüşümü
+  yapılmaz. Research-farkındalıklı v2 değerlendirme geçmişi ilk doğrulanabilir
+  yerel alım ve kapsam kanıtından itibaren birikir. Şema kurulumu veya geçmiş
+  veri indirmek, geçmişte gözlenmiş kapsam üretmez. İstenen değerlendirme
+  penceresi boyunca yeterli kanıt birikmeden research-farkındalıklı terfi
+  uygunluğu iddia edilmez; gecikme nedeniyle zaman/provenance kapıları gevşetilmez.
+  Research kullanmayan baseline bundan etkilenmez; v1 audit kayıtları silinmez.
