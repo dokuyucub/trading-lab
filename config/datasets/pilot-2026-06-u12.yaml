@@ -1,5 +1,9 @@
 # Pilot indirme: YALNIZCA erisim ve veri kalitesi denemesi. P&L yok.
 #
+# Kimlik neden yeni: ilk tanim (pilot-2026-06) yalnizca SPY iceriyordu
+# ve hic indirilmedi. Sembol kapsami degisince ayni ad altinda farkli
+# bir veri tanimi olusmasin diye yeni dataset_id verildi (Codex, #19).
+#
 # Semboller ana evrenin TAMAMI: pilotun ikinci amaci, IEX'in bu
 # sembollerdeki gercek dakika boslugu oranini OLCMEK. Ana veri
 # kumesinin kalite esikleri tahminle degil bu olcumle, ana indirmeden
@@ -11,7 +15,7 @@
 # kumenin son haftasina denk gelseydi, pilot uzerinde yapilan herhangi
 # bir deneme ana kumenin HOLDOUT'una bakmak olurdu. Ortusmezlik
 # tests/test_dataset_specs.py tarafindan denetleniyor.
-dataset_id: pilot-2026-06
+dataset_id: pilot-2026-06-u12
 symbols: [SPY, QQQ, IWM, AAPL, MSFT, NVDA, AMD, AMZN, GOOGL, META, TSLA, JPM]
 timeframe: 1Min
 feed: iex
@@ -27,7 +31,7 @@ retention_days: 30
 # yalnizca raporlanir.
 quality:
   open_window_minutes: 15
-  max_missing_open_window: 3
+  max_missing_open_window: 0
   close_window_minutes: 10
   max_missing_fraction: 0.10
   max_ineligible_sessions: 0

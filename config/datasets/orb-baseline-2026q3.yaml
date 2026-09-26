@@ -28,9 +28,14 @@ retention_days: 90
 # birlikte kesinlesir. Indirmeden sonra degistirmek yeni dataset_id.
 #   open_window_minutes >= ORB acilis araligi (15 dk)  - olcum denetler
 #   close_window_minutes <= gun sonu tamponu (10 dk)  - olcum denetler
+#
+# Acilis penceresinde eksik dakika 0: tek bir eksik dakika acilis
+# araliginin tepe/dibini bozabilir ve veri yoklugu "islem olmadi" diye
+# varsayilamaz (Codex, #19). IEX bunu saglayamiyorsa esik sirf olcum
+# gecsin diye gevsetilmez; sinirlama pilotta olculup acikca tartisilir.
 quality:
   open_window_minutes: 15
-  max_missing_open_window: 3
+  max_missing_open_window: 0
   close_window_minutes: 10
   max_missing_fraction: 0.10
   max_ineligible_sessions: 0

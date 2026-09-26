@@ -57,7 +57,7 @@ def test_the_pilot_measures_quality_on_the_whole_universe() -> None:
     islem goren bir sembolun bosluk oranini hic gostermezdi.
     """
     universe = set(load_config(Path(__file__).resolve().parents[1]).symbols)
-    pilot = DatasetSpec.from_yaml(SPEC_DIR / "pilot-2026-06.yaml")
+    pilot = DatasetSpec.from_yaml(SPEC_DIR / "pilot-2026-06-u12.yaml")
     assert set(pilot.symbols) == universe
 
 

@@ -110,8 +110,10 @@ class QualityPolicy(BaseModel):
     """Acilistan sonraki pencere. Acilis araligina dayanan bir strateji
     bu dakikalar eksikse yanlis bir aralik olcer."""
 
-    max_missing_open_window: int = Field(default=3, ge=0)
-    """Acilis penceresinde izin verilen eksik dakika."""
+    max_missing_open_window: int = Field(default=0, ge=0)
+    """Acilis penceresinde izin verilen eksik dakika. Varsayilan sifir:
+    tek bir eksik dakika acilis araliginin tepe/dibini bozabilir ve veri
+    yoklugu "islem olmadi" diye varsayilamaz."""
 
     close_window_minutes: int = Field(default=10, ge=1, le=120)
     """Kapanistan onceki pencere: her sembolde EN AZ BIR bar olmali.
