@@ -15,11 +15,17 @@ from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
 from datetime import datetime
+from typing import Protocol
 
 from tlab.core.clock import Clock
 from tlab.core.types import Bar, Quote, Timeframe
-from tlab.data.cache import BarCache
 from tlab.errors import DataError
+
+
+class BarStore(Protocol):
+    """Barlari sembol bazinda veren kaynak: disk onbellegi ya da bellek."""
+
+    def load(self, symbol: str, timeframe: Timeframe) -> list[Bar]: ...
 
 
 class CachedMarketData:
@@ -27,7 +33,7 @@ class CachedMarketData:
 
     def __init__(
         self,
-        cache: BarCache,
+        cache: BarStore,
         *,
         timeframe: Timeframe = Timeframe.M1,
         synthetic_spread_bps: float = 2.0,

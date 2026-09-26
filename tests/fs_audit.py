@@ -3,7 +3,17 @@
 `chmod 000` KULLANILMIYOR: konteynerde root olarak kosuyoruz ve root
 dosya izinlerini yok sayar - o tur bir test hicbir sey olcmeden
 gecerdi. Python'un denetim kancasi izinlerden bagimsiz olarak her
-`open`, `os.scandir` ve `os.listdir` olayini gorur.
+Python seviyesindeki `open` (`os.open` dahil), `os.scandir` ve
+`os.listdir` olayini gorur.
+
+SINIRLARI - bunlari bilmeden sonucunu okuma:
+
+  * CAGRILAN yolu gorur, cozuldugu yeri degil. baseline/ altindaki bir
+    symlink holdout/'a cozulse kanca yalnizca baseline yolunu kaydeder
+    (Codex B3 bunu gosterdi). Takma adlar bu yuzden dogrulamada hic
+    okunmadan reddediliyor; kanca o savunmanin yerine gecmez.
+  * Yerel kutuphanelerin (C/C++) kendi G/C'sini gordugu IDDIA EDILMEZ.
+    Olcumun dosya yolu almamasi bu yuzden yapisal olarak saglaniyor.
 
 Kanca bir kez kurulur ve surec boyunca kalir (kaldirilamaz); yalnizca
 `filesystem_access()` blogu icinde kayit tutar, disarida maliyeti bir

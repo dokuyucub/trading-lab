@@ -31,7 +31,6 @@ from tlab.backtest.engine import Backtest
 from tlab.backtest.sim_broker import SimFillModel
 from tlab.config import Config
 from tlab.core.types import Timeframe
-from tlab.data.cache import BarCache
 from tlab.data.cached import CachedMarketData
 from tlab.data.dataset import VerifiedBaseline, canonical_json
 from tlab.journal.db import apply_migrations
@@ -110,7 +109,7 @@ def _run_scenario(
         apply_migrations(conn)
         strategy = OpeningRangeBreakout(ORBParams())
         market = CachedMarketData(
-            BarCache(verified.root),
+            verified.store(),
             timeframe=timeframe,
             synthetic_spread_bps=scenario.spread_bps,
         )

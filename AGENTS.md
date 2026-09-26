@@ -278,6 +278,12 @@ yazılı bir kurala güvenmek yetmez. Bu yüzden mekanizma yapısaldır:
 - **İlk ölçüm yalnızca baseline'ı görür.** Yükleyici `holdout/`'u listelemez,
   okumaz, hash'lemez. Rapor holdout hakkında yalnızca seans *sayısı* taşır;
   tarihleri bile yazmaz.
+- **Doğrulanan baytlar, kullanılan baytlardır.** Her baseline dosyası tek kez
+  okunur; aynı baytlar hash'lenir ve bellekte çözülür. Ölçüm dosya yolu almaz,
+  veri kümesi dizinini bir daha açmaz. Symlink, hardlink ve özel dosyalar hiç
+  okunmadan reddedilir: `baseline/` altındaki bir takma ad `holdout/`'a
+  çözülemez. (Codex B3: denetim kancası çağrılan yolu görür, çözüldüğü yeri
+  değil — symlink ile holdout okunurken kanca "dokunulmadı" diyordu.)
 - **Kesin manifest hash'i zorunludur.** "En son veri kümesini al" diye bir yol
   yoktur. Tek bir bayt tutmazsa ölçüm durur.
 - **Holdout'u açmak ayrı ve kayıtlı bir değerlendirme olayıdır.** Açıldıktan
@@ -285,12 +291,19 @@ yazılı bir kurala güvenmek yetmez. Bu yüzden mekanizma yapısaldır:
   aynı holdout ikinci kez "görülmemiş" sayılamaz.
 - **Otomatik terfi yok.** Baseline raporu bir terfi kararı değildir.
 
-Denetleyenler: `tests/test_dataset.py` (holdout'a erişim, Python denetim
-kancasıyla doğrudan ölçülür — `chmod` değil, çünkü root izinleri yok sayar),
-`tests/test_baseline_run.py` (tam ölçüm boyunca da), `tests/test_dataset_specs.py`
+Denetleyenler: `tests/test_dataset.py` (holdout'a erişim Python denetim
+kancasıyla ölçülür — `chmod` değil, çünkü root izinleri yok sayar; takma ad
+senaryoları ayrıca), `tests/test_baseline_run.py` (doğrulamadan sonra ölçüm
+veri kümesinde hiçbir dosya açmaz), `tests/test_dataset_specs.py`
 (örtüşmezlik), `tests/test_architecture.py` (veri kümesi modülü backtest,
 strateji, öğrenme veya seans döngüsünü içe aktaramaz — performans
 hesaplayamayan kod, bölme sınırını performansa göre seçemez).
+
+**Kancanın sınırı:** Python denetim kancası yalnızca Python seviyesindeki
+`open`/`os.open`/`scandir`/`listdir` olaylarını görür. Yerel kütüphanelerin
+kendi G/Ç'sini gördüğü iddia edilmez. Güvence bu yüzden iki parçalıdır:
+yapısal kısım (tek okuma, takma ad reddi, ölçümün yol almaması) ve onu ölçen
+testler. Biri tek başına yeterli sayılmaz.
 
 ## 4. Çakışmaya açık yerler
 

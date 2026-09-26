@@ -26,7 +26,6 @@ from tlab.backtest.engine import Backtest, CarriedPositionError
 from tlab.config import Config, load_config
 from tlab.core.calendar import TradingSession
 from tlab.core.types import Bar
-from tlab.data.cache import BarCache
 from tlab.data.cached import CachedMarketData
 from tlab.data.dataset import (
     DatasetIntegrityError,
@@ -167,6 +166,22 @@ def test_running_the_baseline_never_touches_the_holdout(dataset: Path, config: C
     assert not touched, f"holdout'a erisildi: {touched}"
 
 
+def test_after_verification_the_measurement_opens_no_dataset_file(
+    dataset: Path, config: Config
+) -> None:
+    """Olcum veri kumesi dizininde HICBIR dosya acmaz - baseline dahil.
+
+    Dogrulanan baytlar bellekte cozuluyor; olcum dosya yolu almiyor.
+    Yani dogrulama ile olcum arasinda "ikinci okuma" diye bir sey yok
+    ve holdout'a giden bir takma ad olsa bile olcum onu okuyamaz.
+    """
+    verified = verify_baseline(dataset, manifest_sha256(dataset))
+    with filesystem_access() as seen:
+        run_baseline(verified, config, code_commit="c0ffee")
+    touched = touched_under(seen, dataset)
+    assert not touched, f"olcum veri kumesini yeniden okudu: {touched}"
+
+
 def test_the_point_estimate_never_appears_without_its_verdict(
     verified: VerifiedBaseline, config: Config
 ) -> None:
@@ -275,7 +290,7 @@ def exits_of(verified: VerifiedBaseline, config: Config) -> list[sqlite3.Row]:
     Backtest(
         config=config,
         strategy=strategy,
-        market=CachedMarketData(BarCache(verified.root)),
+        market=CachedMarketData(verified.store()),
         conn=conn,
         opening_range_minutes=strategy.params.opening_range_minutes,
         sessions=verified.sessions,

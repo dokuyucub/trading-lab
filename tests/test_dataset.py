@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
@@ -32,6 +33,7 @@ from tlab.data.dataset import (
     build_dataset,
     classify_sessions,
     content_sha256,
+    file_sha256,
     manifest_sha256,
     split_sessions,
     verify_baseline,
@@ -327,7 +329,10 @@ def test_adjustment_is_recorded_as_requested(tmp_path: Path) -> None:
 def test_verification_returns_only_baseline_sessions(tmp_path: Path) -> None:
     out, manifest = build(tmp_path)
     verified = verify_baseline(out, manifest_sha256(out))
-    assert verified.root == out / "baseline"
+    assert set(verified.bars) == set(manifest["symbols"])
+    declared = {f["symbol"]: f["bars"] for f in manifest["files"] if f["split"] == "baseline"}
+    assert {symbol: len(bars) for symbol, bars in verified.bars.items()} == declared
+    assert not hasattr(verified, "root"), "dogrulanmis baseline dosya yolu tasimamali"
     assert [day.isoformat() for day in verified.days] == manifest["split"]["baseline"]
 
 
@@ -409,8 +414,6 @@ def test_the_audit_hook_would_catch_any_look_at_the_holdout(tmp_path: Path, peek
     Yalnizca okumayi yakalayan bir kapi, "hangi semboller holdout'ta,
     kac dosya var" diye listeleyen bir kodu kacirirdi.
     """
-    from tlab.data.dataset import file_sha256
-
     out, _ = build(tmp_path)
     holdout = out / "holdout"
     target = holdout / "SPY" / "1Min.parquet"
@@ -424,6 +427,97 @@ def test_the_audit_hook_would_catch_any_look_at_the_holdout(tmp_path: Path, peek
             file_sha256(target)
 
     assert touched_under(seen, holdout), f"{peek} yakalanmadi"
+
+
+# --------------------------------------------------------------------------
+# Takma adlar (Codex B3)
+#
+# Denetim kancasi CAGRILAN yolu gorur, cozuldugu yeri degil. baseline/
+# altindaki bir symlink holdout/'taki bir dosyaya cozulurse kanca
+# yalnizca baseline yolunu gorur ve "holdout'a dokunulmadi" der -
+# Codex tam olarak bunu gosterdi. Savunma kancada degil yapida:
+# takma adlar hic okunmadan reddedilir.
+# --------------------------------------------------------------------------
+
+
+def _move_to_holdout(out: Path) -> tuple[Path, Path]:
+    """Baseline dosyasini holdout/'a tasir; eski yeri bos kalir."""
+    original = out / "baseline" / "SPY" / "1Min.parquet"
+    borrowed = out / "holdout" / "borrowed.parquet"
+    original.rename(borrowed)
+    return original, borrowed
+
+
+def _rejected_without_touching_holdout(out: Path, match: str) -> None:
+    with filesystem_access() as seen, pytest.raises(DatasetIntegrityError, match=match):
+        verify_baseline(out, manifest_sha256(out))
+    touched = touched_under(seen, out / "holdout")
+    assert not touched, f"reddedilmeden once holdout okundu: {touched}"
+
+
+def test_a_file_symlink_into_the_holdout_is_rejected(tmp_path: Path) -> None:
+    """Codex'in senaryosu: manifest ve hash degismeden holdout okunuyordu."""
+    out, _ = build(tmp_path)
+    original, borrowed = _move_to_holdout(out)
+    original.symlink_to(borrowed)
+    _rejected_without_touching_holdout(out, "symlink")
+
+
+def test_a_directory_symlink_into_the_holdout_is_rejected(tmp_path: Path) -> None:
+    out, _ = build(tmp_path)
+    folder = out / "baseline" / "SPY"
+    moved = out / "holdout" / "SPY-baseline"
+    folder.rename(moved)
+    folder.symlink_to(moved, target_is_directory=True)
+    _rejected_without_touching_holdout(out, "symlink")
+
+
+def test_the_whole_baseline_directory_cannot_be_a_symlink(tmp_path: Path) -> None:
+    out, _ = build(tmp_path)
+    baseline = out / "baseline"
+    moved = out / "holdout" / "old-baseline"
+    baseline.rename(moved)
+    baseline.symlink_to(moved, target_is_directory=True)
+    _rejected_without_touching_holdout(out, "gercek bir dizin")
+
+
+def test_a_hardlink_shared_with_the_holdout_is_rejected(tmp_path: Path) -> None:
+    """Hardlink'te iki ad da 'gercek': hangisinin asil oldugu bilinemez."""
+    out, _ = build(tmp_path)
+    original, borrowed = _move_to_holdout(out)
+    original.hardlink_to(borrowed)
+    _rejected_without_touching_holdout(out, "hardlink")
+
+
+def test_a_symlinked_manifest_is_rejected(tmp_path: Path) -> None:
+    out, _ = build(tmp_path)
+    manifest = out / "manifest.json"
+    moved = out / "holdout" / "manifest.json"
+    manifest.rename(moved)
+    manifest.symlink_to(moved)
+    with pytest.raises(DatasetIntegrityError, match="symlink"):
+        verify_baseline(out, file_sha256(moved))
+
+
+def test_a_special_file_in_the_baseline_is_rejected(tmp_path: Path) -> None:
+    out, _ = build(tmp_path)
+    os.mkfifo(out / "baseline" / "SPY" / "pipe")
+    with pytest.raises(DatasetIntegrityError, match="ozel dosya"):
+        verify_baseline(out, manifest_sha256(out))
+
+
+def test_the_bytes_that_were_hashed_are_the_bytes_that_are_used(tmp_path: Path) -> None:
+    """Dogrulamadan SONRA dosyayi degistirmek olcumu etkilemez.
+
+    Barlar dogrulanan baytlardan cozulup bellekte tutuluyor; olcum
+    dosyayi bir daha okumuyor. Dosya silinse bile sonuc ayni.
+    """
+    out, _ = build(tmp_path)
+    verified = verify_baseline(out, manifest_sha256(out))
+    before = verified.store().load("SPY", Timeframe.M1)
+    (out / "baseline" / "SPY" / "1Min.parquet").unlink()
+    assert verified.store().load("SPY", Timeframe.M1) == before
+    assert before, "bos baseline ile test hicbir sey olcmez"
 
 
 def test_building_the_dataset_computes_no_performance(tmp_path: Path) -> None:

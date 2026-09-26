@@ -13,8 +13,19 @@ hesaplanmadan:
     son %20'si                         ->  holdout/    (ACILMAZ)
 
 Ilk olcum yalnizca baseline/'i gorur. Yukleyici holdout/ dizinine
-dokunmaz - listelemez, okumaz, hash'lemez - ve bunu bir test dogrudan
-olcer.
+dokunmaz - listelemez, okumaz, hash'lemez. Bunun guvencesi iki
+parcali:
+
+  * Yapisal: dosyalar TEK kez okunur. Hash'lenen baytlar bellekte
+    cozulur ve olcume o barlar verilir; olcum hicbir dosya yolu
+    almaz, veri kumesi dizinini bir daha acmaz. Symlink, hardlink ve
+    ozel dosyalar reddedilir: baseline/ altindaki bir takma ad
+    holdout/'taki bir dosyaya cozulemez.
+  * Olcum: testler Python'un denetim kancasiyla holdout/ altinda
+    hicbir `open`/`scandir`/`listdir` olmadigini dogrular. Kanca
+    YALNIZCA Python seviyesindeki olaylari gorur; yerel kutuphanelerin
+    kendi I/O'sunu gordugu iddia edilmez - bu yuzden yapisal kisim
+    ayrica var.
 
 Ikinci risk sessiz degisim: "ayni veri" sanilan seyin aslinda farkli
 olmasi. Her dosyanin SHA256'si manifestte; yukleyici kesin bir
@@ -28,22 +39,26 @@ kaynaklari ile indirme zamani disaridan verilir.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import math
+import os
+import stat
 from bisect import bisect_left
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal, Protocol
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import pandas as pd
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from tlab.core.calendar import TradingSession
 from tlab.core.types import Bar, Timeframe
-from tlab.data.cache import BarCache
+from tlab.data.cache import BarCache, bars_from_frame
 from tlab.errors import DataError
 
 MANIFEST_NAME = "manifest.json"
@@ -443,15 +458,39 @@ def build_dataset(
 # ---------------------------------------------------------------------------
 
 
+class MemoryBarStore:
+    """Dogrulanmis barlari bellekten sunar. Dosya yolu tasimaz.
+
+    `CachedMarketData`'nin istedigi `load` arayuzunu uygular; boylece
+    olcum, dogrulanan baytlardan baska bir seyi okuyamaz.
+    """
+
+    def __init__(self, bars: Mapping[str, Sequence[Bar]], timeframe: Timeframe) -> None:
+        self._bars = {symbol.upper(): tuple(items) for symbol, items in bars.items()}
+        self._timeframe = timeframe
+
+    def load(self, symbol: str, timeframe: Timeframe) -> list[Bar]:
+        if timeframe is not self._timeframe:
+            msg = f"veri kumesi {self._timeframe.value}, istenen {timeframe.value}"
+            raise DataError(msg)
+        return list(self._bars.get(symbol.upper(), ()))
+
+
 @dataclass(frozen=True)
 class VerifiedBaseline:
-    """Dogrulanmis baseline. Holdout hakkinda yalnizca gun LISTESI tasir."""
+    """Dogrulanmis baseline. Holdout hakkinda yalnizca gun LISTESI tasir.
 
-    root: Path
+    Dosya yolu TASIMAZ: barlar dogrulanan baytlardan cozulmus halde
+    burada durur. Olcum veri kumesi dizinini bir daha acamaz.
+    """
+
     manifest_sha256: str
     manifest: dict[str, Any]
     sessions: tuple[TradingSession, ...]
     """Baseline seanslari, RESMI acilis/kapanis saatleriyle."""
+
+    bars: Mapping[str, tuple[Bar, ...]]
+    timeframe: Timeframe
 
     @property
     def dataset_id(self) -> str:
@@ -460,6 +499,9 @@ class VerifiedBaseline:
     @property
     def days(self) -> tuple[date, ...]:
         return tuple(item.day for item in self.sessions)
+
+    def store(self) -> MemoryBarStore:
+        return MemoryBarStore(self.bars, self.timeframe)
 
 
 def _baseline_sessions(manifest: dict[str, Any]) -> tuple[TradingSession, ...]:
@@ -485,8 +527,90 @@ def manifest_sha256(dataset_dir: Path) -> str:
     return file_sha256(Path(dataset_dir) / MANIFEST_NAME)
 
 
+def _reject_links(root: Path, relative: PurePosixPath) -> None:
+    """Yolun HICBIR bileseni symlink olamaz.
+
+    `O_NOFOLLOW` yalnizca son bileseni korur; `baseline/SPY` bir dizin
+    symlink'i olup holdout/'a cozulebilirdi.
+    """
+    current = root
+    for part in relative.parts:
+        current = current / part
+        try:
+            info = os.lstat(current)
+        except FileNotFoundError:
+            msg = f"manifestteki dosya eksik: {relative}"
+            raise DatasetIntegrityError(msg) from None
+        if stat.S_ISLNK(info.st_mode):
+            msg = f"veri kumesinde symlink reddedildi: {current.relative_to(root)}"
+            raise DatasetIntegrityError(msg)
+
+
+def _read_once(root: Path, relative: PurePosixPath) -> bytes:
+    """Dosyayi TEK kez okur: dogrulanan baytlar, kullanilan baytlardir.
+
+    Dosya once hash'lenip sonra baska bir kutuphane tarafindan yoldan
+    YENIDEN okunsaydi, iki okuma arasinda ne oldugu - ve ikinci
+    okumanin nereye cozuldugu - denetlenmemis olurdu.
+    """
+    _reject_links(root, relative)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        handle = os.open(root / relative, flags)
+    except FileNotFoundError:
+        msg = f"manifestteki dosya eksik: {relative}"
+        raise DatasetIntegrityError(msg) from None
+    except OSError as exc:
+        msg = f"{relative} guvenli acilamadi: {exc.strerror}"
+        raise DatasetIntegrityError(msg) from exc
+    try:
+        info = os.fstat(handle)
+        if not stat.S_ISREG(info.st_mode):
+            msg = f"{relative} duz bir dosya degil"
+            raise DatasetIntegrityError(msg)
+        if info.st_nlink != 1:
+            # Hardlink: ayni icerik baska bir yoldan - holdout/'tan -
+            # da erisilebilir. Hangisinin "asil" oldugunu bilemeyiz.
+            msg = f"{relative} birden fazla ada bagli (hardlink); reddedildi"
+            raise DatasetIntegrityError(msg)
+        chunks: list[bytes] = []
+        while chunk := os.read(handle, 1 << 20):
+            chunks.append(chunk)
+    finally:
+        os.close(handle)
+    return b"".join(chunks)
+
+
+def _baseline_tree(dataset_dir: Path) -> set[PurePosixPath]:
+    """baseline/ agacindaki duz dosyalar; symlink ve ozel dosya reddedilir."""
+    baseline_root = dataset_dir / BASELINE_DIR
+    try:
+        info = os.lstat(baseline_root)
+    except FileNotFoundError:
+        return set()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        msg = f"{BASELINE_DIR}/ gercek bir dizin olmali (symlink degil)"
+        raise DatasetIntegrityError(msg)
+
+    present: set[PurePosixPath] = set()
+    for folder, dirnames, filenames in os.walk(baseline_root, followlinks=False):
+        for name in [*dirnames, *filenames]:
+            full = Path(folder) / name
+            mode = os.lstat(full).st_mode
+            relative = PurePosixPath(full.relative_to(dataset_dir).as_posix())
+            if stat.S_ISLNK(mode):
+                msg = f"veri kumesinde symlink reddedildi: {relative}"
+                raise DatasetIntegrityError(msg)
+            if stat.S_ISREG(mode):
+                present.add(relative)
+            elif not stat.S_ISDIR(mode):
+                msg = f"veri kumesinde ozel dosya reddedildi: {relative}"
+                raise DatasetIntegrityError(msg)
+    return present
+
+
 def verify_baseline(dataset_dir: Path, expected_manifest_sha256: str) -> VerifiedBaseline:
-    """Manifesti ve BASELINE dosyalarini dogrular; baseline kokunu dondurur.
+    """Manifesti ve BASELINE dosyalarini dogrular; barlari bellekte dondurur.
 
     Kesin bir manifest hash'i ZORUNLU. "En son veri kumesini al" diye
     bir yol yok: o yol, kimin neyi olctugunu belirsiz birakir.
@@ -495,6 +619,9 @@ def verify_baseline(dataset_dir: Path, expected_manifest_sha256: str) -> Verifie
     hash'lenmez. Holdout dosyalarinin hash'i manifestte duruyor ama
     ancak holdout'un acilmasi ayri ve kayitli bir olay oldugunda
     dogrulanir.
+
+    Her baseline dosyasi TEK kez okunur; ayni baytlar hash'lenir ve
+    cozulur. Donen yapi dosya yolu tasimaz.
     """
     dataset_dir = Path(dataset_dir)
     expected = expected_manifest_sha256.strip().lower()
@@ -502,11 +629,7 @@ def verify_baseline(dataset_dir: Path, expected_manifest_sha256: str) -> Verifie
         msg = "beklenen manifest hash'i 64 haneli onaltilik bir SHA256 olmali"
         raise DatasetIntegrityError(msg)
 
-    manifest_path = dataset_dir / MANIFEST_NAME
-    if not manifest_path.is_file():
-        msg = f"{manifest_path} bulunamadi"
-        raise DatasetIntegrityError(msg)
-    raw = manifest_path.read_bytes()
+    raw = _read_once(dataset_dir, PurePosixPath(MANIFEST_NAME))
     actual = hashlib.sha256(raw).hexdigest()
     if actual != expected:
         msg = f"manifest hash'i uyusmuyor: beklenen {expected}, bulunan {actual}"
@@ -516,8 +639,8 @@ def verify_baseline(dataset_dir: Path, expected_manifest_sha256: str) -> Verifie
     if manifest.get("schema_version") != MANIFEST_SCHEMA_VERSION:
         msg = f"desteklenmeyen manifest surumu: {manifest.get('schema_version')!r}"
         raise DatasetIntegrityError(msg)
+    timeframe = Timeframe(manifest["timeframe"])
 
-    baseline_root = dataset_dir / BASELINE_DIR
     declared: dict[PurePosixPath, dict[str, Any]] = {}
     for entry in manifest["files"]:
         relative = _safe_relative(entry["path"])
@@ -528,29 +651,31 @@ def verify_baseline(dataset_dir: Path, expected_manifest_sha256: str) -> Verifie
             raise DatasetIntegrityError(msg)
         declared[relative] = entry
 
-    for relative, entry in declared.items():
-        path = dataset_dir / relative
-        if not path.is_file():
-            msg = f"manifestteki dosya eksik: {relative}"
-            raise DatasetIntegrityError(msg)
-        found = file_sha256(path)
-        if found != entry["sha256"]:
-            msg = f"{relative} hash'i uyusmuyor: beklenen {entry['sha256']}, bulunan {found}"
-            raise DatasetIntegrityError(msg)
-
-    present = {
-        PurePosixPath(path.relative_to(dataset_dir).as_posix())
-        for path in baseline_root.rglob("*")
-        if path.is_file()
-    }
+    # Agac OKUMADAN ONCE denetlenir: bir symlink varsa hicbir dosya
+    # acilmadan reddedilir.
+    present = _baseline_tree(dataset_dir)
     extra = sorted(str(item) for item in present - set(declared))
     if extra:
         msg = f"baseline/ icinde manifestte olmayan dosya: {extra}"
         raise DatasetIntegrityError(msg)
 
+    bars: dict[str, tuple[Bar, ...]] = {}
+    for relative, entry in sorted(declared.items()):
+        data = _read_once(dataset_dir, relative)
+        found = hashlib.sha256(data).hexdigest()
+        if found != entry["sha256"]:
+            msg = f"{relative} hash'i uyusmuyor: beklenen {entry['sha256']}, bulunan {found}"
+            raise DatasetIntegrityError(msg)
+        decoded = bars_from_frame(pd.read_parquet(io.BytesIO(data)), entry["symbol"])
+        if content_sha256(decoded) != entry["content_sha256"] or len(decoded) != entry["bars"]:
+            msg = f"{relative} icerigi manifestle uyusmuyor"
+            raise DatasetIntegrityError(msg)
+        bars[str(entry["symbol"]).upper()] = tuple(decoded)
+
     return VerifiedBaseline(
-        root=baseline_root,
         manifest_sha256=actual,
         manifest=manifest,
         sessions=_baseline_sessions(manifest),
+        bars=bars,
+        timeframe=timeframe,
     )
