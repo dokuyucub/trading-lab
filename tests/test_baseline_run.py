@@ -1,0 +1,193 @@
+"""Offline baseline olcumu: yalnizca baseline, tekrar uretilebilir, durust.
+
+Veri, her seansta temiz bir kirilim uretecek sekilde kuruluyor ki
+maliyet senaryolari gercek islemler uzerinde karsilastirilabilsin.
+Seanslar Mart 2026'da ve 8 Mart'taki YAZ SAATI gecisini kapsiyor:
+acilis 14:30 UTC'den 13:30 UTC'ye kayiyor. Sabit bir UTC saati
+varsayan bir hata burada kirilirdi.
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import UTC, date, datetime, timedelta
+from itertools import pairwise
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from fs_audit import filesystem_access, touched_under
+from test_dataset import FakeBars, FakeCalendar, session, weekdays
+from tlab.backtest.baseline import DEFAULT_SCENARIOS, report_bytes, run_baseline
+from tlab.config import Config, load_config
+from tlab.core.types import Bar
+from tlab.data.dataset import (
+    DatasetIntegrityError,
+    DatasetSpec,
+    VerifiedBaseline,
+    build_dataset,
+    manifest_sha256,
+    verify_baseline,
+)
+
+DAYS = weekdays(date(2026, 3, 2), 10)
+SESSIONS = [session(day) for day in DAYS]
+DOWNLOADED_AT = datetime(2026, 4, 1, 12, 0, tzinfo=UTC)
+
+
+def breakout_session(window: Any, symbol: str = "SPY", base: float = 100.0) -> list[Bar]:
+    """Aralik olusur, kirilir, hedefe dakika dakika yurur.
+
+    `tests/test_backtest.py::breakout_day` ile ayni bicim; tek fark,
+    zaman ekseni sabit bir UTC saatinden degil RESMI seans acilisindan
+    kuruluyor.
+    """
+    minutes = int((window.close - window.open) / timedelta(minutes=1))
+    bars: list[Bar] = []
+    for minute in range(minutes):
+        if minute < 20:
+            price, volume = base, 10_000.0
+        elif minute == 20:
+            price, volume = base + 0.8, 40_000.0
+        else:
+            price = min(base + 4.0, base + 0.8 + (minute - 20) * 0.25)
+            volume = 10_000.0
+        bars.append(
+            Bar(
+                symbol=symbol,
+                ts=window.open + timedelta(minutes=minute),
+                open=price,
+                high=price + 0.5,
+                low=price - 0.5,
+                close=price,
+                volume=volume,
+                vwap=price,
+                trade_count=50,
+            )
+        )
+    return bars
+
+
+@pytest.fixture
+def config() -> Config:
+    return load_config(Path(__file__).resolve().parents[1])
+
+
+@pytest.fixture
+def dataset(tmp_path: Path) -> Path:
+    bars = {"SPY": [bar for item in SESSIONS for bar in breakout_session(item)]}
+    out = tmp_path / "ds"
+    build_dataset(
+        DatasetSpec(dataset_id="breakouts", symbols=("SPY",), start=DAYS[0], end=DAYS[-1]),
+        bars_source=FakeBars(bars),
+        calendar_source=FakeCalendar(SESSIONS),
+        out_dir=out,
+        downloaded_at=DOWNLOADED_AT,
+        producer={"run_id": "test", "commit": "0" * 40},
+    )
+    return out
+
+
+@pytest.fixture
+def verified(dataset: Path) -> VerifiedBaseline:
+    return verify_baseline(dataset, manifest_sha256(dataset))
+
+
+def test_every_cost_scenario_runs_on_real_trades(
+    verified: VerifiedBaseline, config: Config
+) -> None:
+    report = run_baseline(verified, config, code_commit="c0ffee")
+    names = [item["name"] for item in report["scenarios"]]
+    assert names == [item.name for item in DEFAULT_SCENARIOS]
+    primary = next(
+        item for item in report["scenarios"] if item["name"] == report["primary_scenario"]
+    )
+    assert primary["trades"] > 0, "veri islem uretmiyor - senaryolar bos karsilastiriliyor"
+    assert primary["trading_days"] == 8
+
+
+def test_harsher_costs_never_improve_expectancy(verified: VerifiedBaseline, config: Config) -> None:
+    """Maliyet arttikca beklenen deger artamaz.
+
+    Artiyorsa, maliyet modeli ya da olcum yanlis demektir - ve bu
+    tur bir hata en cok "strateji maliyete dayanikli" diye
+    yanlis okunur.
+    """
+    report = run_baseline(verified, config, code_commit="c0ffee")
+    values = [item["expectancy_r"] for item in report["scenarios"]]
+    assert all(later <= earlier + 1e-9 for earlier, later in pairwise(values))
+
+
+def test_the_same_dataset_gives_a_byte_identical_report(
+    verified: VerifiedBaseline, config: Config
+) -> None:
+    """Ayni veri + config + kod -> bayt bayt ayni rapor.
+
+    Rapora duvar saati, rastgele kosu kimligi ya da yerel dosya yolu
+    girseydi bu test kirilirdi.
+    """
+    first = report_bytes(run_baseline(verified, config, code_commit="c0ffee"))
+    second = report_bytes(run_baseline(verified, config, code_commit="c0ffee"))
+    assert first == second
+
+
+def test_the_report_does_not_reveal_holdout_dates(
+    dataset: Path, verified: VerifiedBaseline, config: Config
+) -> None:
+    """Holdout hakkinda yalnizca SAYI. Tarihler bile yazilmiyor.
+
+    Hangi gunlerin ayrildigini bilmek, o gunlere dair bir sey
+    hatirlamaya davetiyedir.
+    """
+    report = run_baseline(verified, config, code_commit="c0ffee")
+    holdout_days = json.loads((dataset / "manifest.json").read_bytes())["split"]["holdout"]
+    text = report_bytes(report).decode()
+    assert report["holdout"] == {"sessions": len(holdout_days), "opened": False}
+    for day in holdout_days:
+        assert day not in text, f"rapor holdout gununu iceriyor: {day}"
+
+
+def test_running_the_baseline_never_touches_the_holdout(dataset: Path, config: Config) -> None:
+    """Dogrulama + tam backtest, holdout'a tek bir erisim yapmadan."""
+    with filesystem_access() as seen:
+        verified = verify_baseline(dataset, manifest_sha256(dataset))
+        run_baseline(verified, config, code_commit="c0ffee")
+
+    assert seen, "denetim kancasi hicbir olay gormedi - test kendi kendini olcmuyor"
+    touched = touched_under(seen, dataset / "holdout")
+    assert not touched, f"holdout'a erisildi: {touched}"
+
+
+def test_the_point_estimate_never_appears_without_its_verdict(
+    verified: VerifiedBaseline, config: Config
+) -> None:
+    """Pozitif bir beklenen deger tek basina kanit degil.
+
+    Her senaryoda nokta tahmininin yaninda ogrenme katmaninin hukmu
+    duruyor. Bu veri kasten kazandiran bir desen iceriyor; yine de
+    islem sayisi az oldugu icin hukum 'yetersiz veri' olmali -
+    rakamlar ne kadar parlak gorunurse gorunsun.
+    """
+    report = run_baseline(verified, config, code_commit="c0ffee")
+    for item in report["scenarios"]:
+        assert "evidence" in item
+        assert item["evidence"]["verdict"] == "insufficient_data"
+        assert item["evidence"]["trades_needed"] > item["trades"]
+
+
+def test_the_report_states_what_it_is_not(verified: VerifiedBaseline, config: Config) -> None:
+    report = run_baseline(verified, config, code_commit="c0ffee")
+    caveats = " ".join(report["caveats"])
+    assert "Holdout acilmadi" in caveats
+    assert "terfi karari DEGILDIR" in caveats
+
+
+def test_a_tampered_dataset_never_reaches_the_backtest(dataset: Path) -> None:
+    """Backtest'in girdisi dogrulanmis bir baseline; bozuk veri oraya varamaz."""
+    target = dataset / "baseline" / "SPY" / "1Min.parquet"
+    data = bytearray(target.read_bytes())
+    data[-100] ^= 0xFF
+    target.write_bytes(bytes(data))
+    with pytest.raises(DatasetIntegrityError):
+        verify_baseline(dataset, manifest_sha256(dataset))
