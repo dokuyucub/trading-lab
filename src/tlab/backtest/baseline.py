@@ -97,8 +97,8 @@ def _run_scenario(
     starting_equity: float,
     timeframe: Timeframe,
 ) -> dict[str, Any]:
-    first = min(verified.sessions)
-    last = max(verified.sessions)
+    first = min(verified.days)
+    last = max(verified.days)
     start = datetime.combine(first, datetime.min.time(), UTC)
     # Son baseline gununun tamamini kapsa; holdout dosyalari zaten
     # baseline kokunde YOK, yani aralik genis olsa bile gorunmez.
@@ -125,6 +125,9 @@ def _run_scenario(
             ),
             timeframe=timeframe,
             opening_range_minutes=strategy.params.opening_range_minutes,
+            # Resmi seans saatleri: yarim gunde kapanis 13:00, ve seans
+            # sinirinda acik pozisyon kalirsa olcum durur.
+            sessions=verified.sessions,
         ).run(start, end)
 
         r_values = _r_values(conn, result.run_id)
@@ -184,9 +187,9 @@ def run_baseline(
         "dataset_id": verified.dataset_id,
         "manifest_sha256": verified.manifest_sha256,
         "baseline_sessions": {
-            "first": min(verified.sessions).isoformat(),
-            "last": max(verified.sessions).isoformat(),
-            "count": len(verified.sessions),
+            "first": min(verified.days).isoformat(),
+            "last": max(verified.days).isoformat(),
+            "count": len(verified.days),
         },
         # Holdout hakkinda YALNIZCA sayi. Tarihler bile yazilmiyor:
         # hangi gunlerin ayrildigini bilmek, o gunlere dair bir sey

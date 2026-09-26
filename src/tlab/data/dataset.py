@@ -408,6 +408,15 @@ def build_dataset(
         "expires_at": expires_at.astimezone(UTC).isoformat(),
         "sessions": {
             "calendar": len(sessions),
+            # Resmi acilis/kapanis (UTC). Olcum yarim gunleri bunlardan
+            # bilir; gun listesi tek basina 13:00 kapanisini tasimaz.
+            "hours": {
+                item.day.isoformat(): [
+                    item.open.astimezone(UTC).isoformat(),
+                    item.close.astimezone(UTC).isoformat(),
+                ]
+                for item in sorted(sessions, key=lambda entry: entry.day)
+            },
             "complete": [item.day.isoformat() for item in complete],
             "incomplete": [
                 {"day": item.session.day.isoformat(), "reason": item.reason}
@@ -441,11 +450,35 @@ class VerifiedBaseline:
     root: Path
     manifest_sha256: str
     manifest: dict[str, Any]
-    sessions: tuple[date, ...]
+    sessions: tuple[TradingSession, ...]
+    """Baseline seanslari, RESMI acilis/kapanis saatleriyle."""
 
     @property
     def dataset_id(self) -> str:
         return str(self.manifest["dataset_id"])
+
+    @property
+    def days(self) -> tuple[date, ...]:
+        return tuple(item.day for item in self.sessions)
+
+
+def _baseline_sessions(manifest: dict[str, Any]) -> tuple[TradingSession, ...]:
+    """Manifestteki baseline gunlerini resmi saatleriyle kurar."""
+    hours = manifest["sessions"].get("hours", {})
+    found: list[TradingSession] = []
+    for text in manifest["split"]["baseline"]:
+        if text not in hours:
+            msg = f"manifestte {text} icin resmi seans saati yok"
+            raise DatasetIntegrityError(msg)
+        open_text, close_text = hours[text]
+        found.append(
+            TradingSession(
+                day=date.fromisoformat(text),
+                open=datetime.fromisoformat(open_text),
+                close=datetime.fromisoformat(close_text),
+            )
+        )
+    return tuple(found)
 
 
 def manifest_sha256(dataset_dir: Path) -> str:
@@ -515,7 +548,9 @@ def verify_baseline(dataset_dir: Path, expected_manifest_sha256: str) -> Verifie
         msg = f"baseline/ icinde manifestte olmayan dosya: {extra}"
         raise DatasetIntegrityError(msg)
 
-    days = tuple(date.fromisoformat(item) for item in manifest["split"]["baseline"])
     return VerifiedBaseline(
-        root=baseline_root, manifest_sha256=actual, manifest=manifest, sessions=days
+        root=baseline_root,
+        manifest_sha256=actual,
+        manifest=manifest,
+        sessions=_baseline_sessions(manifest),
     )

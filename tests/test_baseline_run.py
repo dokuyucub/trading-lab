@@ -10,18 +10,24 @@ varsayan bir hata burada kirilirdi.
 from __future__ import annotations
 
 import json
-from datetime import UTC, date, datetime, timedelta
+import sqlite3
+from datetime import UTC, date, datetime, time, timedelta
 from itertools import pairwise
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from fs_audit import filesystem_access, touched_under
 from test_dataset import FakeBars, FakeCalendar, session, weekdays
 from tlab.backtest.baseline import DEFAULT_SCENARIOS, report_bytes, run_baseline
+from tlab.backtest.engine import Backtest, CarriedPositionError
 from tlab.config import Config, load_config
+from tlab.core.calendar import TradingSession
 from tlab.core.types import Bar
+from tlab.data.cache import BarCache
+from tlab.data.cached import CachedMarketData
 from tlab.data.dataset import (
     DatasetIntegrityError,
     DatasetSpec,
@@ -30,6 +36,8 @@ from tlab.data.dataset import (
     manifest_sha256,
     verify_baseline,
 )
+from tlab.journal.db import apply_migrations
+from tlab.strategies.orb import OpeningRangeBreakout, ORBParams
 
 DAYS = weekdays(date(2026, 3, 2), 10)
 SESSIONS = [session(day) for day in DAYS]
@@ -191,3 +199,151 @@ def test_a_tampered_dataset_never_reaches_the_backtest(dataset: Path) -> None:
     target.write_bytes(bytes(data))
     with pytest.raises(DatasetIntegrityError):
         verify_baseline(dataset, manifest_sha256(dataset))
+
+
+# ---------------------------------------------------------------------------
+# Gun sonu kapanisi (Codex B1)
+#
+# Asagidaki veride fiyat kirilir ve sonra YERINDE SAYAR: ne stop'a ne
+# hedefe gider. Tek cikis yolu gun sonu kapatmasidir. Bu testlerden
+# once o yol hic calismiyordu: SimBroker bracket bacaklarini iptal
+# etmedigi icin dongu kapatma gondermiyor, pozisyon gece tasiniyor ve
+# ertesi sabahin acilis boslugu "stop" diye raporlaniyordu.
+# ---------------------------------------------------------------------------
+
+NY = ZoneInfo("America/New_York")
+
+
+def stalling_session(
+    window: TradingSession, symbol: str = "SPY", base: float = 100.0, *, cut_last: int = 0
+) -> list[Bar]:
+    """Kirilim, sonra yatay seyir. `cut_last`: sondan eksik dakika."""
+    minutes = int((window.close - window.open) / timedelta(minutes=1)) - cut_last
+    bars: list[Bar] = []
+    for minute in range(minutes):
+        if minute < 20:
+            price, volume = base, 10_000.0
+        elif minute == 20:
+            price, volume = base + 0.8, 40_000.0
+        else:
+            price, volume = base + 0.9, 10_000.0
+        bars.append(
+            Bar(
+                symbol=symbol,
+                ts=window.open + timedelta(minutes=minute),
+                open=price,
+                high=price + 0.5,
+                low=price - 0.5,
+                close=price,
+                volume=volume,
+                vwap=price,
+                trade_count=50,
+            )
+        )
+    return bars
+
+
+def build_stalling(
+    tmp_path: Path, sessions: list[TradingSession], *, cut: dict[date, int] | None = None
+) -> VerifiedBaseline:
+    cut = cut or {}
+    bars = [
+        bar for item in sessions for bar in stalling_session(item, cut_last=cut.get(item.day, 0))
+    ]
+    out = tmp_path / "stall"
+    build_dataset(
+        DatasetSpec(
+            dataset_id="stall", symbols=("SPY",), start=sessions[0].day, end=sessions[-1].day
+        ),
+        bars_source=FakeBars({"SPY": bars}),
+        calendar_source=FakeCalendar(sessions),
+        out_dir=out,
+        downloaded_at=DOWNLOADED_AT,
+        producer={"run_id": "test"},
+    )
+    return verify_baseline(out, manifest_sha256(out))
+
+
+def exits_of(verified: VerifiedBaseline, config: Config) -> list[sqlite3.Row]:
+    """Baseline'i resmi takvimle kosar, cikan islemleri dondurur."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    apply_migrations(conn)
+    config = config.model_copy(update={"symbols": ("SPY",)})
+    strategy = OpeningRangeBreakout(ORBParams())
+    first, last = min(verified.days), max(verified.days)
+    Backtest(
+        config=config,
+        strategy=strategy,
+        market=CachedMarketData(BarCache(verified.root)),
+        conn=conn,
+        opening_range_minutes=strategy.params.opening_range_minutes,
+        sessions=verified.sessions,
+    ).run(
+        datetime.combine(first, time(), UTC),
+        datetime.combine(last, time(), UTC) + timedelta(days=1),
+    )
+    return conn.execute("SELECT * FROM trades ORDER BY entry_ts").fetchall()
+
+
+def local(text: str) -> datetime:
+    return datetime.fromisoformat(text).astimezone(NY)
+
+
+def test_a_position_that_goes_nowhere_is_closed_before_the_bell(
+    tmp_path: Path, config: Config
+) -> None:
+    verified = build_stalling(tmp_path, SESSIONS)
+    trades = exits_of(verified, config)
+    assert len(trades) == len(verified.days), "her baseline gununde bir islem bekleniyordu"
+    for trade in trades:
+        assert trade["exit_reason"] == "eod_flatten"
+        entry, exit_ = local(trade["entry_ts"]), local(trade["exit_ts"])
+        assert exit_.date() == entry.date(), f"pozisyon gece tasindi: {dict(trade)}"
+        assert exit_.time() == time(15, 50), "kapanis 16:00 - 10 dk tamponda olmali"
+
+
+def test_a_half_day_closes_at_the_official_one_pm_bell(tmp_path: Path, config: Config) -> None:
+    """Codex B1: config'in sabit 16:00'i yarim gunde yanlis.
+
+    13:00 kapanisli gunde gun sonu kapatmasi 12:50'de olmali.
+    Eskiden baseline sonunda bir acik pozisyon kaliyordu.
+    """
+    half_days = {DAYS[2], DAYS[5]}
+    sessions = [
+        session(day, close=time(13, 0)) if day in half_days else session(day) for day in DAYS
+    ]
+    verified = build_stalling(tmp_path, sessions)
+    trades = exits_of(verified, config)
+
+    by_day = {local(trade["entry_ts"]).date(): trade for trade in trades}
+    for day in half_days & set(verified.days):
+        exit_ = local(by_day[day]["exit_ts"])
+        assert exit_.date() == day
+        assert exit_.time() == time(12, 50), f"{day}: {exit_}"
+    assert all(local(t["exit_ts"]).date() == local(t["entry_ts"]).date() for t in trades)
+
+
+def test_every_session_of_a_half_day_dataset_ends_flat(tmp_path: Path, config: Config) -> None:
+    """Son baseline gunu dahil hicbir seans acik pozisyonla bitmez.
+
+    Motor bunu kendisi denetler; burada rapor uretilebildigi, yani
+    `CarriedPositionError` firlatilmadigi dogrulaniyor.
+    """
+    sessions = [session(day, close=time(13, 0)) for day in DAYS]
+    verified = build_stalling(tmp_path, sessions)
+    report = run_baseline(verified, config, code_commit="c0ffee")
+    assert report["scenarios"][0]["trades"] == len(verified.days)
+
+
+def test_missing_closing_bars_stop_the_measurement_instead_of_inventing_a_fill(
+    tmp_path: Path, config: Config
+) -> None:
+    """Kapanis oncesi son 30 dakika yoksa kapatma dolamaz.
+
+    Son bilinen fiyattan dolum uydurmak yerine olcum durur: bu gunun
+    sonucu stratejiyi degil veri boslugunu olcerdi.
+    """
+    verified = build_stalling(tmp_path, SESSIONS, cut={DAYS[3]: 30})
+    with pytest.raises(CarriedPositionError, match="acik pozisyon"):
+        run_baseline(verified, config, code_commit="c0ffee")

@@ -328,7 +328,7 @@ def test_verification_returns_only_baseline_sessions(tmp_path: Path) -> None:
     out, manifest = build(tmp_path)
     verified = verify_baseline(out, manifest_sha256(out))
     assert verified.root == out / "baseline"
-    assert [day.isoformat() for day in verified.sessions] == manifest["split"]["baseline"]
+    assert [day.isoformat() for day in verified.days] == manifest["split"]["baseline"]
 
 
 def test_a_wrong_manifest_hash_stops_everything(tmp_path: Path) -> None:
