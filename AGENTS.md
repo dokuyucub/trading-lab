@@ -256,6 +256,42 @@ parametre seti canlıya ancak (a) yeterli örnek, (b) walk-forward backtest
 düzeltmek eski commit'lerdeki anahtarı silmez. `test_architecture.py` her
 koşuda izlenen dosyaları tarar.
 
+### 3.11 Holdout, sonuç görülmeden ayrılır ve ilk ölçümde açılmaz
+
+2026-09-26'da kararlaştırıldı (#17). Codex'in önerisi; kural onun cümlesi:
+
+> Sonuç görüldükten sonra aynı test dönemi üzerinde parametre ayarlayıp
+> bağımsız başarı diye sunulmaz.
+
+Bu kural en çok **ilk kötü sonuçtan sonra** çiğnenmek istenir, ve o anda
+yazılı bir kurala güvenmek yetmez. Bu yüzden mekanizma yapısaldır:
+
+- **Ayrım veri alınırken yapılır**, tek bir P&L satırı hesaplanmadan. Tamamlanmış
+  seansların son %20'si `holdout/`, önceki %80'i `baseline/`. Holdout sayısı
+  yukarı yuvarlanır. Rastgele değil kronolojik: rastgele seçilen bir gün komşu
+  günlerin rejimini paylaşır ve "görülmemiş" sayılamaz.
+- **Tarihler ve semboller önceden sabittir.** `config/datasets/<id>.yaml` commit
+  edilir; çalıştırma anında seçilmez. Değiştirmek yeni `dataset_id` gerektirir
+  ve gerekçesi yalnızca veri kalitesi olabilir, performans asla.
+- **Veri kümeleri tarih aralığında örtüşmez.** Örtüşseydi, bir kümedeki deneme
+  diğerinin holdout'unu görebilirdi.
+- **İlk ölçüm yalnızca baseline'ı görür.** Yükleyici `holdout/`'u listelemez,
+  okumaz, hash'lemez. Rapor holdout hakkında yalnızca seans *sayısı* taşır;
+  tarihleri bile yazmaz.
+- **Kesin manifest hash'i zorunludur.** "En son veri kümesini al" diye bir yol
+  yoktur. Tek bir bayt tutmazsa ölçüm durur.
+- **Holdout'u açmak ayrı ve kayıtlı bir değerlendirme olayıdır.** Açıldıktan
+  sonra o döneme göre değişen bir aday, **yeni bağımsız veri** gerektirir —
+  aynı holdout ikinci kez "görülmemiş" sayılamaz.
+- **Otomatik terfi yok.** Baseline raporu bir terfi kararı değildir.
+
+Denetleyenler: `tests/test_dataset.py` (holdout'a erişim, Python denetim
+kancasıyla doğrudan ölçülür — `chmod` değil, çünkü root izinleri yok sayar),
+`tests/test_baseline_run.py` (tam ölçüm boyunca da), `tests/test_dataset_specs.py`
+(örtüşmezlik), `tests/test_architecture.py` (veri kümesi modülü backtest,
+strateji, öğrenme veya seans döngüsünü içe aktaramaz — performans
+hesaplayamayan kod, bölme sınırını performansa göre seçemez).
+
 ## 4. Çakışmaya açık yerler
 
 | Dosya | Kural |
