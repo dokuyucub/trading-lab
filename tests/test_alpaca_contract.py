@@ -668,18 +668,23 @@ def test_the_price_adjustment_is_sent_explicitly(
 # --------------------------------------------------------------------------
 
 
-def _two_session_market(state: StubState) -> None:
-    """Iki kis gunu, her birinde seans ici birkac dakikalik bar."""
+def _two_session_market(state: StubState, *, minutes: int = 390) -> None:
+    """Iki kis gunu; varsayilan olarak seansin her dakikasinda bar.
+
+    `minutes` kucuk verilirse veri seyrek olur ve kalite politikasini
+    karsilamaz - olcumun P&L uretmeden durdugunu gostermek icin.
+    """
     state.calendar = [
         {"date": "2026-01-05", "open": "09:30", "close": "16:00"},
         {"date": "2026-01-06", "open": "09:30", "close": "16:00"},
     ]
     rows = []
     for day in ("05", "06"):
-        for minute in range(5):
+        opening = datetime(2026, 1, int(day), 14, 30, tzinfo=UTC)
+        for minute in range(minutes):
             rows.append(
                 {
-                    "t": f"2026-01-{day}T14:{30 + minute:02d}:00Z",
+                    "t": (opening + timedelta(minutes=minute)).strftime("%Y-%m-%dT%H:%M:%SZ"),
                     "o": 100.0,
                     "h": 100.5,
                     "l": 99.5,
@@ -758,6 +763,63 @@ def test_dataset_cli_end_to_end_through_the_real_sdk(
     assert code == 0
     assert "ACILMADI" in capsys.readouterr().out
     assert json.loads(report.read_bytes())["holdout"] == {"sessions": 1, "opened": False}
+
+
+def test_sparse_data_stops_the_baseline_before_any_report(
+    project_root: Path,
+    stub: tuple[str, StubState],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Seyrek veri: indirme ve dogrulama gecer, OLCUM durur ve rapor yazilmaz.
+
+    Codex B2: gunde bes dakikalik veri "tamamlanmis seans" sayiliyor ve
+    olculuyordu. Takvimsel tamamlanma veri uygunlugu degildir.
+    """
+    import functools
+
+    import tlab.cli as cli
+
+    url, state = stub
+    _two_session_market(state, minutes=5)
+    monkeypatch.setattr(cli, "AlpacaBroker", functools.partial(AlpacaBroker, base_url=url))
+    monkeypatch.setattr(cli, "AlpacaMarketData", functools.partial(AlpacaMarketData, base_url=url))
+    monkeypatch.setenv("ALPACA_PAPER_API_KEY", "PKTEST")
+    monkeypatch.setenv("ALPACA_PAPER_SECRET_KEY", "secret")
+
+    spec = tmp_path / "tiny.yaml"
+    spec.write_text(
+        "dataset_id: tiny\nsymbols: [SPY]\nstart: 2026-01-05\nend: 2026-01-06\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "tiny"
+    assert (
+        cli_main(["--root", str(project_root), "dataset", "build", str(spec), "--out", str(out)])
+        == 0
+    )
+    built = capsys.readouterr().out
+    assert "kaliteye uymayan  : baseline 1, holdout 1 seans" in built
+    digest = next(
+        line.split(":")[1].strip() for line in built.splitlines() if "manifest_sha256" in line
+    )
+
+    report = tmp_path / "report.json"
+    code = cli_main(
+        [
+            "--root",
+            str(project_root),
+            "baseline",
+            str(out),
+            "--manifest-sha256",
+            digest,
+            "--out",
+            str(report),
+        ]
+    )
+    assert code == 1
+    assert "kalite politikasini karsilamiyor" in capsys.readouterr().err
+    assert not report.exists(), "kalite kapisindan gecmeyen veriyle rapor yazildi"
 
 
 def test_dataset_build_without_keys_touches_nothing(

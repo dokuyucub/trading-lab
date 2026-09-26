@@ -30,6 +30,7 @@ from typing import Any
 from tlab.backtest.engine import Backtest
 from tlab.backtest.sim_broker import SimFillModel
 from tlab.config import Config
+from tlab.core.calendar import TradingSession
 from tlab.core.types import Timeframe
 from tlab.data.cached import CachedMarketData
 from tlab.data.dataset import VerifiedBaseline, canonical_json
@@ -93,6 +94,7 @@ def _run_scenario(
     config: Config,
     scenario: CostScenario,
     *,
+    sessions: tuple[TradingSession, ...],
     starting_equity: float,
     timeframe: Timeframe,
 ) -> dict[str, Any]:
@@ -125,8 +127,9 @@ def _run_scenario(
             timeframe=timeframe,
             opening_range_minutes=strategy.params.opening_range_minutes,
             # Resmi seans saatleri: yarim gunde kapanis 13:00, ve seans
-            # sinirinda acik pozisyon kalirsa olcum durur.
-            sessions=verified.sessions,
+            # sinirinda acik pozisyon kalirsa olcum durur. Yalnizca kalite
+            # kapisindan gecen seanslar.
+            sessions=sessions,
         ).run(start, end)
 
         r_values = _r_values(conn, result.run_id)
@@ -178,8 +181,21 @@ def run_baseline(
     timeframe = Timeframe(manifest["timeframe"])
 
     semantic = config.semantic_dump()
+    # Kalite kapisi P&L'DEN ONCE: uygun olmayan veri tek bir islem
+    # hesaplanmadan olcumu durdurur (DatasetQualityError).
+    measurable = verified.measurable_sessions(
+        opening_range_minutes=ORBParams().opening_range_minutes,
+        flatten_before_close_minutes=config.session.flatten_before_close_minutes,
+    )
     results = [
-        _run_scenario(verified, config, item, starting_equity=starting_equity, timeframe=timeframe)
+        _run_scenario(
+            verified,
+            config,
+            item,
+            sessions=measurable,
+            starting_equity=starting_equity,
+            timeframe=timeframe,
+        )
         for item in scenarios
     ]
     return {
@@ -195,6 +211,11 @@ def run_baseline(
         # hangi gunlerin ayrildigini bilmek, o gunlere dair bir sey
         # hatirlamaya davetiyedir.
         "holdout": {"sessions": len(manifest["split"]["holdout"]), "opened": False},
+        "quality": {
+            "policy": verified.policy.model_dump(mode="json"),
+            "measured_sessions": len(measurable),
+            "excluded_sessions": len(verified.days) - len(measurable),
+        },
         "code_commit": code_commit,
         # Hash tek basina ayarlari yeniden kurdurmaz; tam semantik
         # ayarlar da raporda. Yerel yollar ikisine de girmez: ayni

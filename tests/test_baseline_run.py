@@ -30,7 +30,9 @@ from tlab.core.types import Bar
 from tlab.data.cached import CachedMarketData
 from tlab.data.dataset import (
     DatasetIntegrityError,
+    DatasetQualityError,
     DatasetSpec,
+    QualityPolicy,
     VerifiedBaseline,
     build_dataset,
     manifest_sha256,
@@ -373,14 +375,73 @@ def test_every_session_of_a_half_day_dataset_ends_flat(tmp_path: Path, config: C
     assert report["scenarios"][0]["trades"] == len(verified.days)
 
 
-def test_missing_closing_bars_stop_the_measurement_instead_of_inventing_a_fill(
+def test_missing_closing_bars_stop_the_measurement_before_any_pnl(
     tmp_path: Path, config: Config
 ) -> None:
-    """Kapanis oncesi son 30 dakika yoksa kapatma dolamaz.
+    """Kapanis oncesi son 30 dakika yoksa olcum HIC baslamaz.
 
-    Son bilinen fiyattan dolum uydurmak yerine olcum durur: bu gunun
-    sonucu stratejiyi degil veri boslugunu olcerdi.
+    Kalite kapisi P&L'den once calisir: kapatmanin dolacagi bir fiyat
+    yoksa o gunun sonucu stratejiyi degil veri boslugunu olcerdi.
+    """
+    verified = build_stalling(tmp_path, SESSIONS, cut={DAYS[3]: 30})
+    with pytest.raises(DatasetQualityError, match=DAYS[3].isoformat()):
+        run_baseline(verified, config, code_commit="c0ffee")
+
+
+def test_the_engine_itself_refuses_to_invent_a_closing_fill(tmp_path: Path, config: Config) -> None:
+    """Kalite kapisi atlansa bile motor dolum UYDURMAZ.
+
+    Ikinci savunma hatti: resmi takvimle kosuda seans sinirinda acik
+    pozisyon kalirsa motor durur. Kalite politikasi bir tahmindir;
+    bu ise bir degismez.
     """
     verified = build_stalling(tmp_path, SESSIONS, cut={DAYS[3]: 30})
     with pytest.raises(CarriedPositionError, match="acik pozisyon"):
-        run_baseline(verified, config, code_commit="c0ffee")
+        exits_of(verified, config)
+
+
+def test_the_quality_window_must_fit_inside_the_flatten_buffer(
+    verified: VerifiedBaseline, config: Config
+) -> None:
+    """Kapanis penceresi gun sonu tamponundan buyukse penceredeki bar
+    kapatma anindan once kalabilir; olcum tutarsiz politikayla baslamaz."""
+    tight = config.model_copy(
+        update={"session": config.session.model_copy(update={"flatten_before_close_minutes": 5})}
+    )
+    with pytest.raises(DatasetQualityError, match="gun sonu tamponundan"):
+        run_baseline(verified, tight, code_commit="c0ffee")
+
+
+def test_a_tolerant_policy_excludes_and_reports_ineligible_sessions(
+    tmp_path: Path, config: Config
+) -> None:
+    """Politika izin veriyorsa uygun olmayan seans olcumden CIKAR ve sayilir.
+
+    Varsayilan sifir; bu davranis ancak onceden, spec'te acikca
+    istenirse devreye girer.
+    """
+    bars = [
+        bar
+        for item in SESSIONS
+        for bar in stalling_session(item, cut_last=30 if item.day == DAYS[3] else 0)
+    ]
+    out = tmp_path / "tolerant"
+    build_dataset(
+        DatasetSpec(
+            dataset_id="tolerant",
+            symbols=("SPY",),
+            start=DAYS[0],
+            end=DAYS[-1],
+            quality=QualityPolicy(max_ineligible_sessions=1),
+        ),
+        bars_source=FakeBars({"SPY": bars}),
+        calendar_source=FakeCalendar(SESSIONS),
+        out_dir=out,
+        downloaded_at=DOWNLOADED_AT,
+        producer={"run_id": "test"},
+    )
+    verified = verify_baseline(out, manifest_sha256(out))
+    report = run_baseline(verified, config, code_commit="c0ffee")
+    assert report["quality"]["excluded_sessions"] == 1
+    assert report["quality"]["measured_sessions"] == len(verified.days) - 1
+    assert report["scenarios"][0]["trades"] == len(verified.days) - 1

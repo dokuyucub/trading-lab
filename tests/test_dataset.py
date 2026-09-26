@@ -173,21 +173,44 @@ def test_too_few_sessions_cannot_be_split() -> None:
 def test_a_session_not_yet_settled_is_incomplete() -> None:
     last = SESSIONS[-1]
     downloaded = last.close + timedelta(minutes=5)
-    bars = {"SPY": [bar for item in SESSIONS for bar in minute_bars("SPY", item)]}
-    verdicts = classify_sessions(SESSIONS, bars, downloaded_at=downloaded, settle_minutes=20)
+    verdicts = classify_sessions(SESSIONS, downloaded_at=downloaded, settle_minutes=20)
     assert not verdicts[-1].complete
     assert "kapanmamisti" in verdicts[-1].reason
     assert all(item.complete for item in verdicts[:-1])
 
 
-def test_a_session_without_bars_for_one_symbol_names_that_symbol() -> None:
-    bars = {
+def test_a_symbol_without_bars_does_not_move_the_holdout_boundary(tmp_path: Path) -> None:
+    """Codex B2: bolme yalnizca TAKVIME bakar.
+
+    Eskiden bir sembolun hic bari olmayan gun bolmeden dusuyor ve
+    holdout siniri o bosluga gore kayiyordu. Artik gun bolmede kalir;
+    veri eksikligi kalite olcusunde gorunur ve olcumu durdurur.
+    """
+    full = {
         "SPY": [bar for item in SESSIONS for bar in minute_bars("SPY", item)],
-        "QQQ": [bar for item in SESSIONS[1:] for bar in minute_bars("QQQ", item)],
+        "QQQ": [bar for item in SESSIONS for bar in minute_bars("QQQ", item)],
     }
-    verdicts = classify_sessions(SESSIONS, bars, downloaded_at=DOWNLOADED_AT, settle_minutes=20)
-    assert not verdicts[0].complete
-    assert verdicts[0].reason == "seans ici bar yok: QQQ"
+    gap = {**full, "QQQ": [b for item in SESSIONS[1:] for b in minute_bars("QQQ", item)]}
+
+    splits = []
+    for name, bars in (("full", full), ("gap", gap)):
+        manifest = build_dataset(
+            spec(symbols=["SPY", "QQQ"]),
+            bars_source=FakeBars(bars),
+            calendar_source=FakeCalendar(SESSIONS),
+            out_dir=tmp_path / name,
+            downloaded_at=DOWNLOADED_AT,
+            producer=PRODUCER,
+        )
+        splits.append(manifest["split"])
+
+    assert splits[0]["baseline"] == splits[1]["baseline"]
+    assert splits[0]["holdout"] == splits[1]["holdout"]
+
+    first = manifest["quality"]["sessions"][DAYS[0].isoformat()]
+    assert not first["eligible"]
+    assert first["symbols"]["QQQ"]["reasons"] == ["seans ici bar yok"]
+    assert first["symbols"]["SPY"]["reasons"] == []
 
 
 def test_missing_minutes_do_not_move_the_split(tmp_path: Path) -> None:
@@ -205,7 +228,7 @@ def test_missing_minutes_do_not_move_the_split(tmp_path: Path) -> None:
         producer=PRODUCER,
     )
     assert len(manifest["split"]["baseline"]) == 8
-    assert manifest["quality"]["SPY"]["missing_regular_minutes"] == 7 * 10
+    assert manifest["quality"]["symbols"]["SPY"]["missing_regular_minutes"] == 7 * 10
 
 
 def test_a_half_day_is_measured_against_its_official_close(tmp_path: Path) -> None:
@@ -225,7 +248,83 @@ def test_a_half_day_is_measured_against_its_official_close(tmp_path: Path) -> No
         producer=PRODUCER,
     )
     assert DAYS[0].isoformat() in manifest["sessions"]["complete"]
-    assert manifest["quality"]["SPY"]["missing_regular_minutes"] == 0
+    assert manifest["quality"]["symbols"]["SPY"]["missing_regular_minutes"] == 0
+    half_day = manifest["quality"]["sessions"][DAYS[0].isoformat()]
+    assert half_day["eligible"], "tam veri yarim gunde uygun sayilmali"
+    assert half_day["symbols"]["SPY"]["close_window_bars"] == 10
+
+
+# --------------------------------------------------------------------------
+# Kalite politikasi (Codex B2)
+# --------------------------------------------------------------------------
+
+
+def quality_of(tmp_path: Path, bars: list[Bar], **policy: Any) -> dict[str, Any]:
+    manifest = build_dataset(
+        spec(quality=policy) if policy else spec(),
+        bars_source=FakeBars({"SPY": bars}),
+        calendar_source=FakeCalendar(SESSIONS),
+        out_dir=tmp_path / "q",
+        downloaded_at=DOWNLOADED_AT,
+        producer=PRODUCER,
+    )
+    quality: dict[str, Any] = manifest["quality"]
+    return quality
+
+
+def test_missing_opening_minutes_make_the_session_ineligible(tmp_path: Path) -> None:
+    """Acilis araligi eksik dakikalarla olculurse yanlis sinyal uretir."""
+    bars = [
+        bar
+        for item in SESSIONS
+        for bar in minute_bars("SPY", item)
+        if not (item.day == DAYS[1] and bar.ts < item.open + timedelta(minutes=5))
+    ]
+    quality = quality_of(tmp_path, bars)
+    entry = quality["sessions"][DAYS[1].isoformat()]
+    assert not entry["eligible"]
+    assert entry["symbols"]["SPY"]["missing_open_window"] == 5
+    assert "acilis penceresinde 5 dk eksik" in entry["symbols"]["SPY"]["reasons"][0]
+
+
+def test_no_bar_before_the_bell_makes_the_session_ineligible(tmp_path: Path) -> None:
+    """Kapanistan onceki pencerede bar yoksa gun sonu kapatmasi dolamaz."""
+    bars = [
+        bar
+        for item in SESSIONS
+        for bar in minute_bars("SPY", item, skip=10 if item.day == DAYS[2] else 0)
+    ]
+    quality = quality_of(tmp_path, bars)
+    entry = quality["sessions"][DAYS[2].isoformat()]
+    assert not entry["eligible"]
+    assert entry["symbols"]["SPY"]["close_window_bars"] == 0
+
+
+def test_heavily_missing_data_is_ineligible_even_with_open_and_close(tmp_path: Path) -> None:
+    """Codex'in sinamasi: seans basina yuzlerce eksik dakika 'tamamlanmis' sayiliyordu."""
+    bars = [
+        bar
+        for item in SESSIONS
+        for index, bar in enumerate(minute_bars("SPY", item))
+        if index < 20 or index % 3 == 0 or index > 380
+    ]
+    quality = quality_of(tmp_path, bars)
+    assert quality["ineligible"] == {"baseline": 8, "holdout": 2}
+    reasons = quality["sessions"][DAYS[0].isoformat()]["symbols"]["SPY"]["reasons"]
+    assert any("eksik dakika orani" in reason for reason in reasons)
+
+
+def test_the_quality_policy_is_part_of_the_fixed_spec(tmp_path: Path) -> None:
+    """Politika spec hash'ine girer: sonradan gevsetmek yeni bir veri kumesidir."""
+    _, strict = build(tmp_path, name="a")
+    _, loose = build(tmp_path, name="b", quality={"max_missing_fraction": 0.5})
+    assert strict["spec_sha256"] != loose["spec_sha256"]
+    assert loose["quality"]["policy"]["max_missing_fraction"] == 0.5
+
+
+def test_an_inconsistent_policy_is_rejected() -> None:
+    with pytest.raises(ValueError, match="acilis penceresinden buyuk"):
+        spec(quality={"open_window_minutes": 5, "max_missing_open_window": 6})
 
 
 # --------------------------------------------------------------------------

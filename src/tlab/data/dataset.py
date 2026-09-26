@@ -72,9 +72,67 @@ class DatasetIntegrityError(DataError):
     veriyle olcum yapmak demek olurdu."""
 
 
+class DatasetQualityError(DataError):
+    """Veri, onceden sabitlenmis kalite politikasini karsilamiyor.
+
+    Olcum P&L URETMEDEN durur: eksik acilis dakikalari yanlis bir
+    acilis araligi, eksik kapanis barlari dolamayan bir gun sonu
+    kapatmasi demektir. Bu veriyle cikan sonuc stratejiyi degil veri
+    boslugunu olcerdi.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Tanim
 # ---------------------------------------------------------------------------
+
+
+class QualityPolicy(BaseModel):
+    """Bir seansin OLCULEBILIR sayilmasi icin veri sartlari.
+
+    Spec'in parcasi: spec hash'ine girer ve INDIRMEDEN ONCE sabitlenir.
+    Sonuc gorulduken sonra gevsetilemez; degistirmek yeni bir
+    dataset_id gerektirir.
+
+    Takvimsel tamamlanma ile veri uygunlugu AYRI seylerdir (Codex B2).
+    Bolme yalnizca takvime bakar; bir sembolun verisi eksik diye bir
+    gun bolmeden dusmez - aksi halde holdout sinirinin yeri verinin
+    gurultusune bagli olurdu. Kalite ayrica olculur ve olcum kapisi
+    olarak uygulanir.
+
+    Dakika kurallari yalnizca 1Min veride anlamlidir; diger periyotlarda
+    yalnizca "seans icinde en az bir bar" aranir.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    open_window_minutes: int = Field(default=15, ge=1, le=120)
+    """Acilistan sonraki pencere. Acilis araligina dayanan bir strateji
+    bu dakikalar eksikse yanlis bir aralik olcer."""
+
+    max_missing_open_window: int = Field(default=3, ge=0)
+    """Acilis penceresinde izin verilen eksik dakika."""
+
+    close_window_minutes: int = Field(default=10, ge=1, le=120)
+    """Kapanistan onceki pencere: her sembolde EN AZ BIR bar olmali.
+    Yoksa gun sonu kapatmasi dolacak bir fiyat bulamaz. Olcum bu
+    degerin gun sonu tamponundan buyuk olmadigini ayrica denetler."""
+
+    max_missing_fraction: float = Field(default=0.10, ge=0.0, le=1.0)
+    """Seans genelinde eksik dakika orani."""
+
+    max_ineligible_sessions: int = Field(default=0, ge=0)
+    """Baseline'da izin verilen uygun olmayan seans sayisi. Varsayilan
+    sifir: tek bir uygun olmayan seans olcumu durdurur. Sifirdan
+    buyukse uygun olmayan seanslar olcumden CIKARILIR ve sayisi rapora
+    yazilir."""
+
+    @model_validator(mode="after")
+    def _consistent(self) -> QualityPolicy:
+        if self.max_missing_open_window > self.open_window_minutes:
+            msg = "max_missing_open_window acilis penceresinden buyuk olamaz"
+            raise ValueError(msg)
+        return self
 
 
 class DatasetSpec(BaseModel):
@@ -113,6 +171,7 @@ class DatasetSpec(BaseModel):
     indirilen bir seans eksik olabilir."""
 
     retention_days: int = Field(default=90, ge=1, le=400)
+    quality: QualityPolicy = Field(default_factory=QualityPolicy)
 
     @field_validator("symbols")
     @classmethod
@@ -184,42 +243,97 @@ class SessionVerdict:
 
 def classify_sessions(
     sessions: Sequence[TradingSession],
-    bars_by_symbol: dict[str, list[Bar]],
     *,
     downloaded_at: datetime,
     settle_minutes: int,
 ) -> list[SessionVerdict]:
-    """Her seansin TAMAMLANMIS olup olmadigini soyler.
+    """Her seansin TAKVIMSEL olarak tamamlanip tamamlanmadigini soyler.
 
-    Tamamlanmis = (1) kapanis + oturma suresi indirme anindan once
-    ve (2) HER sembol icin seans icinde en az bir bar var.
-
-    Ikinci kosul veri kalitesini bolmeye karistirmak degil: bir
-    sembolun hic bari olmayan bir gun, o gunun o sembol icin
-    olculemeyecegi demek. Eksik dakikalar ise bolmeyi DEGISTIRMEZ,
-    yalnizca kalite raporunda sayilir - aksi halde bolme sinirinin
-    yeri verinin gurultusune bagli olurdu.
+    Tamamlanmis = kapanis + oturma suresi indirme anindan once. Bar
+    sayisina BAKILMAZ (Codex B2): bir sembolun verisi eksik diye bir
+    gun bolmeden dusseydi, holdout sinirinin yeri veri boslugu
+    tarafindan oynatilabilirdi. Veri eksikligi `assess_quality` ile
+    ayrica olculur ve olcum kapisi olarak uygulanir.
     """
     if downloaded_at.tzinfo is None:
         msg = "downloaded_at zaman dilimi icermeli"
         raise DataError(msg)
     settle = timedelta(minutes=settle_minutes)
-    stamps = {symbol: sorted(bar.ts for bar in bars) for symbol, bars in bars_by_symbol.items()}
 
     verdicts: list[SessionVerdict] = []
     for session in sorted(sessions, key=lambda item: item.day):
         if session.close + settle > downloaded_at:
             verdicts.append(SessionVerdict(session, False, "indirme aninda kapanmamisti"))
-            continue
-        empty = sorted(
-            symbol for symbol, ordered in stamps.items() if _count_in_session(ordered, session) == 0
-        )
-        if empty:
-            reason = f"seans ici bar yok: {', '.join(empty)}"
-            verdicts.append(SessionVerdict(session, False, reason))
-            continue
-        verdicts.append(SessionVerdict(session, True))
+        else:
+            verdicts.append(SessionVerdict(session, True))
     return verdicts
+
+
+def _count_between(stamps: Sequence[datetime], start: datetime, end: datetime) -> int:
+    return bisect_left(stamps, end) - bisect_left(stamps, start)
+
+
+def assess_quality(
+    sessions: Sequence[TradingSession],
+    stamps_by_symbol: dict[str, list[datetime]],
+    *,
+    policy: QualityPolicy,
+    timeframe: Timeframe,
+) -> dict[str, dict[str, Any]]:
+    """Her (seans, sembol) icin kalite olculeri ve uygunluk.
+
+    Donen yapi manifeste aynen yazilir:
+    `{gun: {"eligible": bool, "symbols": {sembol: {...olculer, "reasons": [...]}}}}`.
+    Bu fonksiyon performans gormez; yalnizca zaman damgalarina bakar.
+    """
+    minute = timedelta(minutes=1)
+    result: dict[str, dict[str, Any]] = {}
+    for session in sorted(sessions, key=lambda item: item.day):
+        per_symbol: dict[str, Any] = {}
+        eligible = True
+        for symbol in sorted(stamps_by_symbol):
+            stamps = stamps_by_symbol[symbol]
+            count = _count_between(stamps, session.open, session.close)
+            reasons: list[str] = []
+            metrics: dict[str, Any] = {"bars": count}
+            if count == 0:
+                reasons.append("seans ici bar yok")
+            if timeframe is Timeframe.M1:
+                expected = int((session.close - session.open) / minute)
+                open_end = min(session.close, session.open + policy.open_window_minutes * minute)
+                open_expected = int((open_end - session.open) / minute)
+                open_missing = max(
+                    0, open_expected - _count_between(stamps, session.open, open_end)
+                )
+                close_start = max(
+                    session.open, session.close - policy.close_window_minutes * minute
+                )
+                close_bars = _count_between(stamps, close_start, session.close)
+                missing = max(0, expected - count)
+                fraction = missing / expected if expected else 1.0
+                metrics |= {
+                    "missing_minutes": missing,
+                    "missing_open_window": open_missing,
+                    "close_window_bars": close_bars,
+                }
+                if count and open_missing > policy.max_missing_open_window:
+                    reasons.append(
+                        f"acilis penceresinde {open_missing} dk eksik "
+                        f"(sinir {policy.max_missing_open_window})"
+                    )
+                if count and close_bars == 0:
+                    reasons.append(
+                        f"kapanistan onceki {policy.close_window_minutes} dk icinde bar yok"
+                    )
+                if count and fraction > policy.max_missing_fraction:
+                    reasons.append(
+                        f"eksik dakika orani {fraction:.3f} (sinir {policy.max_missing_fraction})"
+                    )
+            metrics["reasons"] = reasons
+            eligible = eligible and not reasons
+            per_symbol[symbol] = metrics
+        result[session.day.isoformat()] = {"eligible": eligible, "symbols": per_symbol}
+    return result
 
 
 def split_sessions(
@@ -344,7 +458,7 @@ def build_dataset(
         )
 
     verdicts = classify_sessions(
-        sessions, raw_bars, downloaded_at=downloaded_at, settle_minutes=spec.settle_minutes
+        sessions, downloaded_at=downloaded_at, settle_minutes=spec.settle_minutes
     )
     complete = [item.session for item in verdicts if item.complete]
     baseline, holdout = split_sessions(complete, spec.holdout_fraction)
@@ -353,12 +467,14 @@ def build_dataset(
     sessions_by_day = {item.day: item for item in sessions}
 
     files: list[dict[str, Any]] = []
-    quality: dict[str, Any] = {}
+    symbol_quality: dict[str, Any] = {}
+    stamps_by_symbol: dict[str, list[datetime]] = {}
     for symbol in spec.symbols:
         bars = raw_bars[symbol]
         stamps = [bar.ts for bar in bars]
         duplicates = len(stamps) - len(set(stamps))
         unique = list({bar.ts: bar for bar in bars}.values())
+        stamps_by_symbol[symbol] = sorted(bar.ts for bar in unique)
 
         parts: dict[str, list[Bar]] = {BASELINE_DIR: [], HOLDOUT_DIR: []}
         dropped = 0
@@ -373,13 +489,13 @@ def build_dataset(
 
         missing = 0
         if spec.timeframe is Timeframe.M1:
-            ordered = sorted(bar.ts for bar in unique)
+            ordered = stamps_by_symbol[symbol]
             for day in sorted(baseline_days | holdout_days):
                 session = sessions_by_day[day]
                 expected = int((session.close - session.open) / timedelta(minutes=1))
                 missing += max(0, expected - _count_in_session(ordered, session))
 
-        quality[symbol] = {
+        symbol_quality[symbol] = {
             "bars_received": len(bars),
             "duplicate_timestamps": duplicates,
             "bars_outside_split_sessions": dropped,
@@ -401,6 +517,23 @@ def build_dataset(
                     "content_sha256": content_sha256(split_bars),
                 }
             )
+
+    per_session = assess_quality(
+        [*baseline, *holdout], stamps_by_symbol, policy=spec.quality, timeframe=spec.timeframe
+    )
+    quality: dict[str, Any] = {
+        "policy": spec.quality.model_dump(mode="json"),
+        "symbols": symbol_quality,
+        "sessions": per_session,
+        "ineligible": {
+            "baseline": sum(
+                1 for item in baseline if not per_session[item.day.isoformat()]["eligible"]
+            ),
+            "holdout": sum(
+                1 for item in holdout if not per_session[item.day.isoformat()]["eligible"]
+            ),
+        },
+    }
 
     expires_at = downloaded_at + timedelta(days=spec.retention_days)
     manifest: dict[str, Any] = {
@@ -502,6 +635,63 @@ class VerifiedBaseline:
 
     def store(self) -> MemoryBarStore:
         return MemoryBarStore(self.bars, self.timeframe)
+
+    @property
+    def policy(self) -> QualityPolicy:
+        return QualityPolicy.model_validate(self.manifest["quality"]["policy"])
+
+    def ineligible(self) -> dict[str, dict[str, list[str]]]:
+        """Uygun olmayan BASELINE seanslari: {gun: {sembol: gerekceler}}."""
+        per_session = self.manifest["quality"]["sessions"]
+        found: dict[str, dict[str, list[str]]] = {}
+        for day in self.days:
+            entry = per_session[day.isoformat()]
+            if not entry["eligible"]:
+                found[day.isoformat()] = {
+                    symbol: metrics["reasons"]
+                    for symbol, metrics in entry["symbols"].items()
+                    if metrics["reasons"]
+                }
+        return found
+
+    def measurable_sessions(
+        self, *, opening_range_minutes: int, flatten_before_close_minutes: int
+    ) -> tuple[TradingSession, ...]:
+        """Kalite kapisindan gecen baseline seanslari - ya da DatasetQualityError.
+
+        Politikanin olcumle tutarli oldugu da burada denetlenir: veri
+        kumesi modulu stratejiyi ve config'i bilmez (mimari test), bu
+        yuzden sayilar cagirandan gelir.
+        """
+        policy = self.policy
+        if self.timeframe is Timeframe.M1:
+            if policy.open_window_minutes < opening_range_minutes:
+                msg = (
+                    f"kalite politikasinin acilis penceresi ({policy.open_window_minutes} dk) "
+                    f"stratejinin acilis araligini ({opening_range_minutes} dk) kapsamiyor"
+                )
+                raise DatasetQualityError(msg)
+            if policy.close_window_minutes > flatten_before_close_minutes:
+                msg = (
+                    f"kalite politikasinin kapanis penceresi ({policy.close_window_minutes} dk) "
+                    f"gun sonu tamponundan ({flatten_before_close_minutes} dk) buyuk: "
+                    "penceredeki bar kapatma anindan once kalabilir"
+                )
+                raise DatasetQualityError(msg)
+
+        ineligible = self.ineligible()
+        if len(ineligible) > policy.max_ineligible_sessions:
+            lines = [
+                f"  {day}: " + "; ".join(f"{sym}: {', '.join(why)}" for sym, why in reasons.items())
+                for day, reasons in sorted(ineligible.items())
+            ]
+            msg = (
+                f"{len(ineligible)} baseline seansi kalite politikasini karsilamiyor "
+                f"(izin verilen {policy.max_ineligible_sessions}). P&L uretilmedi.\n"
+                + "\n".join(lines)
+            )
+            raise DatasetQualityError(msg)
+        return tuple(item for item in self.sessions if item.day.isoformat() not in ineligible)
 
 
 def _baseline_sessions(manifest: dict[str, Any]) -> tuple[TradingSession, ...]:

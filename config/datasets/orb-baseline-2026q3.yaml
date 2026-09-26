@@ -19,3 +19,18 @@ holdout_fraction: 0.20
 split_unit: session
 settle_minutes: 20
 retention_days: 90
+# Kalite politikasi (Codex B2). Bolme yalnizca takvime bakar; bu
+# esikler bir seansin OLCULEBILIR olup olmadigini soyler. Uygun olmayan
+# seans varsa olcum P&L uretmeden durur.
+#
+# DIKKAT - HENUZ KESIN DEGIL: asagidaki degerler oneridir. Pilotun
+# kalite olcumunden sonra ve bu kume INDIRILMEDEN ONCE Codex ile
+# birlikte kesinlesir. Indirmeden sonra degistirmek yeni dataset_id.
+#   open_window_minutes >= ORB acilis araligi (15 dk)  - olcum denetler
+#   close_window_minutes <= gun sonu tamponu (10 dk)  - olcum denetler
+quality:
+  open_window_minutes: 15
+  max_missing_open_window: 3
+  close_window_minutes: 10
+  max_missing_fraction: 0.10
+  max_ineligible_sessions: 0

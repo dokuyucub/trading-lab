@@ -270,6 +270,14 @@ yazılı bir kurala güvenmek yetmez. Bu yüzden mekanizma yapısaldır:
   seansların son %20'si `holdout/`, önceki %80'i `baseline/`. Holdout sayısı
   yukarı yuvarlanır. Rastgele değil kronolojik: rastgele seçilen bir gün komşu
   günlerin rejimini paylaşır ve "görülmemiş" sayılamaz.
+- **Bölme yalnızca takvime bakar; veri kalitesi ayrı bir kapıdır.** Bir seans,
+  kapanışı artı oturma süresi indirmeden önce bittiyse "tamamlanmış"tır — bar
+  sayısına bakılmaz. Bir sembolün verisi eksik diye bir gün bölmeden düşseydi,
+  holdout sınırının yeri veri boşluğuna göre kayardı (Codex B2). Kalite her
+  (seans, sembol) için ölçülüp manifeste yazılır; spec'teki `quality`
+  politikası (açılış penceresi, kapanış penceresi, eksik dakika oranı)
+  karşılanmazsa ölçüm **P&L üretmeden** durur. Politika spec hash'ine girer:
+  indirmeden sonra gevşetmek yeni bir `dataset_id` demektir.
 - **Tarihler ve semboller önceden sabittir.** `config/datasets/<id>.yaml` commit
   edilir; çalıştırma anında seçilmez. Değiştirmek yeni `dataset_id` gerektirir
   ve gerekçesi yalnızca veri kalitesi olabilir, performans asla.

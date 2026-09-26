@@ -48,3 +48,21 @@ def test_the_main_dataset_covers_the_trading_universe() -> None:
     universe = set(load_config(Path(__file__).resolve().parents[1]).symbols)
     main = DatasetSpec.from_yaml(SPEC_DIR / "orb-baseline-2026q3.yaml")
     assert set(main.symbols) == universe
+
+
+def test_the_pilot_measures_quality_on_the_whole_universe() -> None:
+    """Esikler pilotla olculecek; pilot ana evrenin tamamini kapsamali.
+
+    Yalnizca SPY'yi indiren bir pilot, JPM gibi IEX'te daha seyrek
+    islem goren bir sembolun bosluk oranini hic gostermezdi.
+    """
+    universe = set(load_config(Path(__file__).resolve().parents[1]).symbols)
+    pilot = DatasetSpec.from_yaml(SPEC_DIR / "pilot-2026-06.yaml")
+    assert set(pilot.symbols) == universe
+
+
+@pytest.mark.parametrize("path", SPECS, ids=lambda item: item.stem)
+def test_every_spec_states_its_quality_policy_explicitly(path: Path) -> None:
+    """Politika varsayilandan sessizce gelmesin; dosyada yazili olsun."""
+    raw = path.read_text(encoding="utf-8")
+    assert "\nquality:\n" in raw

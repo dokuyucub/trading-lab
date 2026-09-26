@@ -575,7 +575,12 @@ def cmd_dataset_build(args: argparse.Namespace) -> int:
     print(f"tamamlanmis       : {len(sessions['complete'])}")
     print(f"tamamlanmamis     : {len(sessions['incomplete'])}")
     print(f"baseline / holdout: {len(split['baseline'])} / {len(split['holdout'])} seans")
-    for symbol, stats in manifest["quality"].items():
+    ineligible = manifest["quality"]["ineligible"]
+    print(
+        f"kaliteye uymayan  : baseline {ineligible['baseline']}, "
+        f"holdout {ineligible['holdout']} seans"
+    )
+    for symbol, stats in manifest["quality"]["symbols"].items():
         print(
             f"  {symbol:<6} bar {stats['bars_received']:>7}  "
             f"cift {stats['duplicate_timestamps']:>4}  "
