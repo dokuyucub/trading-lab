@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, date, datetime, time
 from typing import Any
+from zoneinfo import ZoneInfo
 
+from tlab.core.calendar import TradingSession
 from tlab.core.types import (
     Account,
     BracketOrder,
@@ -106,6 +108,53 @@ class AlpacaBroker:
                 )
             )
         return positions
+
+    def get_calendar(
+        self, start: date, end: date, *, exchange_timezone: str = "America/New_York"
+    ) -> list[TradingSession]:
+        """Resmi islem gunleri ve her birinin acilis/kapanisi.
+
+        Yarim gunler burada dogru gelir (13:00 kapanis); sabit 16:00
+        varsayan bir kural onlari yanlis okurdu.
+
+        DIKKAT: alpaca-py takvim saatlerini ZAMAN DILIMSIZ ve BORSA
+        YEREL saatiyle doner (`datetime(2026, 11, 27, 9, 30)`,
+        tzinfo=None). Bu degeri UTC diye etiketlemek her seyi 4-5 saat
+        kaydirirdi - hicbir hata vermeden. Burada borsa saat dilimiyle
+        acikca yerellestiriliyor. Ham sozluk modunda saatler "09:30"
+        dizesi olarak gelir; ikisi de karsilaniyor.
+        """
+        from alpaca.trading.requests import GetCalendarRequest
+
+        try:
+            raw_days: Any = self._client.get_calendar(GetCalendarRequest(start=start, end=end))
+        except Exception as exc:
+            msg = f"Islem takvimi alinamadi: {exc}"
+            raise BrokerError(msg) from exc
+
+        zone = ZoneInfo(exchange_timezone)
+        sessions: list[TradingSession] = []
+        for raw in raw_days or []:
+            day = sdk_field(raw, "date")
+            if isinstance(day, str):
+                day = date.fromisoformat(day)
+            if not isinstance(day, date):
+                msg = "Takvim yaniti beklenen bicimde degil (date)"
+                raise BrokerError(msg)
+            moments = []
+            for name in ("open", "close"):
+                value = sdk_field(raw, name)
+                if isinstance(value, str):
+                    hour, minute = (int(part) for part in value.split(":")[:2])
+                    value = datetime.combine(day, time(hour, minute))
+                if not isinstance(value, datetime):
+                    msg = f"Takvim yaniti beklenen bicimde degil ({name})"
+                    raise BrokerError(msg)
+                if value.tzinfo is None:
+                    value = value.replace(tzinfo=zone)
+                moments.append(value.astimezone(UTC))
+            sessions.append(TradingSession(day=day, open=moments[0], close=moments[1]))
+        return sessions
 
     def get_market_clock(self) -> AlpacaMarketClock:
         try:
