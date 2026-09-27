@@ -119,3 +119,27 @@ def test_query_order_and_equivalent_offsets_have_canonical_serialization() -> No
     assert first.model_dump_json() == second.model_dump_json()
     assert ResearchQuery.model_validate_json(first.model_dump_json()) == first
     assert query().allowed_provenance == (KnowledgeProvenance.OBSERVED,)
+
+
+@pytest.mark.parametrize("symbol", ["spy", "Spy", "SP Y", "ＳＰＹ", "SPY/QQQ", "123", ""])
+def test_query_rejects_noncanonical_symbol_instead_of_silent_case_conversion(symbol: str) -> None:
+    with pytest.raises(ValidationError, match="symbol"):
+        query(symbol=symbol)
+
+
+@pytest.mark.parametrize("symbol", ["SPY", "BRK.B", "BRK-B", "ABC1"])
+def test_canonical_query_symbol_round_trips_without_rewriting(symbol: str) -> None:
+    request = query(symbol=symbol)
+    assert request.symbol == symbol
+    assert ResearchQuery.model_validate_json(request.model_dump_json()).symbol == symbol
+
+
+def test_query_validation_does_not_rewrite_legacy_event_symbols() -> None:
+    legacy = event(symbol="spy")
+    original = legacy.model_dump_json()
+    receipt = ReceivedResearchEvent(event=legacy, received_at=T)
+    assert receipt.event.model_dump_json() == original
+    assert receipt.event.symbol == "spy"
+    # The time gate remains independent from scope: the future selector must
+    # resolve evidence/coverage symbol mismatches explicitly, never infer EMPTY.
+    assert query(symbol="SPY").allows_knowledge(receipt)
