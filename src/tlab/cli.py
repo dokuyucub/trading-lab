@@ -546,6 +546,8 @@ def cmd_dataset_build(args: argparse.Namespace) -> int:
     from tlab.data.dataset import DatasetSpec, build_dataset, manifest_sha256
 
     spec = DatasetSpec.from_yaml(args.spec)
+    # Taslak tanim, anahtar okunmadan ve istemci kurulmadan reddedilir.
+    spec.require_downloadable()
     key = os.environ.get("ALPACA_PAPER_API_KEY", "").strip()
     secret = os.environ.get("ALPACA_PAPER_SECRET_KEY", "").strip()
     if not key or not secret:

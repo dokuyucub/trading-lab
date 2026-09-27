@@ -16,6 +16,8 @@
 # bir deneme ana kumenin HOLDOUT'una bakmak olurdu. Ortusmezlik
 # tests/test_dataset_specs.py tarafindan denetleniyor.
 dataset_id: pilot-2026-06-u12
+# pilot: indirilebilir (erisim + kalite), ama P&L URETEMEZ - kod uygular.
+status: pilot
 symbols: [SPY, QQQ, IWM, AAPL, MSFT, NVDA, AMD, AMZN, GOOGL, META, TSLA, JPM]
 timeframe: 1Min
 feed: iex

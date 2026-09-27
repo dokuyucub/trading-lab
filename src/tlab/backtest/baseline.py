@@ -181,8 +181,8 @@ def run_baseline(
     timeframe = Timeframe(manifest["timeframe"])
 
     semantic = config.semantic_dump()
-    # Kalite kapisi P&L'DEN ONCE: uygun olmayan veri tek bir islem
-    # hesaplanmadan olcumu durdurur (DatasetQualityError).
+    # Onay ve kalite kapisi P&L'DEN ONCE: taslak/pilot tanim ya da uygun
+    # olmayan veri tek bir islem hesaplanmadan olcumu durdurur.
     measurable = verified.measurable_sessions(
         opening_range_minutes=ORBParams().opening_range_minutes,
         flatten_before_close_minutes=config.session.flatten_before_close_minutes,
@@ -211,11 +211,7 @@ def run_baseline(
         # hangi gunlerin ayrildigini bilmek, o gunlere dair bir sey
         # hatirlamaya davetiyedir.
         "holdout": {"sessions": len(manifest["split"]["holdout"]), "opened": False},
-        "quality": {
-            "policy": verified.policy.model_dump(mode="json"),
-            "measured_sessions": len(measurable),
-            "excluded_sessions": len(verified.days) - len(measurable),
-        },
+        "quality": {"policy": verified.policy.model_dump(mode="json")},
         "code_commit": code_commit,
         # Hash tek basina ayarlari yeniden kurdurmaz; tam semantik
         # ayarlar da raporda. Yerel yollar ikisine de girmez: ayni

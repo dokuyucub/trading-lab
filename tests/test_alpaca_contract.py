@@ -725,7 +725,7 @@ def test_dataset_cli_end_to_end_through_the_real_sdk(
 
     spec = tmp_path / "tiny.yaml"
     spec.write_text(
-        "dataset_id: tiny\nsymbols: [SPY]\nstart: 2026-01-05\nend: 2026-01-06\n",
+        "dataset_id: tiny\nstatus: approved\nsymbols: [SPY]\nstart: 2026-01-05\nend: 2026-01-06\n",
         encoding="utf-8",
     )
     out = tmp_path / "tiny"
@@ -790,7 +790,7 @@ def test_sparse_data_stops_the_baseline_before_any_report(
 
     spec = tmp_path / "tiny.yaml"
     spec.write_text(
-        "dataset_id: tiny\nsymbols: [SPY]\nstart: 2026-01-05\nend: 2026-01-06\n",
+        "dataset_id: tiny\nstatus: approved\nsymbols: [SPY]\nstart: 2026-01-05\nend: 2026-01-06\n",
         encoding="utf-8",
     )
     out = tmp_path / "tiny"
@@ -822,6 +822,36 @@ def test_sparse_data_stops_the_baseline_before_any_report(
     assert not report.exists(), "kalite kapisindan gecmeyen veriyle rapor yazildi"
 
 
+def test_a_draft_spec_never_reaches_the_network(
+    project_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Anahtarlar tanimli olsa bile taslak tanimla istemci KURULMAZ."""
+    import tlab.cli as cli
+
+    built: list[str] = []
+
+    def record(*_args: Any, **_kwargs: Any) -> None:
+        built.append("client")
+
+    monkeypatch.setattr(cli, "AlpacaBroker", record)
+    monkeypatch.setattr(cli, "AlpacaMarketData", record)
+    monkeypatch.setenv("ALPACA_PAPER_API_KEY", "PKTEST")
+    monkeypatch.setenv("ALPACA_PAPER_SECRET_KEY", "secret")
+    spec = tmp_path / "draft.yaml"
+    spec.write_text(
+        "dataset_id: draft\nstatus: draft\nsymbols: [SPY]\nstart: 2026-01-05\nend: 2026-01-06\n"
+    )
+    out = tmp_path / "never"
+
+    assert cli_main(["dataset", "build", str(spec), "--out", str(out)]) == 1
+    assert "draft" in capsys.readouterr().err
+    assert built == []
+    assert not out.exists()
+
+
 def test_dataset_build_without_keys_touches_nothing(
     project_root: Path,
     tmp_path: Path,
@@ -831,7 +861,9 @@ def test_dataset_build_without_keys_touches_nothing(
     monkeypatch.delenv("ALPACA_PAPER_API_KEY", raising=False)
     monkeypatch.delenv("ALPACA_PAPER_SECRET_KEY", raising=False)
     spec = tmp_path / "tiny.yaml"
-    spec.write_text("dataset_id: tiny\nsymbols: [SPY]\nstart: 2026-01-05\nend: 2026-01-06\n")
+    spec.write_text(
+        "dataset_id: tiny\nstatus: approved\nsymbols: [SPY]\nstart: 2026-01-05\nend: 2026-01-06\n"
+    )
     out = tmp_path / "never"
 
     assert cli_main(["dataset", "build", str(spec), "--out", str(out)]) == 1

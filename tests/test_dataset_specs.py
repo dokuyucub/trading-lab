@@ -66,3 +66,15 @@ def test_every_spec_states_its_quality_policy_explicitly(path: Path) -> None:
     """Politika varsayilandan sessizce gelmesin; dosyada yazili olsun."""
     raw = path.read_text(encoding="utf-8")
     assert "\nquality:\n" in raw
+
+
+def test_the_main_dataset_stays_a_draft_until_approved_in_its_own_commit() -> None:
+    """Esikler pilottan sonra kesinlesir; o zamana kadar ana tanim indirilemez.
+
+    Bu test onay commit'inde BILINCLI olarak guncellenir: approved'a
+    gecis sessizce degil, gerekceli ve incelenen bir degisiklikle olur.
+    """
+    main = DatasetSpec.from_yaml(SPEC_DIR / "orb-baseline-2026q3.yaml")
+    assert main.status == "draft"
+    pilot = DatasetSpec.from_yaml(SPEC_DIR / "pilot-2026-06-u12.yaml")
+    assert pilot.status == "pilot"

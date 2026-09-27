@@ -72,6 +72,10 @@ class DatasetIntegrityError(DataError):
     veriyle olcum yapmak demek olurdu."""
 
 
+class DatasetStatusError(DataError):
+    """Veri kumesi tanimi bu islem icin onayli degil (draft/pilot)."""
+
+
 class DatasetQualityError(DataError):
     """Veri, onceden sabitlenmis kalite politikasini karsilamiyor.
 
@@ -123,11 +127,15 @@ class QualityPolicy(BaseModel):
     max_missing_fraction: float = Field(default=0.10, ge=0.0, le=1.0)
     """Seans genelinde eksik dakika orani."""
 
-    max_ineligible_sessions: int = Field(default=0, ge=0)
-    """Baseline'da izin verilen uygun olmayan seans sayisi. Varsayilan
-    sifir: tek bir uygun olmayan seans olcumu durdurur. Sifirdan
-    buyukse uygun olmayan seanslar olcumden CIKARILIR ve sayisi rapora
-    yazilir."""
+    max_ineligible_sessions: Literal[0] = 0
+    """Baseline'da izin verilen uygun olmayan seans sayisi: YALNIZCA sifir.
+
+    Tek bir uygun olmayan seans olcumu P&L uretmeden durdurur. Gun
+    dislama yolu bilincli olarak YOK (Codex, #19): dislanan gunun barlari
+    sonraki gunlerin gecmis penceresinde kalir ve hesaplari etkiler;
+    ayrica eksik gunu atmak ornekleme veriye bakarak mudahale etmektir.
+    Tolerans ileride gerekirse ayri tasarim ve test ister.
+    """
 
     @model_validator(mode="after")
     def _consistent(self) -> QualityPolicy:
@@ -149,6 +157,19 @@ class DatasetSpec(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     dataset_id: str = Field(min_length=1, pattern=r"^[a-z0-9][a-z0-9._-]*$")
+    status: Literal["draft", "pilot", "approved"]
+    """Tanimin ne icin kullanilabilecegi - MAKINE tarafindan uygulanir.
+
+      draft     indirilemez, olculemez. Esikleri henuz kesinlesmemis
+                bir tanim; "oneri" demek bir yorum satirina birakilmaz.
+      pilot     indirilebilir (erisim + kalite), ama P&L URETEMEZ.
+      approved  indirilebilir ve baseline olculebilir.
+
+    Zorunlu alan, varsayilani yok: sentetik test tanimlari dahil her
+    tanim durumunu acikca soyler. Onay, ayri bir commit ile draft ->
+    approved degisikligidir ve spec hash'ini degistirir.
+    """
+
     symbols: tuple[str, ...] = Field(min_length=1)
     timeframe: Timeframe = Timeframe.M1
     feed: Literal["iex", "sip"] = "iex"
@@ -202,6 +223,15 @@ class DatasetSpec(BaseModel):
             msg = f"baslangic bitisten sonra: {self.start} > {self.end}"
             raise ValueError(msg)
         return self
+
+    def require_downloadable(self) -> None:
+        """Taslak bir tanim hicbir yan etkiden (ag, dizin) ONCE reddedilir."""
+        if self.status == "draft":
+            msg = (
+                f"{self.dataset_id} taslak (status: draft): esikleri kesinlesmeden "
+                "indirilemez. Onay ayri bir commit ile status: approved yapilarak verilir."
+            )
+            raise DatasetStatusError(msg)
 
     @classmethod
     def from_yaml(cls, path: Path) -> DatasetSpec:
@@ -438,6 +468,7 @@ def build_dataset(
     Bolme bu fonksiyonun icinde, hicbir performans olcumu yapilmadan
     gerceklesir. Donen manifest ve diske yazilan dosyalar ayni seydir.
     """
+    spec.require_downloadable()
     out_dir = Path(out_dir)
     if out_dir.exists() and any(out_dir.iterdir()):
         msg = f"{out_dir} bos degil; bir veri kumesi mevcut dosyalarin uzerine yazilmaz"
@@ -659,12 +690,23 @@ class VerifiedBaseline:
     def measurable_sessions(
         self, *, opening_range_minutes: int, flatten_before_close_minutes: int
     ) -> tuple[TradingSession, ...]:
-        """Kalite kapisindan gecen baseline seanslari - ya da DatasetQualityError.
+        """Olculebilir baseline seanslari - ya da P&L'DEN ONCE bir hata.
 
-        Politikanin olcumle tutarli oldugu da burada denetlenir: veri
-        kumesi modulu stratejiyi ve config'i bilmez (mimari test), bu
-        yuzden sayilar cagirandan gelir.
+        Sirasiyla: tanim onayli mi (pilot ve taslak P&L uretemez),
+        politika olcumle tutarli mi, her seans kaliteyi karsiliyor mu.
+        Politikanin tutarliligi burada denetlenir cunku veri kumesi
+        modulu stratejiyi ve config'i bilmez (mimari test); sayilar
+        cagirandan gelir. Gun DISLANMAZ: donen seanslar baseline'in
+        tamamidir.
         """
+        status = self.manifest["spec"].get("status")
+        if status != "approved":
+            msg = (
+                f"{self.dataset_id} tanimi '{status}': yalnizca 'approved' veri kumesi "
+                "olculebilir. Pilot yalnizca erisim ve kalite icindir. P&L uretilmedi."
+            )
+            raise DatasetStatusError(msg)
+
         policy = self.policy
         if self.timeframe is Timeframe.M1:
             if policy.open_window_minutes < opening_range_minutes:
@@ -682,18 +724,17 @@ class VerifiedBaseline:
                 raise DatasetQualityError(msg)
 
         ineligible = self.ineligible()
-        if len(ineligible) > policy.max_ineligible_sessions:
+        if ineligible:
             lines = [
                 f"  {day}: " + "; ".join(f"{sym}: {', '.join(why)}" for sym, why in reasons.items())
                 for day, reasons in sorted(ineligible.items())
             ]
             msg = (
-                f"{len(ineligible)} baseline seansi kalite politikasini karsilamiyor "
-                f"(izin verilen {policy.max_ineligible_sessions}). P&L uretilmedi.\n"
-                + "\n".join(lines)
+                f"{len(ineligible)} baseline seansi kalite politikasini karsilamiyor. "
+                "P&L uretilmedi.\n" + "\n".join(lines)
             )
             raise DatasetQualityError(msg)
-        return tuple(item for item in self.sessions if item.day.isoformat() not in ineligible)
+        return self.sessions
 
 
 def _baseline_sessions(manifest: dict[str, Any]) -> tuple[TradingSession, ...]:

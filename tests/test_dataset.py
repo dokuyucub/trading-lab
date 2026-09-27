@@ -30,6 +30,7 @@ from tlab.core.types import Bar, Timeframe
 from tlab.data.dataset import (
     DatasetIntegrityError,
     DatasetSpec,
+    DatasetStatusError,
     build_dataset,
     classify_sessions,
     content_sha256,
@@ -116,6 +117,7 @@ PRODUCER = {"run_id": "test", "commit": "0" * 40}
 def spec(**changes: Any) -> DatasetSpec:
     base: dict[str, Any] = {
         "dataset_id": "test-set",
+        "status": "approved",
         "symbols": ["SPY"],
         "start": DAYS[0],
         "end": DAYS[-1],
@@ -325,6 +327,64 @@ def test_the_quality_policy_is_part_of_the_fixed_spec(tmp_path: Path) -> None:
 def test_an_inconsistent_policy_is_rejected() -> None:
     with pytest.raises(ValueError, match="acilis penceresinden buyuk"):
         spec(quality={"open_window_minutes": 5, "max_missing_open_window": 6})
+
+
+# --------------------------------------------------------------------------
+# Tanim durumu: draft / pilot / approved (Codex, #19)
+# --------------------------------------------------------------------------
+
+
+class CountingBars(FakeBars):
+    def __init__(self, by_symbol: dict[str, list[Bar]]) -> None:
+        super().__init__(by_symbol)
+        self.calls = 0
+
+    def bars(
+        self, symbol: str, timeframe: Timeframe, start: datetime, end: datetime | None = None
+    ) -> list[Bar]:
+        self.calls += 1
+        return super().bars(symbol, timeframe, start, end)
+
+
+class CountingCalendar(FakeCalendar):
+    def __init__(self, sessions: list[TradingSession]) -> None:
+        super().__init__(sessions)
+        self.calls = 0
+
+    def get_calendar(self, start: date, end: date) -> list[TradingSession]:
+        self.calls += 1
+        return super().get_calendar(start, end)
+
+
+def test_a_draft_spec_is_refused_before_any_side_effect(tmp_path: Path) -> None:
+    """Taslak tanim: veri kaynagi cagrilmaz, dizin olusturulmaz."""
+    bars = CountingBars({"SPY": [b for item in SESSIONS for b in minute_bars("SPY", item)]})
+    calendar = CountingCalendar(SESSIONS)
+    out = tmp_path / "never"
+    with pytest.raises(DatasetStatusError, match="draft"):
+        build_dataset(
+            spec(status="draft"),
+            bars_source=bars,
+            calendar_source=calendar,
+            out_dir=out,
+            downloaded_at=DOWNLOADED_AT,
+            producer=PRODUCER,
+        )
+    assert (bars.calls, calendar.calls) == (0, 0)
+    assert not out.exists()
+
+
+def test_a_pilot_spec_can_be_built(tmp_path: Path) -> None:
+    _, manifest = build(tmp_path, status="pilot")
+    assert manifest["spec"]["status"] == "pilot"
+
+
+def test_every_spec_must_state_its_status() -> None:
+    raw = {"dataset_id": "x", "symbols": ["SPY"], "start": DAYS[0], "end": DAYS[-1]}
+    with pytest.raises(ValueError, match="status"):
+        DatasetSpec.model_validate(raw)
+    with pytest.raises(ValueError, match="status"):
+        DatasetSpec.model_validate({**raw, "status": "ready"})
 
 
 # --------------------------------------------------------------------------

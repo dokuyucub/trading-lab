@@ -32,6 +32,7 @@ from tlab.data.dataset import (
     DatasetIntegrityError,
     DatasetQualityError,
     DatasetSpec,
+    DatasetStatusError,
     QualityPolicy,
     VerifiedBaseline,
     build_dataset,
@@ -89,7 +90,13 @@ def dataset(tmp_path: Path) -> Path:
     bars = {"SPY": [bar for item in SESSIONS for bar in breakout_session(item)]}
     out = tmp_path / "ds"
     build_dataset(
-        DatasetSpec(dataset_id="breakouts", symbols=("SPY",), start=DAYS[0], end=DAYS[-1]),
+        DatasetSpec(
+            dataset_id="breakouts",
+            status="approved",
+            symbols=("SPY",),
+            start=DAYS[0],
+            end=DAYS[-1],
+        ),
         bars_source=FakeBars(bars),
         calendar_source=FakeCalendar(SESSIONS),
         out_dir=out,
@@ -292,7 +299,11 @@ def build_stalling(
     out = tmp_path / "stall"
     build_dataset(
         DatasetSpec(
-            dataset_id="stall", symbols=("SPY",), start=sessions[0].day, end=sessions[-1].day
+            dataset_id="stall",
+            status="approved",
+            symbols=("SPY",),
+            start=sessions[0].day,
+            end=sessions[-1].day,
         ),
         bars_source=FakeBars({"SPY": bars}),
         calendar_source=FakeCalendar(sessions),
@@ -412,36 +423,67 @@ def test_the_quality_window_must_fit_inside_the_flatten_buffer(
         run_baseline(verified, tight, code_commit="c0ffee")
 
 
-def test_a_tolerant_policy_excludes_and_reports_ineligible_sessions(
-    tmp_path: Path, config: Config
-) -> None:
-    """Politika izin veriyorsa uygun olmayan seans olcumden CIKAR ve sayilir.
+# ---------------------------------------------------------------------------
+# Tanim durumu ve gun dislama yolunun yoklugu (Codex, #19)
+# ---------------------------------------------------------------------------
 
-    Varsayilan sifir; bu davranis ancak onceden, spec'te acikca
-    istenirse devreye girer.
+
+def test_a_pilot_dataset_can_be_built_but_never_measured(
+    tmp_path: Path, config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pilot erisim ve kalite icin indirilir; P&L URETEMEZ.
+
+    Ret, tek bir senaryo kosulmadan once gelir.
     """
-    bars = [
-        bar
-        for item in SESSIONS
-        for bar in stalling_session(item, cut_last=30 if item.day == DAYS[3] else 0)
-    ]
-    out = tmp_path / "tolerant"
+    import tlab.backtest.baseline as baseline_module
+
+    out = tmp_path / "pilot"
     build_dataset(
         DatasetSpec(
-            dataset_id="tolerant",
-            symbols=("SPY",),
-            start=DAYS[0],
-            end=DAYS[-1],
-            quality=QualityPolicy(max_ineligible_sessions=1),
+            dataset_id="pilot", status="pilot", symbols=("SPY",), start=DAYS[0], end=DAYS[-1]
         ),
-        bars_source=FakeBars({"SPY": bars}),
+        bars_source=FakeBars({"SPY": [b for item in SESSIONS for b in breakout_session(item)]}),
         calendar_source=FakeCalendar(SESSIONS),
         out_dir=out,
         downloaded_at=DOWNLOADED_AT,
         producer={"run_id": "test"},
     )
     verified = verify_baseline(out, manifest_sha256(out))
-    report = run_baseline(verified, config, code_commit="c0ffee")
-    assert report["quality"]["excluded_sessions"] == 1
-    assert report["quality"]["measured_sessions"] == len(verified.days) - 1
-    assert report["scenarios"][0]["trades"] == len(verified.days) - 1
+
+    calls: list[str] = []
+
+    def record(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        calls.append("run")
+        return {}
+
+    monkeypatch.setattr(baseline_module, "_run_scenario", record)
+    with pytest.raises(DatasetStatusError, match="approved"):
+        run_baseline(verified, config, code_commit="c0ffee")
+    assert calls == [], "pilot veriyle P&L senaryosu calisti"
+
+
+def test_ineligible_data_stops_before_any_scenario_runs(
+    tmp_path: Path, config: Config, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import tlab.backtest.baseline as baseline_module
+
+    verified = build_stalling(tmp_path, SESSIONS, cut={DAYS[3]: 30})
+    calls: list[str] = []
+
+    def record(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        calls.append("run")
+        return {}
+
+    monkeypatch.setattr(baseline_module, "_run_scenario", record)
+    with pytest.raises(DatasetQualityError):
+        run_baseline(verified, config, code_commit="c0ffee")
+    assert calls == []
+
+
+@pytest.mark.parametrize("value", [1, 2, 10])
+def test_there_is_no_way_to_tolerate_an_ineligible_session(value: int) -> None:
+    """Gun dislama yolu kaldirildi: dislanan gunun barlari sonraki
+    gunlerin gecmis penceresine siziyordu (Codex, #19). Sifir disinda
+    bir deger tanim asamasinda reddedilir."""
+    with pytest.raises(ValueError, match="max_ineligible_sessions"):
+        QualityPolicy.model_validate({"max_ineligible_sessions": value})
