@@ -41,7 +41,9 @@ class ResearchQuery(Evidence):
 
     schema_version: Literal[2] = 2
     source: str = Field(min_length=1)
-    symbol: str = Field(min_length=1)
+    # Reject ambiguous casing rather than silently changing query identity.
+    # This is query syntax, not proof that a provider supports the symbol.
+    symbol: str = Field(min_length=1, pattern=r"^[A-Z][A-Z0-9.\-]*$")
     kinds: tuple[EventKind, ...]
     coverage_start: AwareDatetime
     coverage_end: AwareDatetime

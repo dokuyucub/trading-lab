@@ -133,6 +133,11 @@ sürüme geri dönmek tek komutluk iştir. Ayrıntı için `CONTRIBUTING.md`.
   veri, keşif filtresi genişletilse de eski karar anında görünür olmaz.
   V1 snapshot/hash ve Context değişmedi; tam revizyon seçimi sonraki dilimdir.
 
+### Research sorgu sembolü doğrulaması
+- V2 sorgular küçük/karışık harfli veya desteklenmeyen sembol yazımını açıkça
+  reddeder; sessiz eşleşmeme riskini azaltır. V1 olay payload/hash'i korunur.
+  Bu doğrulama sağlayıcı sembol desteğini veya kapsamın tamlığını kanıtlamaz.
+
 ## [0.3.0] - 2026-09-20
 
 Faz 2 — backtest motoru. Aynı strateji ve risk kodu geçmiş veri üzerinde

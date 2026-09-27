@@ -534,3 +534,10 @@ sağlayıcı, depolama/göç ve risk entegrasyonu ayrı PR'larla ilerler.
   penceresi boyunca yeterli kanıt birikmeden research-farkındalıklı terfi
   uygunluğu iddia edilmez; gecikme nedeniyle zaman/provenance kapıları gevşetilmez.
   Research kullanmayan baseline bundan etkilenmez; v1 audit kayıtları silinmez.
+
+- V2 `ResearchQuery.symbol`, ortak boşluk temizliğinden sonra ASCII büyük harfle
+  başlayan `[A-Z][A-Z0-9.\-]*` biçimini şart koşar; küçük/karışık harf sessizce
+  dönüştürülmez (#21 incelemesi). Bu yalnız sorgu sözdizimidir, sağlayıcıda
+  sembolün varlığını kanıtlamaz. V1 olay sembolü/hash'i değiştirilmez.
+  Selector, olay/kapsam kanıtındaki sembol uyuşmazlığını doğrulanmış EMPTY
+  sayamaz; kapsam kanıtının sorgunun kanonik sembolüyle eşleşmesi gerekir.
