@@ -3,9 +3,15 @@ name: CI
 # Amac tek: "eskiden calisiyordu, artik calismiyor" durumunun main'e
 # hic ulasmamasi. Kirilma, kiran commit belliyken yakalanmali.
 
+# Tetikleyiciler: main'e push + HER pull request. Dallara push ayrica
+# kosmaz: PR'i olan dal zaten pull_request ile denetleniyor, ikisi
+# birden ayni commit'i iki kez kosuyordu. Depo gizli; ucretsiz planda
+# Actions dakikasi aylik kotaya tabi (#17). pull_request'e filtre
+# (branches/paths) EKLENMEZ: her PR ayni `quality` kapisindan gecer.
+# tests/test_architecture.py bu sozlesmeyi denetler.
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
   schedule:
     # Haftalik "kanarya" kosusu: bagimliliklar SABITLENMEDEN kurulur.

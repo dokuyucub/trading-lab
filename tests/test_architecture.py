@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 REPO = Path(__file__).resolve().parents[1]
 SRC = REPO / "src" / "tlab"
@@ -780,3 +781,32 @@ def test_the_dataset_split_cannot_see_performance() -> None:
         + ", ".join(offenders)
         + "\n  Bolme, sonuc gorulmeden yapilmali (AGENTS §3)."
     )
+
+
+# --------------------------------------------------------------------------
+# CI tetikleyici sozlesmesi
+# --------------------------------------------------------------------------
+
+
+def test_every_pull_request_passes_the_same_quality_gate() -> None:
+    """CI: main'e push + filtresiz pull_request + haftalik kanarya.
+
+    Dallara push kosusu kaldirildi (ayni commit iki kez kosuyordu), ama
+    bunun bir atlatma yoluna donusmemesi gerekiyor: pull_request'e dal
+    ya da yol filtresi eklenirse bazi PR'lar `quality` kapisindan
+    gecmeden birlesebilirdi. Bu test o sessiz gevsemeyi yakalar.
+    """
+    workflow = yaml.safe_load((REPO / ".github" / "workflows" / "ci.yml").read_text("utf-8"))
+    # PyYAML (YAML 1.1) `on` anahtarini True olarak okur.
+    triggers = workflow.get("on", workflow.get(True))
+
+    assert triggers["push"] == {"branches": ["main"]}
+    assert triggers["pull_request"] is None, "pull_request filtresiz olmali"
+    assert "schedule" in triggers
+
+    quality = workflow["jobs"]["quality"]
+    assert quality["name"] == "quality"
+    assert quality["if"] == "github.event_name != 'schedule'"
+    commands = " ".join(step.get("run", "") for step in quality["steps"])
+    for gate in ("ruff check", "ruff format --check", "mypy", "pytest --cov"):
+        assert gate in commands, f"quality kapisindan dusmus: {gate}"
