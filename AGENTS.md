@@ -541,3 +541,25 @@ sağlayıcı, depolama/göç ve risk entegrasyonu ayrı PR'larla ilerler.
   sembolün varlığını kanıtlamaz. V1 olay sembolü/hash'i değiştirilmez.
   Selector, olay/kapsam kanıtındaki sembol uyuşmazlığını doğrulanmış EMPTY
   sayamaz; kapsam kanıtının sorgunun kanonik sembolüyle eşleşmesi gerekir.
+
+
+## 11. Alpaca pilotu ve veri taşıma — #17, 2026-09-27
+
+Karar ve kaynak sınırı: `docs/designs/alpaca-pilot-execution.md`.
+SDK bağlantısı §7'de doğrulanmıştır; emir yaşam döngüsü ve kârlılık değildir.
+İlk gerçek veri pilotunun geliştirilmesi kalıcı ham veri taşımasına bağlı değildir:
+
+- Ayrı, incelenen workflow: manuel, yalnız main, sabit `pilot-2026-06-u12`
+  tanımı, tek job içinde indirme ve kalite ölçümü. P&L ve emir yok.
+- Ham barlar, manifest ve veri dizini artifact/cache/log'a yüklenmez. Yalnız
+  açık alan listesiyle üretilmiş toplulaştırılmış kalite özeti, kod/spec hash'i
+  yayımlanır. Broker secret'ları yalnız indirme adımında bulunur.
+- Geçici veri başarı/hata sonunda temizlenir; temizleme güvenli fiziksel silme
+  garantisi sayılmaz. Ana veri tanımı draft kalır; pilot sonrası eşik/onay
+  ayrı commit ve bağımsız inceleme gerektirir.
+- Kişisel analiz için bu mimariyle ilerleme, Alpaca'dan özel bir bulut lisansı
+  alındığı iddiası değildir. Hesaba/veri feed'ine özgü ek şartlar geçerlidir.
+  Gerçek ham verinin kalıcı dış artefaktı ayrı değerlendirilir; sentetik
+  taşıma ve pilot kodunun ilerlemesi ona bağlanmaz.
+- Claude pilot workflow'unu geliştirir, Codex bağımsız inceler. Bu kayıt
+  workflow'u uygulanmış veya gerçek pilotu çalışmış hale getirmez.
