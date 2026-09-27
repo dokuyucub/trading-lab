@@ -753,3 +753,30 @@ def test_the_probe_does_not_import_the_tlab_package() -> None:
         + ", ".join(offenders)
         + "\n  Bu importlar kurulum gerektiren bagimliliklari zincirle getirir."
     )
+
+
+# --------------------------------------------------------------------------
+# Veri kumesi bolmesi performans goremez
+# --------------------------------------------------------------------------
+
+PERFORMANCE_PACKAGES = ("tlab.backtest", "tlab.learning", "tlab.strategies", "tlab.engine")
+
+
+def test_the_dataset_split_cannot_see_performance() -> None:
+    """Holdout bolmesi yapilirken tek bir P&L satiri hesaplanamaz.
+
+    Bu yazili bir kural olarak kalsaydi, ilk kotu sonuctan sonra
+    "bolme sinirini biraz kaydiralim" demek bir satirlik is olurdu.
+    Burada YAPISAL: veri kumesi modulu backtest'i, stratejileri,
+    ogrenme katmanini ya da seans dongusunu ice aktaramaz. Performans
+    hesaplayamayan bir kod, bolme sinirini performansa gore secemez.
+    """
+    path = SRC / "data" / "dataset.py"
+    offenders = sorted(
+        module for module in imports_of(path) if module.startswith(PERFORMANCE_PACKAGES)
+    )
+    assert not offenders, (
+        "Veri kumesi modulu performans hesaplayabilen bir katmani ice aktariyor: "
+        + ", ".join(offenders)
+        + "\n  Bolme, sonuc gorulmeden yapilmali (AGENTS §3)."
+    )

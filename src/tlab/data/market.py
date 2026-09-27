@@ -65,15 +65,28 @@ class AlpacaMarketData:
         feed: str = "iex",
         *,
         base_url: str | None = None,
+        adjustment: str = "raw",
     ) -> None:
-        """`base_url` icin bkz. AlpacaBroker: yerel sahte sunucuya yonlendirme."""
-        from alpaca.data.enums import DataFeed
+        """`base_url` icin bkz. AlpacaBroker: yerel sahte sunucuya yonlendirme.
+
+        `adjustment` istekte ACIKCA gonderilir. alpaca-py'de varsayilan
+        `None`'dir ve o durumda alan istege hic yazilmaz - yani deger
+        sunucunun varsayilanina kalir. Bir veri kumesi manifesti
+        "raw" diye kaydediyorsa, bu istegin garanti ettigi bir deger
+        olmali, sunucunun o gunku tercihi degil.
+        """
+        from alpaca.data.enums import Adjustment, DataFeed
         from alpaca.data.historical import StockHistoricalDataClient
 
         try:
             self._feed = DataFeed(feed)
         except ValueError as exc:
             msg = f"Desteklenmeyen veri feed'i: {feed!r}"
+            raise DataError(msg) from exc
+        try:
+            self._adjustment = Adjustment(adjustment)
+        except ValueError as exc:
+            msg = f"Desteklenmeyen fiyat duzeltmesi: {adjustment!r}"
             raise DataError(msg) from exc
 
         self._client = StockHistoricalDataClient(
@@ -102,6 +115,7 @@ class AlpacaMarketData:
             start=start,
             end=end,
             feed=self._feed,
+            adjustment=self._adjustment,
         )
         try:
             response = self._client.get_stock_bars(request)

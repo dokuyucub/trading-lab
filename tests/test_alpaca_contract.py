@@ -16,6 +16,7 @@ atlar. Bir Timeframe cevrim hatasi tam bu bosluktan kacmisti -
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -605,3 +606,266 @@ def test_pending_order_risk_metadata_survives_real_sdk(
     assert order.remaining_qty == 70
     assert order.limit_price == 101.25
     assert order.side is Side.BUY
+
+
+# --------------------------------------------------------------------------
+# Resmi takvim ve fiyat duzeltmesi - veri kumesi icin
+# --------------------------------------------------------------------------
+
+
+def test_calendar_times_are_localized_to_the_exchange_not_labelled_utc(
+    broker: AlpacaBroker,
+) -> None:
+    """09:30 New York, kis saatinde 14:30 UTC, yaz saatinde 13:30 UTC.
+
+    alpaca-py takvim saatlerini zaman dilimsiz ve borsa yerel saatiyle
+    doner. Bunu UTC diye etiketlemek seansi 4-5 saat kaydirirdi ve
+    hicbir hata vermezdi: acilis araligi yanlis dakikalardan kurulur,
+    strateji bambaska bir fiyat seviyesini kirilim sanardi.
+    """
+    from datetime import date
+
+    sessions = broker.get_calendar(date(2026, 1, 1), date(2026, 12, 31))
+    by_day = {item.day.isoformat(): item for item in sessions}
+
+    winter = by_day["2026-01-05"]
+    assert winter.open == datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    assert winter.close == datetime(2026, 1, 5, 21, 0, tzinfo=UTC)
+
+    summer = by_day["2026-07-06"]
+    assert summer.open == datetime(2026, 7, 6, 13, 30, tzinfo=UTC)
+    assert summer.close == datetime(2026, 7, 6, 20, 0, tzinfo=UTC)
+
+
+def test_a_half_day_keeps_its_early_close(broker: AlpacaBroker) -> None:
+    """Sukran Gunu ertesi borsa 13:00'te kapanir - takvim bunu tasimali."""
+    from datetime import date
+
+    sessions = broker.get_calendar(date(2026, 11, 27), date(2026, 11, 27))
+    half = next(item for item in sessions if item.day == date(2026, 11, 27))
+    assert half.close == datetime(2026, 11, 27, 18, 0, tzinfo=UTC)
+    assert (half.close - half.open) == timedelta(hours=3, minutes=30)
+
+
+def test_the_price_adjustment_is_sent_explicitly(
+    stub: tuple[str, StubState], market: AlpacaMarketData
+) -> None:
+    """`adjustment` istekte GORUNMELI.
+
+    alpaca-py'de varsayilan None'dir ve alan istege hic yazilmaz - yani
+    sunucu karar verir. Veri kumesi manifesti "raw" diyorsa bu, istegin
+    garanti ettigi bir deger olmali. (Sessizce varsayilana kalan bir
+    ayar, sunucu tercihini degistirdiginde butun gecmis olcumleri
+    kiyaslanamaz yapar.)
+    """
+    _, state = stub
+    market.bars("SPY", Timeframe.M1, start=datetime(2026, 1, 5, tzinfo=UTC))
+    assert state.query_for("/v2/stocks/bars").get("adjustment") == ["raw"]
+
+
+# --------------------------------------------------------------------------
+# Veri kumesi: gercek SDK -> bolme -> dogrulama -> offline olcum
+# --------------------------------------------------------------------------
+
+
+def _two_session_market(state: StubState, *, minutes: int = 390) -> None:
+    """Iki kis gunu; varsayilan olarak seansin her dakikasinda bar.
+
+    `minutes` kucuk verilirse veri seyrek olur ve kalite politikasini
+    karsilamaz - olcumun P&L uretmeden durdugunu gostermek icin.
+    """
+    state.calendar = [
+        {"date": "2026-01-05", "open": "09:30", "close": "16:00"},
+        {"date": "2026-01-06", "open": "09:30", "close": "16:00"},
+    ]
+    rows = []
+    for day in ("05", "06"):
+        opening = datetime(2026, 1, int(day), 14, 30, tzinfo=UTC)
+        for minute in range(minutes):
+            rows.append(
+                {
+                    "t": (opening + timedelta(minutes=minute)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "o": 100.0,
+                    "h": 100.5,
+                    "l": 99.5,
+                    "c": 100.2,
+                    "v": 1000,
+                    "n": 10,
+                    "vw": 100.1,
+                }
+            )
+    state.bars = bar_payload("SPY", rows)
+
+
+def test_dataset_cli_end_to_end_through_the_real_sdk(
+    project_root: Path,
+    stub: tuple[str, StubState],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """build -> verify -> baseline, gercek alpaca-py istemcisiyle.
+
+    Birim testleri modulleri ayri ayri dogruluyor; bu test komutun
+    onlari dogru SIRAYLA ve dogru istemcilerle bagladigini gosteriyor.
+    Istemciler yalnizca yerel taklit sunucuya yonlendiriliyor - CLI
+    kodunun kendisine dokunulmuyor. (CLI, `base_url`'i ortam
+    degiskeninden OKUMAZ: workflow'dan veri kaynagi saptirilamasin.)
+    """
+    import functools
+
+    import tlab.cli as cli
+
+    url, state = stub
+    _two_session_market(state)
+    monkeypatch.setattr(cli, "AlpacaBroker", functools.partial(AlpacaBroker, base_url=url))
+    monkeypatch.setattr(cli, "AlpacaMarketData", functools.partial(AlpacaMarketData, base_url=url))
+    monkeypatch.setenv("ALPACA_PAPER_API_KEY", "PKTEST")
+    monkeypatch.setenv("ALPACA_PAPER_SECRET_KEY", "secret")
+
+    spec = tmp_path / "tiny.yaml"
+    spec.write_text(
+        "dataset_id: tiny\nstatus: approved\nsymbols: [SPY]\nstart: 2026-01-05\nend: 2026-01-06\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "tiny"
+
+    assert (
+        cli_main(["--root", str(project_root), "dataset", "build", str(spec), "--out", str(out)])
+        == 0
+    )
+    built = capsys.readouterr().out
+    assert "baseline / holdout: 1 / 1 seans" in built
+    digest = next(
+        line.split(":")[1].strip() for line in built.splitlines() if "manifest_sha256" in line
+    )
+
+    # Istek gercekten raw duzeltmeyle ve IEX feed'iyle gitti.
+    assert state.query_for("/v2/stocks/bars").get("adjustment") == ["raw"]
+    assert state.query_for("/v2/stocks/bars").get("feed") == ["iex"]
+
+    assert cli_main(["dataset", "verify", str(out), "--manifest-sha256", digest]) == 0
+    assert "OK tiny: baseline 1 seans" in capsys.readouterr().out
+
+    report = tmp_path / "report.json"
+    code = cli_main(
+        [
+            "--root",
+            str(project_root),
+            "baseline",
+            str(out),
+            "--manifest-sha256",
+            digest,
+            "--out",
+            str(report),
+        ]
+    )
+    assert code == 0
+    assert "ACILMADI" in capsys.readouterr().out
+    assert json.loads(report.read_bytes())["holdout"] == {"sessions": 1, "opened": False}
+
+
+def test_sparse_data_stops_the_baseline_before_any_report(
+    project_root: Path,
+    stub: tuple[str, StubState],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Seyrek veri: indirme ve dogrulama gecer, OLCUM durur ve rapor yazilmaz.
+
+    Codex B2: gunde bes dakikalik veri "tamamlanmis seans" sayiliyor ve
+    olculuyordu. Takvimsel tamamlanma veri uygunlugu degildir.
+    """
+    import functools
+
+    import tlab.cli as cli
+
+    url, state = stub
+    _two_session_market(state, minutes=5)
+    monkeypatch.setattr(cli, "AlpacaBroker", functools.partial(AlpacaBroker, base_url=url))
+    monkeypatch.setattr(cli, "AlpacaMarketData", functools.partial(AlpacaMarketData, base_url=url))
+    monkeypatch.setenv("ALPACA_PAPER_API_KEY", "PKTEST")
+    monkeypatch.setenv("ALPACA_PAPER_SECRET_KEY", "secret")
+
+    spec = tmp_path / "tiny.yaml"
+    spec.write_text(
+        "dataset_id: tiny\nstatus: approved\nsymbols: [SPY]\nstart: 2026-01-05\nend: 2026-01-06\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "tiny"
+    assert (
+        cli_main(["--root", str(project_root), "dataset", "build", str(spec), "--out", str(out)])
+        == 0
+    )
+    built = capsys.readouterr().out
+    assert "kaliteye uymayan  : baseline 1, holdout 1 seans" in built
+    digest = next(
+        line.split(":")[1].strip() for line in built.splitlines() if "manifest_sha256" in line
+    )
+
+    report = tmp_path / "report.json"
+    code = cli_main(
+        [
+            "--root",
+            str(project_root),
+            "baseline",
+            str(out),
+            "--manifest-sha256",
+            digest,
+            "--out",
+            str(report),
+        ]
+    )
+    assert code == 1
+    assert "kalite politikasini karsilamiyor" in capsys.readouterr().err
+    assert not report.exists(), "kalite kapisindan gecmeyen veriyle rapor yazildi"
+
+
+def test_a_draft_spec_never_reaches_the_network(
+    project_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Anahtarlar tanimli olsa bile taslak tanimla istemci KURULMAZ."""
+    import tlab.cli as cli
+
+    built: list[str] = []
+
+    def record(*_args: Any, **_kwargs: Any) -> None:
+        built.append("client")
+
+    monkeypatch.setattr(cli, "AlpacaBroker", record)
+    monkeypatch.setattr(cli, "AlpacaMarketData", record)
+    monkeypatch.setenv("ALPACA_PAPER_API_KEY", "PKTEST")
+    monkeypatch.setenv("ALPACA_PAPER_SECRET_KEY", "secret")
+    spec = tmp_path / "draft.yaml"
+    spec.write_text(
+        "dataset_id: draft\nstatus: draft\nsymbols: [SPY]\nstart: 2026-01-05\nend: 2026-01-06\n"
+    )
+    out = tmp_path / "never"
+
+    assert cli_main(["dataset", "build", str(spec), "--out", str(out)]) == 1
+    assert "draft" in capsys.readouterr().err
+    assert built == []
+    assert not out.exists()
+
+
+def test_dataset_build_without_keys_touches_nothing(
+    project_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.delenv("ALPACA_PAPER_API_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_PAPER_SECRET_KEY", raising=False)
+    spec = tmp_path / "tiny.yaml"
+    spec.write_text(
+        "dataset_id: tiny\nstatus: approved\nsymbols: [SPY]\nstart: 2026-01-05\nend: 2026-01-06\n"
+    )
+    out = tmp_path / "never"
+
+    assert cli_main(["dataset", "build", str(spec), "--out", str(out)]) == 1
+    assert "gerekli" in capsys.readouterr().out
+    assert not out.exists()

@@ -413,3 +413,56 @@ def test_metrics_report_is_readable(
     text = result.report()
     assert "BEKLENEN DEGER" in text
     assert "islem sayisi" in text
+
+
+# --------------------------------------------------------------------------
+# Gun sonu kapanisi, takvimsiz kosu
+# --------------------------------------------------------------------------
+
+
+def stalling_day(day_offset: int, *, cut_last: int = 0) -> list[Bar]:
+    """Kirilim, sonra yatay seyir: tek cikis yolu gun sonu kapatmasi."""
+    return [
+        bar.model_copy(update={"open": 100.9, "high": 101.4, "low": 100.4, "close": 100.9})
+        if index > 20
+        else bar
+        for index, bar in enumerate(breakout_day(day_offset)[: SESSION_MINUTES - cut_last])
+    ]
+
+
+def test_a_stalling_position_is_flattened_the_same_day(
+    bt_config: Config, cache: BarCache, bt_conn: sqlite3.Connection
+) -> None:
+    """Takvimsiz kosuda da gun sonu kapatmasi calisir.
+
+    Bu test yazilmadan once calismiyordu: SimBroker bracket bacaklarini
+    iptal etmedigi icin pozisyon gece tasiniyordu.
+    """
+    cache.save("SPY", Timeframe.M1, stalling_day(0) + stalling_day(1))
+    result = make_backtest(bt_config, cache, bt_conn).run(
+        session_open(0) - timedelta(days=1), session_open(2)
+    )
+    rows = bt_conn.execute(
+        "SELECT entry_ts, exit_ts, exit_reason FROM trades WHERE run_id = ?", (result.run_id,)
+    ).fetchall()
+    assert len(rows) == 2
+    for row in rows:
+        assert row["exit_reason"] == "eod_flatten"
+        assert row["exit_ts"][:10] == row["entry_ts"][:10]
+    assert result.carried_overnight == 0
+
+
+def test_without_a_calendar_a_carried_position_is_counted_and_reported(
+    bt_config: Config, cache: BarCache, bt_conn: sqlite3.Connection
+) -> None:
+    """Resmi takvim yoksa kosu durmaz, ama tasima gizlenmez.
+
+    Kapanis oncesi son 30 dakika eksik: kapatma dolamaz, pozisyon
+    ertesi gune gecer. Bu gunun sonucu gece boslugunu icerir.
+    """
+    cache.save("SPY", Timeframe.M1, stalling_day(0, cut_last=30) + stalling_day(1))
+    result = make_backtest(bt_config, cache, bt_conn).run(
+        session_open(0) - timedelta(days=1), session_open(2)
+    )
+    assert result.carried_overnight == 1
+    assert "gece boslugunu" in result.report()

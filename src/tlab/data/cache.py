@@ -32,6 +32,33 @@ def _require_aware(label: str, moment: datetime | None) -> None:
         raise DataError(msg)
 
 
+def bars_from_frame(frame: pd.DataFrame, symbol: str) -> list[Bar]:
+    """Onbellek tablosunu Bar listesine cevirir.
+
+    Tek yerde duruyor: diskten okuyan onbellek ile dogrulanmis
+    baytlardan okuyan veri kumesi ayni ceviriyi kullanmali, yoksa
+    "ayni veri" iki yoldan iki farkli sonuc verebilir.
+    """
+    if frame.empty:
+        return []
+    frame = frame.assign(ts=pd.to_datetime(frame["ts"], utc=True))
+    symbol = symbol.upper()
+    return [
+        Bar(
+            symbol=symbol,
+            ts=row.ts.to_pydatetime().astimezone(UTC),
+            open=row.open,
+            high=row.high,
+            low=row.low,
+            close=row.close,
+            volume=row.volume,
+            vwap=None if pd.isna(row.vwap) else float(row.vwap),
+            trade_count=None if pd.isna(row.trade_count) else int(row.trade_count),
+        )
+        for row in frame.itertuples()
+    ]
+
+
 class BarCache:
     """Barlari sembol ve periyot bazinda parquet dosyalarinda saklar."""
 
@@ -74,22 +101,7 @@ class BarCache:
             frame = frame[frame["ts"] >= pd.Timestamp(start)]
         if end is not None:
             frame = frame[frame["ts"] <= pd.Timestamp(end)]
-
-        symbol = symbol.upper()
-        return [
-            Bar(
-                symbol=symbol,
-                ts=row.ts.to_pydatetime().astimezone(UTC),
-                open=row.open,
-                high=row.high,
-                low=row.low,
-                close=row.close,
-                volume=row.volume,
-                vwap=None if pd.isna(row.vwap) else float(row.vwap),
-                trade_count=None if pd.isna(row.trade_count) else int(row.trade_count),
-            )
-            for row in frame.itertuples()
-        ]
+        return bars_from_frame(frame, symbol)
 
     def coverage(self, symbol: str, timeframe: Timeframe) -> tuple[datetime, datetime] | None:
         """Onbellekteki en eski ve en yeni bar zamani; veri yoksa None."""

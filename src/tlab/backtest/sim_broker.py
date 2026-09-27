@@ -26,6 +26,11 @@ Somut kotumser secimler:
     olani seciyoruz.
   * Gap'lerde dolum, aleyhimize olan fiyattan yapilir.
   * Her dolumda kayma (slippage) ve komisyon dusulur.
+  * Pozisyon kapatma (gun sonu, acil durdurma) ANINDA ve son fiyattan
+    dolmaz: piyasa emri olarak bekler ve o sembolun BIR SONRAKI
+    gercek barinin acilisinda dolar. Bar gelmezse dolmaz. Fiyat
+    olmayan bir anda dolum uydurmak, en cok da veri bosluklarinda,
+    olmayan bir cikisi kayda gecirirdi.
 """
 
 from __future__ import annotations
@@ -76,6 +81,15 @@ class _SimOrder:
     entry_price: float = 0.0
 
 
+@dataclass(frozen=True)
+class _SimExit:
+    """Bekleyen bir kapatma (piyasa) emri."""
+
+    broker_order_id: str
+    client_order_id: str
+    submitted_at: datetime
+
+
 @dataclass
 class _SimClock:
     """Borsa saati; motor tarafindan her adimda guncellenir."""
@@ -99,6 +113,7 @@ class SimBroker:
         self._positions: dict[str, Position] = {}
         self._pending: list[_SimOrder] = []
         self._active: dict[str, _SimOrder] = {}
+        self._exits: dict[str, _SimExit] = {}
         self._fills: list[Fill] = []
         self._last_price: dict[str, float] = {}
         self._clock = _SimClock()
@@ -120,7 +135,10 @@ class SimBroker:
         self.day_start_equity = self.equity
 
     def advance(self, bar: Bar) -> None:
-        """Bir bari isler: once girisler, sonra cikislar.
+        """Bir bari isler: once bekleyen kapatma, sonra girisler, sonra cikislar.
+
+        Bekleyen kapatma barin ACILISINDA dolar, yani bar icindeki her
+        seyden once. Ardindan girisler ve koruma bacaklari gelir.
 
         Sira onemli: ayni barda hem giris hem cikis olmasi gercekci
         degildir. Giris o barda dolduysa cikis kontrolu BIR SONRAKI
@@ -128,6 +146,7 @@ class SimBroker:
         zor bir kazanci ucretsiz sayardi.
         """
         self._last_price[bar.symbol] = bar.close
+        self._process_market_exit(bar)
         just_entered = self._process_entries(bar)
         self._process_exits(bar, skip=just_entered)
 
@@ -209,6 +228,18 @@ class SimBroker:
             )
             for symbol, active in self._active.items()
         )
+        # Gonderilmis ama henuz dolmamis kapatma emri de acik emirdir;
+        # dongu ayni sembol icin ikinci bir kapatma gondermez.
+        refs.extend(
+            OrderRef(
+                broker_order_id=pending_exit.broker_order_id,
+                client_order_id=pending_exit.client_order_id,
+                symbol=symbol,
+                submitted_at=pending_exit.submitted_at,
+                status="new",
+            )
+            for symbol, pending_exit in self._exits.items()
+        )
         return refs
 
     def list_fills(self, since: datetime) -> list[Fill]:
@@ -238,31 +269,78 @@ class SimBroker:
         )
 
     def close_position(self, symbol: str) -> OrderRef | None:
-        position = self._positions.get(symbol)
-        if position is None:
+        """Pozisyonu kapatmak icin piyasa emri gonderir.
+
+        Emir ANINDA dolmaz: sembolun bir sonraki barinin acilisinda
+        dolar (`advance`). Son bilinen fiyattan hemen doldurmak, o
+        fiyat dakikalar once olusmus olsa bile cikisi o fiyattan
+        yazmak demekti.
+
+        Pozisyonun koruma bacaklari varsa onlar dusurulur: kapatilan
+        bir pozisyonun bacagi ters yonde yeni pozisyon acmamali.
+        Ayni sembol icin bekleyen bir kapatma varsa yenisi
+        gonderilmez, bekleyen emir dondurulur.
+        """
+        if symbol not in self._positions:
             return None
-        price = self._last_price.get(symbol, position.avg_entry_price)
-        self._close(symbol, price=price, order_type="market")
+        pending_exit = self._exits.get(symbol)
+        if pending_exit is None:
+            self._active.pop(symbol, None)
+            pending_exit = _SimExit(
+                broker_order_id=f"sim-close-{uuid.uuid4().hex[:8]}",
+                client_order_id=f"sim-close-{symbol}",
+                submitted_at=self._now,
+            )
+            self._exits[symbol] = pending_exit
         return OrderRef(
-            broker_order_id=f"sim-close-{uuid.uuid4().hex[:8]}",
-            client_order_id=f"sim-close-{symbol}",
+            broker_order_id=pending_exit.broker_order_id,
+            client_order_id=pending_exit.client_order_id,
             symbol=symbol,
-            submitted_at=self._now,
-            status="filled",
+            submitted_at=pending_exit.submitted_at,
+            status="accepted",
         )
 
     def cancel_open_orders(self, symbol: str | None = None) -> int:
+        """Acik emirleri iptal eder - koruma bacaklari DAHIL.
+
+        Alpaca'da `cancel_orders()` bracket bacaklarini da iptal eder;
+        pozisyon korumasiz ama acik kalir. Simulasyon bunu taklit
+        etmezse dongunun gun sonu kapatmasi hic calismaz: dongu,
+        bacak acikken rakip bir kapatma gondermez (dogru olarak) ve
+        bacaklar hic kalkmadigi icin kapatma hic gonderilmez. Bu
+        hata bir kez yasandi: pozisyonlar gece tasiniyor ve ertesi
+        sabahin acilis boslugu "stop" diye raporlaniyordu.
+        """
+
+        def matches(item_symbol: str) -> bool:
+            return symbol is None or item_symbol == symbol
+
         before = len(self._pending)
-        self._pending = [
-            pending
-            for pending in self._pending
-            if symbol is not None and pending.order.symbol != symbol
-        ]
-        return before - len(self._pending)
+        self._pending = [pending for pending in self._pending if not matches(pending.order.symbol)]
+        cancelled = before - len(self._pending)
+
+        for mapping in (self._active, self._exits):
+            for item_symbol in [key for key in mapping if matches(key)]:
+                del mapping[item_symbol]
+                cancelled += 1
+        return cancelled
 
     # ------------------------------------------------------------------
     # Dolum mantigi
     # ------------------------------------------------------------------
+
+    def _process_market_exit(self, bar: Bar) -> None:
+        """Bekleyen kapatma emrini bu barin acilisinda doldurur."""
+        pending_exit = self._exits.pop(bar.symbol, None)
+        if pending_exit is None or bar.symbol not in self._positions:
+            return
+        self._close(
+            bar.symbol,
+            price=bar.open,
+            order_type="market",
+            ts=bar.ts,
+            order_ids=(pending_exit.broker_order_id, pending_exit.client_order_id),
+        )
 
     def _process_entries(self, bar: Bar) -> bool:
         """Bekleyen giris emirlerini bu bara karsi dener."""
@@ -357,7 +435,13 @@ class SimBroker:
         )
 
     def _close(
-        self, symbol: str, *, price: float, order_type: str, ts: datetime | None = None
+        self,
+        symbol: str,
+        *,
+        price: float,
+        order_type: str,
+        ts: datetime | None = None,
+        order_ids: tuple[str, str] | None = None,
     ) -> None:
         position = self._positions.pop(symbol)
         active = self._active.pop(symbol, None)
@@ -369,12 +453,18 @@ class SimBroker:
         self.cash += pnl - self.fill_model.commission_bps / 10_000 * notional
         self.realized_pnl += pnl
 
+        if order_ids is not None:
+            broker_order_id, client_order_id = order_ids
+        elif active is not None:
+            broker_order_id = f"{active.broker_order_id}-exit"
+            client_order_id = f"{active.order.client_order_id}-leg"
+        else:
+            broker_order_id = client_order_id = f"sim-{symbol}"
+
         self._fills.append(
             Fill(
-                broker_order_id=f"{active.broker_order_id}-exit" if active else f"sim-{symbol}",
-                client_order_id=f"{active.order.client_order_id}-leg"
-                if active
-                else f"sim-{symbol}",
+                broker_order_id=broker_order_id,
+                client_order_id=client_order_id,
                 symbol=symbol,
                 side=exit_side,
                 qty=position.qty,

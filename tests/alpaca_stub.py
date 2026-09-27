@@ -263,6 +263,12 @@ class StubState:
         self.open_orders: list[dict[str, Any]] = [OPEN_ORDER]
         self.all_orders: list[dict[str, Any]] = [FILLED_BRACKET]
         self.bars: dict[str, Any] = BARS
+        self.calendar: list[dict[str, Any]] = [
+            # Alpaca takvimi saatleri BORSA YEREL saatiyle ve dize olarak verir.
+            {"date": "2026-01-05", "open": "09:30", "close": "16:00"},  # kis saati (EST)
+            {"date": "2026-07-06", "open": "09:30", "close": "16:00"},  # yaz saati (EDT)
+            {"date": "2026-11-27", "open": "09:30", "close": "13:00"},  # yarim gun
+        ]
         self.quotes: dict[str, Any] = QUOTES
 
     def fail(
@@ -342,6 +348,8 @@ def _handler(state: StubState) -> type[BaseHTTPRequestHandler]:
                 self._send(_order(order_id=CLOSE_ID, client_order_id="close-1", side="sell"))
             elif path == "/v2/clock":
                 self._send(state.clock)
+            elif path == "/v2/calendar":
+                self._send(state.calendar)
             elif path == "/v2/orders":
                 if method == "POST":
                     self._send(

@@ -1,0 +1,45 @@
+# ORB baseline olcumu icin veri kumesi.
+#
+# BU DOSYA SONUC GORULMEDEN SABITLENDI (2026-09-26). Tarihler ve
+# semboller calistirma aninda secilmez; degistirmek yeni bir
+# dataset_id gerektirir ve sebebi yalnizca VERI KALITESI olabilir,
+# performans asla (AGENTS §3).
+#
+# Aralik: 2026-06-22 - 2026-09-18, yaklasik 63 islem seansi.
+# Son %20 tamamlanmis seans holdout'a ayrilir ve ilk olcumde ACILMAZ.
+dataset_id: orb-baseline-2026q3
+# draft: indirilemez, olculemez - kod uygular. Pilotun kalite olcumunden
+# sonra esikler gerekceli olarak sabitlenir ve AYRI bir commit ile
+# approved yapilir (Codex, #19).
+status: draft
+symbols: [SPY, QQQ, IWM, AAPL, MSFT, NVDA, AMD, AMZN, GOOGL, META, TSLA, JPM]
+timeframe: 1Min
+feed: iex
+adjustment: raw
+start: 2026-06-22
+end: 2026-09-18
+exchange_timezone: America/New_York
+holdout_fraction: 0.20
+split_unit: session
+settle_minutes: 20
+retention_days: 90
+# Kalite politikasi (Codex B2). Bolme yalnizca takvime bakar; bu
+# esikler bir seansin OLCULEBILIR olup olmadigini soyler. Uygun olmayan
+# seans varsa olcum P&L uretmeden durur.
+#
+# Asagidaki degerler ONERI; tanim 'draft' oldugu surece hicbir veriye
+# uygulanamaz. Pilotun kalite olcumunden sonra Codex ile kesinlesir.
+# Indirmeden sonra degistirmek yeni dataset_id demektir.
+#   open_window_minutes >= ORB acilis araligi (15 dk)  - olcum denetler
+#   close_window_minutes <= gun sonu tamponu (10 dk)  - olcum denetler
+#
+# Acilis penceresinde eksik dakika 0: tek bir eksik dakika acilis
+# araliginin tepe/dibini bozabilir ve veri yoklugu "islem olmadi" diye
+# varsayilamaz (Codex, #19). IEX bunu saglayamiyorsa esik sirf olcum
+# gecsin diye gevsetilmez; sinirlama pilotta olculup acikca tartisilir.
+quality:
+  open_window_minutes: 15
+  max_missing_open_window: 0
+  close_window_minutes: 10
+  max_missing_fraction: 0.10
+  max_ineligible_sessions: 0

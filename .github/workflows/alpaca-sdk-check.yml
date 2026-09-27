@@ -20,14 +20,21 @@ jobs:
     # erisemesin.
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    # Sinir tahmin degil, hesap:
-    #   istek basina en kotu durum  = 5 sn baglanti + 15 sn okuma = 20 sn
-    #   asama basina (1 tekrar + 3 sn bekleme)        = 43 sn
-    #   dort asama                                    = ~3 dk
-    #   kilitli kurulum                               = ~1 dk
-    # Zaman asimlari SDK'nin kendisinde YOK; prob bunlari
-    # `sdk_compat.bound_transport` ile koyuyor ve bir test uygulandigini
-    # dogruluyor. Buradaki sinir yalnizca son dis kapi.
+    # OLAGAN butce tahmini - MUTLAK UST SINIR DEGIL:
+    #   istek basina  = 5 sn baglanti + 15 sn okuma araligi
+    #   asama basina  = ~43 sn (1 tekrar + 3 sn bekleme dahil)
+    #   dort asama    = ~3 dk,  kilitli kurulum = ~1 dk
+    #
+    # Neden ust sinir degil: `requests` okuma zaman asimi TOPLAM sure
+    # degil, VERI BEKLEME ARALIGIDIR. Damla damla veri gonderen bir
+    # sunucu, her aralikta sinirin altinda kalarak cok daha uzun
+    # surebilir. DNS cozumlemesi birden fazla adres deneyebilir ve
+    # sayfalama istek sayisini artirabilir. (Codex, #18.)
+    #
+    # Gercek dis sinir buradaki workflow timeout'udur. Zaman asimlari
+    # SDK'nin kendisinde YOK; prob bunlari `sdk_compat.bound_transport`
+    # ile koyuyor - onlar olmadan sessiz bir sunucuda HICBIR satir
+    # basilmadan bu sinira gelinirdi.
     timeout-minutes: 6
     steps:
       - uses: actions/checkout@v4

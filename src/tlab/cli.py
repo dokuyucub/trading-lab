@@ -517,6 +517,126 @@ def _setup_logging(verbose: bool, log_file: Path | None = None) -> None:
 # --------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Sabit veri kumesi ve offline baseline (#17 madde 3)
+# ---------------------------------------------------------------------------
+
+
+def _producer() -> dict[str, str]:
+    """Veri kumesini kimin urettigi. Workflow disinda 'local' yazar."""
+    import os
+
+    return {
+        "run_id": os.environ.get("GITHUB_RUN_ID", "local"),
+        "workflow": os.environ.get("GITHUB_WORKFLOW", "local"),
+        "commit": os.environ.get("GITHUB_SHA") or current_git_sha() or "unknown",
+    }
+
+
+def cmd_dataset_build(args: argparse.Namespace) -> int:
+    """Veriyi indirir, seanslari siniflar, BOLER ve manifesti yazar.
+
+    Anahtarlar YALNIZCA `ALPACA_PAPER_API_KEY` / `ALPACA_PAPER_SECRET_KEY`
+    ortam degiskenlerinden okunur (problarla ayni kaynak). `paper=True`
+    sabit. Cikti yalnizca sayilar ve hash'ler: fiyat, P&L ya da holdout
+    gunleri basilmaz.
+    """
+    import os
+
+    from tlab.data.dataset import DatasetSpec, build_dataset, manifest_sha256
+
+    spec = DatasetSpec.from_yaml(args.spec)
+    # Taslak tanim, anahtar okunmadan ve istemci kurulmadan reddedilir.
+    spec.require_downloadable()
+    key = os.environ.get("ALPACA_PAPER_API_KEY", "").strip()
+    secret = os.environ.get("ALPACA_PAPER_SECRET_KEY", "").strip()
+    if not key or not secret:
+        print("HATA: ALPACA_PAPER_API_KEY ve ALPACA_PAPER_SECRET_KEY gerekli")
+        return 1
+
+    broker = AlpacaBroker(key, secret, paper=True)
+    market = AlpacaMarketData(key, secret, feed=spec.feed, adjustment=spec.adjustment)
+
+    class _Calendar:
+        def get_calendar(self, start: Any, end: Any) -> Any:
+            return broker.get_calendar(start, end, exchange_timezone=spec.exchange_timezone)
+
+    manifest = build_dataset(
+        spec,
+        bars_source=market,
+        calendar_source=_Calendar(),
+        out_dir=args.out,
+        downloaded_at=LiveClock().now(),
+        producer=_producer(),
+    )
+    split = manifest["split"]
+    sessions = manifest["sessions"]
+    print(f"dataset_id        : {manifest['dataset_id']}")
+    print(f"manifest_sha256   : {manifest_sha256(args.out)}")
+    print(f"takvim seansi     : {sessions['calendar']}")
+    print(f"tamamlanmis       : {len(sessions['complete'])}")
+    print(f"tamamlanmamis     : {len(sessions['incomplete'])}")
+    print(f"baseline / holdout: {len(split['baseline'])} / {len(split['holdout'])} seans")
+    ineligible = manifest["quality"]["ineligible"]
+    print(
+        f"kaliteye uymayan  : baseline {ineligible['baseline']}, "
+        f"holdout {ineligible['holdout']} seans"
+    )
+    for symbol, stats in manifest["quality"]["symbols"].items():
+        print(
+            f"  {symbol:<6} bar {stats['bars_received']:>7}  "
+            f"cift {stats['duplicate_timestamps']:>4}  "
+            f"eksik dakika {stats['missing_regular_minutes']}"
+        )
+    return 0
+
+
+def cmd_dataset_verify(args: argparse.Namespace) -> int:
+    """Manifesti ve baseline dosyalarini dogrular. Holdout'a dokunmaz."""
+    from tlab.data.dataset import verify_baseline
+
+    verified = verify_baseline(args.dataset, args.manifest_sha256)
+    print(f"OK {verified.dataset_id}: baseline {len(verified.sessions)} seans dogrulandi")
+    return 0
+
+
+def cmd_baseline(args: argparse.Namespace) -> int:
+    """Dogrulanmis baseline uzerinde offline olcum. Ag ve anahtar kullanmaz."""
+    from tlab.backtest.baseline import report_bytes, run_baseline
+    from tlab.data.dataset import verify_baseline
+
+    config, _ = _load(args.root)
+    verified = verify_baseline(args.dataset, args.manifest_sha256)
+    report = run_baseline(
+        verified,
+        config,
+        code_commit=_producer()["commit"],
+        starting_equity=args.equity,
+    )
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_bytes(report_bytes(report))
+
+    print(f"veri kumesi : {report['dataset_id']}  ({report['manifest_sha256'][:12]})")
+    first, last = report["baseline_sessions"]["first"], report["baseline_sessions"]["last"]
+    print(f"baseline    : {report['baseline_sessions']['count']} seans, {first} - {last}")
+    print(f"holdout     : {report['holdout']['sessions']} seans, ACILMADI")
+    print()
+    print(f"{'senaryo':<9} {'islem':>5} {'E[R]':>9} {'hukum':<18} {'gereken':>7}")
+    for item in report["scenarios"]:
+        evidence = item["evidence"]
+        expectancy = item["expectancy_r"]
+        shown = "   -" if expectancy is None else f"{expectancy:+9.4f}"
+        print(
+            f"{item['name']:<9} {item['trades']:>5} {shown} "
+            f"{evidence['verdict']:<18} {evidence['trades_needed']:>7}"
+        )
+    print()
+    for caveat in report["caveats"]:
+        print(f"  - {caveat}")
+    print(f"\nrapor: {args.out}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="tlab",
@@ -584,6 +704,24 @@ def build_parser() -> argparse.ArgumentParser:
     backtest.add_argument("--notes", help="Kosuya not ekle")
     backtest.add_argument("--verbose", action="store_true", help="Ayrintili gunluk")
     backtest.set_defaults(func=cmd_backtest)
+
+    dataset = sub.add_parser("dataset", help="Sabit, bolunmus veri kumesi islemleri")
+    dataset_sub = dataset.add_subparsers(dest="dataset_command", required=True)
+    build = dataset_sub.add_parser("build", help="Veriyi indir, bol, manifesti yaz (ag gerekir)")
+    build.add_argument("spec", type=Path, help="config/datasets/<id>.yaml")
+    build.add_argument("--out", type=Path, required=True, help="Bos cikti dizini")
+    build.set_defaults(func=cmd_dataset_build)
+    verify = dataset_sub.add_parser("verify", help="Manifest ve baseline dosyalarini dogrula")
+    verify.add_argument("dataset", type=Path)
+    verify.add_argument("--manifest-sha256", required=True, help="Kesin manifest hash'i")
+    verify.set_defaults(func=cmd_dataset_verify)
+
+    baseline = sub.add_parser("baseline", help="Dogrulanmis baseline uzerinde offline olcum")
+    baseline.add_argument("dataset", type=Path)
+    baseline.add_argument("--manifest-sha256", required=True, help="Kesin manifest hash'i")
+    baseline.add_argument("--out", type=Path, required=True, help="Rapor JSON yolu")
+    baseline.add_argument("--equity", type=float, default=100_000.0)
+    baseline.set_defaults(func=cmd_baseline)
 
     summary = sub.add_parser("summary", help="Kosu ozetini goster")
     summary.add_argument("--run-id", help="Kosu kimligi (varsayilan: en son kosu)")

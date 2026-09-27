@@ -256,6 +256,63 @@ parametre seti canlıya ancak (a) yeterli örnek, (b) walk-forward backtest
 düzeltmek eski commit'lerdeki anahtarı silmez. `test_architecture.py` her
 koşuda izlenen dosyaları tarar.
 
+### 3.11 Holdout, sonuç görülmeden ayrılır ve ilk ölçümde açılmaz
+
+2026-09-26'da kararlaştırıldı (#17). Codex'in önerisi; kural onun cümlesi:
+
+> Sonuç görüldükten sonra aynı test dönemi üzerinde parametre ayarlayıp
+> bağımsız başarı diye sunulmaz.
+
+Bu kural en çok **ilk kötü sonuçtan sonra** çiğnenmek istenir, ve o anda
+yazılı bir kurala güvenmek yetmez. Bu yüzden mekanizma yapısaldır:
+
+- **Ayrım veri alınırken yapılır**, tek bir P&L satırı hesaplanmadan. Tamamlanmış
+  seansların son %20'si `holdout/`, önceki %80'i `baseline/`. Holdout sayısı
+  yukarı yuvarlanır. Rastgele değil kronolojik: rastgele seçilen bir gün komşu
+  günlerin rejimini paylaşır ve "görülmemiş" sayılamaz.
+- **Bölme yalnızca takvime bakar; veri kalitesi ayrı bir kapıdır.** Bir seans,
+  kapanışı artı oturma süresi indirmeden önce bittiyse "tamamlanmış"tır — bar
+  sayısına bakılmaz. Bir sembolün verisi eksik diye bir gün bölmeden düşseydi,
+  holdout sınırının yeri veri boşluğuna göre kayardı (Codex B2). Kalite her
+  (seans, sembol) için ölçülüp manifeste yazılır; spec'teki `quality`
+  politikası (açılış penceresi, kapanış penceresi, eksik dakika oranı)
+  karşılanmazsa ölçüm **P&L üretmeden** durur. Politika spec hash'ine girer:
+  indirmeden sonra gevşetmek yeni bir `dataset_id` demektir.
+- **Tarihler ve semboller önceden sabittir.** `config/datasets/<id>.yaml` commit
+  edilir; çalıştırma anında seçilmez. Değiştirmek yeni `dataset_id` gerektirir
+  ve gerekçesi yalnızca veri kalitesi olabilir, performans asla.
+- **Veri kümeleri tarih aralığında örtüşmez.** Örtüşseydi, bir kümedeki deneme
+  diğerinin holdout'unu görebilirdi.
+- **İlk ölçüm yalnızca baseline'ı görür.** Yükleyici `holdout/`'u listelemez,
+  okumaz, hash'lemez. Rapor holdout hakkında yalnızca seans *sayısı* taşır;
+  tarihleri bile yazmaz.
+- **Doğrulanan baytlar, kullanılan baytlardır.** Her baseline dosyası tek kez
+  okunur; aynı baytlar hash'lenir ve bellekte çözülür. Ölçüm dosya yolu almaz,
+  veri kümesi dizinini bir daha açmaz. Symlink, hardlink ve özel dosyalar hiç
+  okunmadan reddedilir: `baseline/` altındaki bir takma ad `holdout/`'a
+  çözülemez. (Codex B3: denetim kancası çağrılan yolu görür, çözüldüğü yeri
+  değil — symlink ile holdout okunurken kanca "dokunulmadı" diyordu.)
+- **Kesin manifest hash'i zorunludur.** "En son veri kümesini al" diye bir yol
+  yoktur. Tek bir bayt tutmazsa ölçüm durur.
+- **Holdout'u açmak ayrı ve kayıtlı bir değerlendirme olayıdır.** Açıldıktan
+  sonra o döneme göre değişen bir aday, **yeni bağımsız veri** gerektirir —
+  aynı holdout ikinci kez "görülmemiş" sayılamaz.
+- **Otomatik terfi yok.** Baseline raporu bir terfi kararı değildir.
+
+Denetleyenler: `tests/test_dataset.py` (holdout'a erişim Python denetim
+kancasıyla ölçülür — `chmod` değil, çünkü root izinleri yok sayar; takma ad
+senaryoları ayrıca), `tests/test_baseline_run.py` (doğrulamadan sonra ölçüm
+veri kümesinde hiçbir dosya açmaz), `tests/test_dataset_specs.py`
+(örtüşmezlik), `tests/test_architecture.py` (veri kümesi modülü backtest,
+strateji, öğrenme veya seans döngüsünü içe aktaramaz — performans
+hesaplayamayan kod, bölme sınırını performansa göre seçemez).
+
+**Kancanın sınırı:** Python denetim kancası yalnızca Python seviyesindeki
+`open`/`os.open`/`scandir`/`listdir` olaylarını görür. Yerel kütüphanelerin
+kendi G/Ç'sini gördüğü iddia edilmez. Güvence bu yüzden iki parçalıdır:
+yapısal kısım (tek okuma, takma ad reddi, ölçümün yol almaması) ve onu ölçen
+testler. Biri tek başına yeterli sayılmaz.
+
 ## 4. Çakışmaya açık yerler
 
 | Dosya | Kural |
@@ -351,14 +408,49 @@ Bir işi yarım bırakıyorsan PR'ı **taslak** olarak aç ve açıklamasına ş
 nerede kaldın, sıradaki adım ne, hangi varsayımı test etmedin. Yarım kalmış işin
 en pahalı tarafı kodun eksikliği değil, bağlamın kaybolmasıdır.
 
-## 7. Doğrulanmamış olan
+## 7. Doğrulanan ve doğrulanmayan
 
-Sistem **hiç gerçek Alpaca hesabına bağlanmadı**. Tüm testler çevrimdışı.
-Sözleşme testleri (`test_alpaca_contract.py`) gerçek `alpaca-py` istemcisini
-yerel bir sahte sunucuya karşı çalıştırıyor — yani Alpaca'nın kapısına kadar
-her şey doğrulandı, Alpaca'nın kendi davranışı doğrulanmadı.
+Bu bölüm iddiaları **kapsamıyla** tutar. "Bağlandı" tek başına bir şey
+söylemez; hangi yolun, neyi, hangi koşuda doğruladığı söyler.
 
-İlk gerçek bağlantıyı kuran kişi `tlab doctor` çıktısını bu dosyaya not düşsün.
+### Doğrulanan — 2026-09-23 ve 2026-09-24
+
+| Ne | Kanıt | Kapsam |
+|---|---|---|
+| Anahtarlar geçerli, ağ açık | Koşu `35809584609`, iş `107017907456` | Elle kurulmuş GET; **SDK'ya dokunmaz** |
+| **Bizim kodumuz Alpaca ile konuşuyor** | Koşu `36031659146`, iş `107741630086` | Gerçek `AlpacaBroker` + `AlpacaMarketData` |
+
+İkinci koşunun çıktısı, dört aşama da ayrı ayrı:
+
+```
+OK hesap          # hesap okundu ve is_healthy dogrulandi
+OK borsa saati    # takvim cozumlendi, degerler tutarli
+OK gunluk bar     # D1 eslemesi calisiyor, Bar tipine cevriliyor
+OK dakikalik bar  # M1 eslemesi calisiyor - hic calismayan esleme BUYDU
+```
+
+Dakikalık aşamanın ayrı olması tesadüf değil: `_TIMEFRAME_ARGS` içinde
+`"Minute"` yazdığı için `tlab fetch` hiç çalışmıyordu ve 272 test yeşildi.
+Yalnızca günlük bara bakan bir prob o hatayı yine kaçırırdı.
+
+Bu paper SDK koşusunun tanı çıktısında hassas değer görülmedi: probun
+bastığı dört satırda bakiye, hesap kimliği veya yanıt gövdesi yok. Bu
+**tek bir başarı koşusudur**; bütün hata yolları için ya da canlı hesap
+için genel bir güvence değildir. Hata yollarındaki sızdırmama güvencesi
+yerel sözleşme testlerinden (`tests/test_sdk_probe.py`) gelir.
+
+### Hâlâ doğrulanmayan
+
+- **Emir yaşam döngüsü.** Hiç emir gönderilmedi. Dolum, kayma, kısmi dolum,
+  iptal, bracket bacaklarının davranışı — hiçbiri gerçek ortamda görülmedi.
+- **Gözetimsiz seans.** Sistem bir kez bile canlı çalışmadı. Yeniden
+  başlatma/mutabakat, çift emir engeli, gün sonu kapatma gerçek ortamda
+  sınanmadı.
+- **Stratejinin kârlılığı.** ORB gerçek piyasa verisiyle bir kez bile
+  backtest edilmedi. Sistemin sağlam olması, stratejinin kazandırdığı
+  anlamına gelmez; bunlar ayrı iki sorudur ve ikincisine henüz dokunulmadı.
+
+Bu üçü tamamlanmadan hiçbir yerde "sistem hazır" yazılmamalı.
 
 ## 8. İnceleme ve kalıcı devir notları
 

@@ -211,12 +211,91 @@ def test_day_start_resets_the_daily_reference(broker: SimBroker) -> None:
     assert broker.get_account().daily_pl == pytest.approx(0.0)
 
 
-def test_close_position_and_cancel(broker: SimBroker) -> None:
+def test_close_position_waits_for_the_next_real_price(broker: SimBroker) -> None:
+    """Kapatma bir piyasa emridir: bir sonraki barin ACILISINDA dolar.
+
+    Eskiden son bilinen fiyattan aninda doluyordu. O fiyat dakikalar
+    once olusmus olabilir; veri boslugunda ise olmayan bir cikisi
+    kayda gecirirdi.
+    """
     fill_entry(broker)
-    assert broker.close_position("SPY") is not None
+    ref = broker.close_position("SPY")
+    assert ref is not None
+    assert ref.status == "accepted"
+    assert [p.symbol for p in broker.get_positions()] == ["SPY"], "fiyat yokken dolum uyduruldu"
+
+    broker.advance(bar(open_=100.7, high=100.9, low=100.6, close=100.8, minute=1))
     assert broker.get_positions() == []
+    exit_fill = broker.list_fills(T0 - timedelta(days=1))[-1]
+    assert exit_fill.order_type == "market"
+    assert exit_fill.price == pytest.approx(100.7)
+    assert exit_fill.filled_at == T0 + timedelta(minutes=1)
+    assert exit_fill.broker_order_id == ref.broker_order_id
     assert broker.close_position("SPY") is None
 
+
+def test_close_is_not_filled_by_another_symbols_bar(broker: SimBroker) -> None:
+    fill_entry(broker)
+    broker.close_position("SPY")
+    broker.advance(bar(open_=50.0, high=50.1, low=49.9, close=50.0, minute=1, symbol="QQQ"))
+    assert [p.symbol for p in broker.get_positions()] == ["SPY"]
+
+
+def test_a_pending_close_is_an_open_order_and_is_not_duplicated(broker: SimBroker) -> None:
+    fill_entry(broker)
+    first = broker.close_position("SPY")
+    second = broker.close_position("SPY")
+    assert first is not None and second is not None
+    assert second.broker_order_id == first.broker_order_id
+    assert [ref.client_order_id for ref in broker.list_open_orders()] == ["sim-close-SPY"]
+
+
+def test_closing_drops_the_protective_legs(broker: SimBroker) -> None:
+    """Kapatilan pozisyonun bacagi ters yonde pozisyon acmamali."""
+    fill_entry(broker)
+    broker.close_position("SPY")
+    # Bu bar hem hedefi hem stop'u gecerdi; kapatma acilista dolmali,
+    # bacaklar ise hic tetiklenmemeli.
+    broker.advance(bar(open_=100.4, high=102.0, low=98.0, close=100.0, minute=1))
+    exits = [f for f in broker.list_fills(T0 - timedelta(days=1)) if f.side is Side.SELL]
+    assert [f.order_type for f in exits] == ["market"]
+
+
+def test_cancel_includes_protective_legs_like_alpaca(broker: SimBroker) -> None:
+    """Alpaca `cancel_orders()` bracket bacaklarini da iptal eder.
+
+    Simulasyon bunu yapmadigi icin gun sonu kapatmasi HIC calismiyordu:
+    bacaklar acik kaldigindan dongu kapatma gondermiyor, pozisyon gece
+    tasiniyordu.
+    """
+    fill_entry(broker)
+    assert broker.cancel_open_orders() == 1
+    assert broker.list_open_orders() == []
+    assert [p.symbol for p in broker.get_positions()] == ["SPY"], "iptal pozisyonu kapatmaz"
+
+    # Bacak kalkti: stop seviyesinin altina inen bar artik cikis uretmez.
+    broker.advance(bar(open_=99.5, high=99.6, low=98.0, close=98.5, minute=1))
+    assert [p.symbol for p in broker.get_positions()] == ["SPY"]
+
+
+def test_cancel_by_symbol_leaves_other_symbols_alone(broker: SimBroker) -> None:
+    fill_entry(broker)
+    broker.submit_bracket(
+        BracketOrder(
+            symbol="QQQ",
+            side=Side.BUY,
+            qty=10,
+            entry_type=EntryType.LIMIT,
+            limit_price=50.0,
+            stop_loss=49.0,
+            take_profit=52.0,
+        )
+    )
+    assert broker.cancel_open_orders("QQQ") == 1
+    assert [ref.symbol for ref in broker.list_open_orders()] == ["SPY"]
+
+
+def test_cancel_pending_entry(broker: SimBroker) -> None:
     broker.submit_bracket(long_order(limit=95.0, stop=94.0, target=97.0))
     assert broker.cancel_open_orders("SPY") == 1
     assert broker.list_open_orders() == []

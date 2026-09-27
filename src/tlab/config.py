@@ -176,6 +176,14 @@ class JournalSection(Strict):
     path: Path = Path("data/journal.db")
 
 
+LOCAL_PATH_FIELDS: tuple[tuple[str, ...], ...] = (
+    ("root",),
+    ("data", "cache_dir"),
+    ("journal", "path"),
+)
+"""Makineye ozel yollar: olcumun parmak izine GIRMEZ (bkz. semantic_dump)."""
+
+
 class Config(Strict):
     """Cozumlenmis tam yapilandirma."""
 
@@ -196,6 +204,24 @@ class Config(Strict):
             if symbol and symbol not in seen:
                 seen.append(symbol)
         return tuple(seen)
+
+    def semantic_dump(self) -> dict[str, Any]:
+        """Davranisi belirleyen ayarlar - yerel dosya yollari HARIC.
+
+        Ayni strateji/risk/seans/veri ayarlari hangi klasorde calisirsa
+        calissin ayni parmak izini vermeli. Proje koku, onbellek ve
+        journal yolu makineye ozeldir; olcumun sonucunu degistirmez.
+        Hangi alanlarin yerel sayildigi `LOCAL_PATH_FIELDS`'ta ACIKCA
+        yazili; yeni bir yol alani eklenirse bir test siniflandirilmasini
+        ister, sessizce parmak izine giremez.
+        """
+        payload = self.model_dump(mode="json")
+        for path in LOCAL_PATH_FIELDS:
+            container = payload
+            for key in path[:-1]:
+                container = container[key]
+            container.pop(path[-1])
+        return payload
 
     def resolve(self, relative: Path) -> Path:
         """Config'deki goreli yollari proje kokune gore mutlaklastirir."""
