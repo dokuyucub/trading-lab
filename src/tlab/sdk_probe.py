@@ -10,8 +10,10 @@ Ayrim teorik degil: `_TIMEFRAME_ARGS` icinde `"Minute"` yazdigi icin
 URL o hatayi goremez, cunku SDK'ya hic dokunmaz. Bu prob gorur.
 
 CIKTI DISIPLINI - bu dosyanin en kati kurali:
-Depo herkese acik, Actions kayitlari da herkese acik. Bu yuzden
-BURADA HICBIR SAYISAL HESAP DEGERI BASILMAZ. Ozsermaye, bakiye, hesap
+Actions kayitlari depoyu gorebilen herkese acik; depo ileride acik
+hale gelirse GECMIS kayitlarin hepsi herkese gorunur olur ve bir kez
+yazilmis bir deger geri alinamaz (AGENTS §3.1). Bu yuzden depo gizli
+olsa da BURADA HICBIR SAYISAL HESAP DEGERI BASILMAZ. Ozsermaye, bakiye, hesap
 kimligi, pozisyon buyuklugu - hicbiri. `doctor` bunlari basar ve
 YERELDE dogru davranistir; genel bir kosuya tasinamamasinin sebebi
 tam olarak budur.

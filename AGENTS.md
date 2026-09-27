@@ -86,8 +86,20 @@ Akış: kendi dalında çalış → `make check` → push → `main`'e PR aç �
 birleştir. PR'lar küçük tutulur; küçük PR hızlı birleşir, hızlı birleşen PR
 çakışmaz.
 
-`main` üzerinde branch protection açık olmalı (Settings → Branches):
-PR zorunlu, `quality` status check zorunlu, yöneticiler dahil.
+**`main` teknik olarak korumasız.** Depo gizli ve mevcut planda gizli
+depolarda dal koruması / ruleset kullanılamıyor (2026-09-27, API:
+`private=true`, `main` `protected=false`; #17). Yani "PR zorunlu, `quality`
+zorunlu" kuralını GitHub **uygulamıyor**; yalnızca biz uyguluyoruz:
+
+- `main`'e doğrudan push yok; her değişiklik PR ile girer.
+- Birleştirme için güncel head'de `quality` yeşil **ve** diğer ajanın o
+  SHA'ya bağlı `## ONAY — <sha>` kaydı gerekir (§4a). Eski onay yeni koda geçmez.
+- CI tetikleyicileri (`main`'e push + filtresiz `pull_request`) ve `quality`
+  adımları `tests/test_architecture.py` tarafından sabitlenir; bir PR'ı kapıdan
+  kaçıracak filtre eklenirse test kırılır.
+
+Plan değişip koruma kullanılabilir hale gelirse açılır: PR zorunlu, `quality`
+zorunlu, yöneticiler dahil.
 
 ## 2. Kurulum ve kapılar
 
@@ -163,8 +175,11 @@ cevaplayabilmeli — bu yüzden bağımsızlığı korunur. İkincisi gerçek SD
 çevrim hataları gibi) yalnızca orada görünür.
 
 **Her ikisi de hiçbir sayısal hesap değeri basmaz.** `doctor` ve `account`
-komutları özsermaye basar ve bu yerel kullanımda doğrudur; depo herkese açık
-olduğu için genel bir koşuya taşınamazlar. Bu kural kaynak incelemesiyle
+komutları özsermaye basar ve bu yerel kullanımda doğrudur; genel bir koşuya
+taşınamazlar. Depo şu an gizli, ama bu kuralın gerekçesi o değil: depo açıksa
+ya da ileride açılırsa **geçmiş koşu kayıtlarının hepsi** herkese görünür olur
+ve bir kez yazılmış bir değer geri alınamaz (#17). Kural görünürlükten bağımsız
+uygulanır. Bu kural kaynak incelemesiyle
 değil, `tests/test_sdk_probe.py` içinde sunucu yanıtlarına konan sahte sır
 işaretleriyle denetlenir: tüm çıktı akışları yakalanır ve hiçbir işaretin
 geçmediği doğrulanır — başarı ve hata yollarının her ikisinde de.
