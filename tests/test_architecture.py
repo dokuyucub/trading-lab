@@ -278,10 +278,137 @@ def test_applied_migrations_are_not_edited() -> None:
 # Sir sizintisi
 # --------------------------------------------------------------------------
 
-SECRET_PATTERNS = [
-    re.compile(r"\bPK[A-Z0-9]{16,}\b"),  # Alpaca anahtar bicimi
-    re.compile(r"\bAK[A-Z0-9]{16,}\b"),  # Alpaca canli anahtar bicimi
-]
+_KEY_CHARS = "A-Za-z0-9/+"
+
+# Katman 1 - BILINEN ALAN: Alpaca anahtar adina atanmis duz (literal) deger.
+# Degerin bicimine bakmaz; tek buyukluklu ya da yalniz rakamli bir secret'i
+# da yakalar. Ortam referanslari (${{ secrets.X }}, $X), bos degerler,
+# <yer tutucu>lar ve fonksiyon cagrilari literal degildir. 16 karakter alt
+# siniri testlerdeki bilincli kisa sahteleri (PKTEST, secret) disarida birakir.
+NAMED_FIELD = re.compile(
+    r"\b(?:ALPACA|APCA)_[A-Z_]*(?:KEY|SECRET)[A-Z_]*\b[\"']?\s*[:=,]\s*"
+    r"(?P<q>[\"']?)(?P<value>[A-Za-z0-9/+_\-]{16,})(?P=q)(?![A-Za-z0-9/+_\-(.])"
+)
+
+# Katman 2 - SEZGISEL: alan adi olmadan anahtara BENZEYEN dizeler.
+TOKEN_PATTERNS = {
+    # Alpaca anahtar KIMLIGI: paper PK..., canli AK..., buyuk harf + rakam.
+    "anahtar-kimligi": re.compile(r"\b[PA]K[A-Z0-9]{16,}\b"),
+    # 40 karakter, buyuk harf + kucuk harf + rakam KARISIK. Karisiklik sarti
+    # commit SHA'larini ve SHA256'lari eler (tek buyukluklu hex).
+    "karisik-token": re.compile(
+        rf"(?<![{_KEY_CHARS}])"
+        rf"(?=[{_KEY_CHARS}]{{0,39}}[a-z])"
+        rf"(?=[{_KEY_CHARS}]{{0,39}}[A-Z])"
+        rf"(?=[{_KEY_CHARS}]{{0,39}}[0-9])"
+        rf"[{_KEY_CHARS}]{{40}}"
+        rf"(?![{_KEY_CHARS}])"
+    ),
+}
+"""SINIRLARI - bu denetim GitHub secret scanning'in yerine GECMEZ:
+
+  * Yalnizca calisma agacindaki izlenen dosyalar; git GECMISI taranmaz.
+  * Alan adi olmadan yazilmis TEK BUYUKLUKLU ya da YALNIZ RAKAMLI bir
+    secret yakalanmaz (katman 2 karisiklik ister; saglayicinin her
+    secret'ta iki harf buyuklugunu garanti ettigi dogrulanmadi).
+  * base64/hex ile gizlenmis, bolunmus ya da birlestirilerek kurulan
+    anahtar yakalanmaz. Baska saglayicilarin anahtarlari kapsam disi.
+  * Katman 2 sahte pozitif verebilir (secret olmayan 40 karakterlik
+    karisik bir token). O durumda dize degistirilir, kural gevsetilmez.
+"""
+
+
+def secret_findings(text: str) -> list[tuple[int, str]]:
+    """(satir, kategori) listesi. Eslesen DEGER asla donmez: test ciktisi
+    gercek bir anahtari loga basmamali."""
+    found: list[tuple[int, str]] = []
+    for number, line in enumerate(text.splitlines(), start=1):
+        if NAMED_FIELD.search(line):
+            found.append((number, "bilinen-alan"))
+            continue
+        for category, pattern in TOKEN_PATTERNS.items():
+            if pattern.search(line):
+                found.append((number, category))
+                break
+    return found
+
+
+def _fake(*parts: str) -> str:
+    """Sahte anahtari calisma aninda kurar: kaynakta DUZ halde durmasin,
+    yoksa tarama bu dosyanin kendisini yakalar."""
+    return "".join(parts)
+
+
+@pytest.mark.parametrize(
+    ("text", "category"),
+    [
+        (_fake("ALPACA_SECRET_KEY=", "abcd1234" * 5), "bilinen-alan"),  # tek buyukluk
+        (_fake("ALPACA_PAPER_SECRET_KEY: '", "7" * 40, "'"), "bilinen-alan"),  # yalniz rakam
+        (_fake('"APCA_API_KEY_ID": "', "PK", "X" * 18, '"'), "bilinen-alan"),
+        (_fake('setenv("ALPACA_API_KEY", "', "q" * 20, '")'), "bilinen-alan"),
+        (_fake("PK", "ABCDEFGH", "12345678", "XY"), "anahtar-kimligi"),
+        (_fake("AK", "ZZZZ9999", "QQQQ1111", "RS"), "anahtar-kimligi"),
+        (_fake("aB3d" * 10), "karisik-token"),
+        (_fake("token ", "Zx9/" * 10, " son"), "karisik-token"),
+    ],
+    ids=[
+        "field-lowercase",
+        "field-digits",
+        "field-json",
+        "field-setenv",
+        "paper-key-id",
+        "live-key-id",
+        "mixed-token",
+        "mixed-token-slash",
+    ],
+)
+def test_the_scanner_catches_key_shaped_values(text: str, category: str) -> None:
+    assert secret_findings(text) == [(1, category)]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "ALPACA_API_KEY=",  # .env.example: bos
+        "ALPACA_API_KEY=<paper key>",  # belgede yer tutucu
+        "ALPACA_PAPER_SECRET_KEY: ${{ secrets.ALPACA_PAPER_SECRET_KEY }}",  # workflow
+        'key = os.environ.get("ALPACA_PAPER_API_KEY", "")',  # ortamdan okuma
+        '"ALPACA_API_KEY": mask(self.alpaca_api_key),',  # cagri, literal degil
+        'monkeypatch.setenv("ALPACA_PAPER_API_KEY", "PKTEST")',  # kisa sahte
+        "ALPACA_API_KEY=PKTEST123",  # kisa sahte
+        "4ff2013ae05c261f3bfd5eb98843e0cb72e97145",  # commit SHA
+        "4FF2013AE05C261F3BFD5EB98843E0CB72E97145",  # buyuk hex
+        "df8f2247cef8c463af62edb29707584e3810bc3a" * 2,  # bitisik hash
+        _fake("aB3d" * 10, "e"),  # 41 karakter
+    ],
+    ids=[
+        "empty",
+        "placeholder",
+        "actions-secret-ref",
+        "environ-get",
+        "function-call",
+        "setenv-short-fake",
+        "short-fake",
+        "sha1",
+        "sha1-upper",
+        "hash-pair",
+        "41-chars",
+    ],
+)
+def test_the_scanner_ignores_what_it_must_not_flag(text: str) -> None:
+    assert secret_findings(text) == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    [_fake("abcd1234" * 5), _fake("7" * 40), _fake("aBcD" * 10)],
+    ids=["unnamed-lowercase", "unnamed-digits", "unnamed-no-digit"],
+)
+def test_known_misses_are_documented_not_hidden(text: str) -> None:
+    """BILINEN KACIRMALAR: alan adi olmadan tek buyuklukte, yalniz rakamli
+    ya da rakamsiz bir secret yakalanmaz. Bu test o sinirin varligini
+    sabitliyor; biri 'artik her seyi yakaliyor' diye yazarsa kirilir."""
+    assert secret_findings(text) == []
 
 
 def test_no_api_key_is_tracked_by_git() -> None:
@@ -290,7 +417,7 @@ def test_no_api_key_is_tracked_by_git() -> None:
     Git gecmisi kalicidir: dosyayi sonradan duzeltmek eski
     commit'lerdeki anahtari silmez. Bu testin ucuz olmasi ve her
     kosuda calismasi, tam da bu geri donusu olmayan hatayi
-    engellemek icin.
+    engellemek icin. Sinirlari TOKEN_PATTERNS'in aciklamasinda.
     """
     listing = subprocess.run(
         ["git", "ls-files"], cwd=REPO, capture_output=True, text=True, check=False
@@ -307,13 +434,12 @@ def test_no_api_key_is_tracked_by_git() -> None:
             content = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             continue
-        # Testlerdeki sahte anahtarlar ("PKTEST") kasten kisa tutuldu.
-        for pattern in SECRET_PATTERNS:
-            if pattern.search(content):
-                offenders.append(name)
-                break
+        offenders.extend(
+            f"{name}:{line} ({category})" for line, category in secret_findings(content)
+        )
 
-    assert not offenders, "Izlenen dosyada API anahtari bulundu:\n  " + "\n  ".join(offenders)
+    # Yalnizca dosya:satir ve kategori basilir; eslesen deger asla.
+    assert not offenders, "Izlenen dosyada anahtara benzeyen deger:\n  " + "\n  ".join(offenders)
 
 
 def test_env_file_is_ignored() -> None:
