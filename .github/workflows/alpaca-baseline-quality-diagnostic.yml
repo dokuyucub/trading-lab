@@ -1,0 +1,53 @@
+# Baseline kalite teshisi (#17, docs/designs/baseline-quality-diagnostic.md).
+# P&L YOK, emir YOK, holdout bari istenmez, TEK SEFERLIK bir olay.
+#
+# Gorev kodda sabit (baseline_diagnostic.TASK): kaynak tanim hash'le
+# kilitli, workflow girdi almaz. Ham barlar bellekte olculur ve diske
+# YAZILMAZ; bu yuzden temizlenecek ham veri dizini yoktur. Disari cikan
+# tek sey acik alan listeli ozet. Sozlesme tests/test_architecture.py
+# tarafindan denetlenir.
+name: Alpaca baseline quality diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    # Yalnizca main: baska bir dalda degistirilmis kod anahtarlara
+    # erisemesin.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # 11 sembol x 50 baseline seansi 1Min indirme + bellekte kalite
+    # olcumu (P&L yok). Olagan butce tahmini, mutlak ust sinir degil.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Kilitli calisma zamani bagimliliklarini kur
+        run: |
+          python -m pip install -r requirements.lock
+          python -m pip check
+      # Secret'lar YALNIZCA bu adimda.
+      - name: Baseline kalitesini teshis et
+        env:
+          ALPACA_PAPER_API_KEY: ${{ secrets.ALPACA_PAPER_API_KEY }}
+          ALPACA_PAPER_SECRET_KEY: ${{ secrets.ALPACA_PAPER_SECRET_KEY }}
+        run: >-
+          PYTHONPATH=src python -m tlab.baseline_diagnostic
+          --out "$RUNNER_TEMP/baseline-quality-diagnostic.json"
+      # Yuklenen TEK dosya: teshis ozeti. Kosulsuz adim yalnizca onceki
+      # adimlar basariliysa calisir; dosya yoksa hata.
+      - name: Teshis ozetini yukle
+        uses: actions/upload-artifact@v4
+        with:
+          name: baseline-quality-diagnostic
+          path: ${{ runner.temp }}/baseline-quality-diagnostic.json
+          if-no-files-found: error
+          retention-days: 90
