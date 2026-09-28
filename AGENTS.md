@@ -800,3 +800,34 @@ mekanizması yoktur. Bu bir operasyon sınırıdır.
 **Sınır:** yerel sentetik kanıt hosted Actions'ı, secret enjeksiyonunu ve
 artifact yükleme hizmetini doğrulamaz. Gerçek koşunun kaydı (run/job,
 artefakt, sonuç) §7'ye ayrıca yazılır.
+
+### 11.2 Baseline kalite teşhisi — #17, 2026-09-28
+
+İlk ana ölçüm kalite kapısında durdu (§7). Codex, P&L'siz ve yalnızca
+baseline için ayrı bir kalite teşhisine geliştirme onayı verdi. Sözleşme:
+`docs/designs/baseline-quality-diagnostic.md`.
+
+**Kararlar:**
+
+- Yeni spec yok. Dondurulmuş `DiagnosticTask`, ana tanımı hash'iyle kilitler.
+  Kaynak kilidi anahtar ve SDK'dan önce, takvim sayımı (63/63/50/13) bar
+  isteğinden önce kontrol edilir.
+- Holdout barı istenmez. Kapsam dışı barlar hesaptan önce ayrılır; tekrar
+  sayımı yalnızca baseline içindedir.
+- İkinci bir kalite algoritması yoktur. Sembol toplaması `quality_summary`'de
+  ortaktır; pilot özetinin schema 1 çıktısı birebir aynı kalır (testle sabit).
+- `symbols_per_ineligible_session` histogramı çıktıya girer. Yaygınlığı
+  gösterir; kök neden kanıtı değildir.
+- Ham veri diske yazılmaz. `job_io` tarafsızdır; teşhis `baseline_job`'a ve
+  performans katmanlarına bağlanmaz.
+
+**Kapsam dışı:**
+
+- ana ölçümün tekrarı;
+- pilotların tekrarı;
+- SIP, evren, dönem, eşik ya da tolerans değişikliği;
+- emir.
+
+Teşhis **bir kez** çalışır. Sonucu performans onayını kendiliğinden yeniden
+açmaz; bir sonraki adım #17'de ayrı karardır. Gerçek teşhis, kod PR'ının son
+head'i bağımsız incelenip birleştikten sonra kullanıcıdan tek tıkla istenir.
