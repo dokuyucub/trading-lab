@@ -975,6 +975,15 @@ def _read_once(root: Path, relative: PurePosixPath) -> bytes:
     return b"".join(chunks)
 
 
+def read_once(root: Path, relative: str) -> bytes:
+    """`root` altindaki duz bir dosyayi TEK kez, link reddiyle okur.
+
+    Veri kumesi dogrulamasiyla ayni guvenceler: yolun hicbir bileseni
+    symlink olamaz, dosya hardlink olamaz, duz dosya olmali.
+    """
+    return _read_once(Path(root), _safe_relative(relative))
+
+
 def _baseline_tree(dataset_dir: Path) -> set[PurePosixPath]:
     """baseline/ agacindaki duz dosyalar; symlink ve ozel dosya reddedilir."""
     baseline_root = dataset_dir / BASELINE_DIR

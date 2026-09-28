@@ -105,6 +105,16 @@ config, senaryo, kanıt ve uyarılar. Sızıntı testleri başarı ve hata
 yollarında stdout, stderr ve logging'i yakalar. Ham bar, manifest ve veri
 dizini yüklenmez.
 
+**Log (PR b ile eklendi):**
+
+- Her iki adım boyunca `logging` tamamen kapatılır ve çıkışta eski
+  haline döner. Motor her işlemi fiyat ve P&L ile INFO düzeyinde loglar.
+  urllib3 yeniden denemeleri istek adresini WARNING düzeyinde loglar.
+  Varsayılan log düzeyine güvenmek yapısal bir güvence değildir.
+- Log'a yalnızca aracın kendi sabit satırları gider: sayımlar, hash
+  önekleri ve hata kategorileri. **Performans sayısı log'a basılmaz**;
+  sonuç yalnızca rapor artefaktındadır.
+
 ## Holdout taahhüdü (rapor şeması v2)
 
 Manifest dışarı çıkmadığı için holdout'un içerik hash'leri koşu bitince
