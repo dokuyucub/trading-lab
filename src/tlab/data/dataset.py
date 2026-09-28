@@ -381,7 +381,16 @@ def split_sessions(
     gunlerin rejimini paylasir ve "gorulmemis" sayilamaz.
     """
     ordered = sorted(complete, key=lambda item: item.day)
-    count = len(ordered)
+    kept, _ = split_sizes(len(ordered), holdout_fraction)
+    return ordered[:kept], ordered[kept:]
+
+
+def split_sizes(count: int, holdout_fraction: float) -> tuple[int, int]:
+    """(baseline, holdout) seans sayilari - bolmenin TEK kurali.
+
+    Veri kumesi uretimi ve holdout taahhudu ayni kurali kullanir; biri
+    degisip digeri eski kalamaz.
+    """
     held = math.ceil(count * holdout_fraction)
     kept = count - held
     if kept < 1 or held < 1:
@@ -390,7 +399,7 @@ def split_sessions(
             "tarih araligini genislet"
         )
         raise DataError(msg)
-    return ordered[:kept], ordered[kept:]
+    return kept, held
 
 
 # ---------------------------------------------------------------------------
@@ -680,18 +689,18 @@ def holdout_commitment(manifest: Mapping[str, Any]) -> dict[str, str]:
         raise _commitment_error("spec veya spec_sha256 eksik")
     if hashlib.sha256(canonical_json(spec)).hexdigest() != spec_sha:
         raise _commitment_error("spec_sha256 spec ile uyusmuyor")
+    try:
+        declared = DatasetSpec.model_validate(spec)
+    except ValueError:
+        raise _commitment_error("manifestteki spec gecersiz") from None
     dataset_id = manifest.get("dataset_id")
-    if not isinstance(dataset_id, str) or dataset_id != spec.get("dataset_id"):
+    if dataset_id != declared.dataset_id:
         raise _commitment_error("dataset_id spec ile uyusmuyor")
-
+    # Dosyalar ONAYLI sembol evrenine ait olmali: spec baska, manifest
+    # baska sembol soylerse taahhut neye bagli oldugunu bilemez.
     symbols = manifest.get("symbols")
-    if (
-        not isinstance(symbols, list)
-        or not symbols
-        or not all(isinstance(item, str) and item for item in symbols)
-        or len(set(symbols)) != len(symbols)
-    ):
-        raise _commitment_error("sembol listesi gecersiz veya tekrarli")
+    if symbols != list(declared.symbols):
+        raise _commitment_error("manifest sembolleri spec ile uyusmuyor")
 
     split = manifest.get("split")
     sessions = manifest.get("sessions")
@@ -700,12 +709,16 @@ def holdout_commitment(manifest: Mapping[str, Any]) -> dict[str, str]:
     holdout_days = _day_list(split.get("holdout"), "holdout")
     baseline_days = _day_list(split.get("baseline"), "baseline")
     complete_days = _day_list(sessions.get("complete"), "tamamlanmis")
-    if not holdout_days:
-        raise _commitment_error("holdout seansi yok")
-    if set(holdout_days) & set(baseline_days):
-        raise _commitment_error("holdout ve baseline ayni gunu iceriyor")
-    if not set(holdout_days) <= set(complete_days):
-        raise _commitment_error("holdout tamamlanmamis bir seans iceriyor")
+    if any(not declared.start <= date.fromisoformat(day) <= declared.end for day in complete_days):
+        raise _commitment_error("tamamlanmis seans spec araliginin disinda")
+    # Bolme, spec'in kuralindan YENIDEN hesaplanir: ayriklik ve alt kume
+    # yetmez - ilk baseline gunu holdout'a tasinsa ikisi de gecerdi.
+    try:
+        kept, _ = split_sizes(len(complete_days), declared.holdout_fraction)
+    except DataError:
+        raise _commitment_error("tamamlanmis seanslar bolunemiyor") from None
+    if baseline_days != complete_days[:kept] or holdout_days != complete_days[kept:]:
+        raise _commitment_error("bolme, spec'e gore kronolojik son kisim degil")
 
     files = manifest.get("files")
     if not isinstance(files, list):
@@ -732,7 +745,7 @@ def holdout_commitment(manifest: Mapping[str, Any]) -> dict[str, str]:
         symbol = entry.get("symbol")
         bars = entry.get("bars")
         digest = entry.get("content_sha256")
-        if not isinstance(symbol, str) or symbol not in symbols:
+        if not isinstance(symbol, str) or symbol not in declared.symbols:
             raise _commitment_error(f"manifestte olmayan sembol: {symbol!r}")
         if symbol in seen_symbols:
             raise _commitment_error(f"tekrarli holdout sembolu: {symbol}")
@@ -750,8 +763,8 @@ def holdout_commitment(manifest: Mapping[str, Any]) -> dict[str, str]:
                 "content_sha256": digest,
             }
         )
-    if seen_symbols != set(symbols):
-        missing = sorted(set(symbols) - seen_symbols)
+    if seen_symbols != set(declared.symbols):
+        missing = sorted(set(declared.symbols) - seen_symbols)
         raise _commitment_error(f"holdout girdisi eksik: {missing}")
 
     payload = {

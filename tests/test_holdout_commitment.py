@@ -14,6 +14,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import shutil
 from collections.abc import Callable
 from datetime import date
@@ -55,6 +56,18 @@ def digest(manifest: Manifest) -> str:
 
 def holdout_entries(manifest: Manifest) -> list[dict[str, Any]]:
     return [item for item in manifest["files"] if item["split"] == "holdout"]
+
+
+def resplit(manifest: Manifest) -> None:
+    """Bolmeyi tamamlanmis seanslardan, spec'in oranina gore yeniden kurar.
+
+    Beklenen boyut burada BAGIMSIZ hesaplaniyor (yukari yuvarlama);
+    test, dogruladigi fonksiyonu kullanarak beklenti kurmuyor.
+    """
+    complete = sorted(manifest["sessions"]["complete"])
+    held = math.ceil(len(complete) * manifest["spec"]["holdout_fraction"])
+    manifest["split"]["baseline"] = complete[: len(complete) - held]
+    manifest["split"]["holdout"] = complete[len(complete) - held :]
 
 
 def respec(manifest: Manifest, **changes: Any) -> None:
@@ -123,19 +136,20 @@ def _dataset_id(manifest: Manifest) -> None:
 
 
 def _holdout_day(manifest: Manifest) -> None:
-    """Bir holdout gunu, tamamlanmis baska bir gunle degistirilir."""
-    new_day = "2026-03-31"
-    manifest["sessions"]["complete"].append(new_day)
-    manifest["split"]["holdout"][-1] = new_day
+    """Son seans tamamlanmamis sayilir: holdout gunleri tutarli bicimde kayar."""
+    manifest["sessions"]["complete"].pop()
+    resplit(manifest)
 
 
 def _split(manifest: Manifest) -> None:
-    """Bolme siniri kayar: son baseline gunu holdout'a gecer."""
-    moved = manifest["split"]["baseline"].pop()
-    manifest["split"]["holdout"].insert(0, moved)
+    """Spec'in holdout orani degisir; bolme o orana gore yeniden kurulur."""
+    respec(manifest, holdout_fraction=0.3)
+    resplit(manifest)
 
 
 def _symbol(manifest: Manifest) -> None:
+    """Spec, spec hash'i, manifest ve dosya girdileri BIRLIKTE degisir."""
+    respec(manifest, symbols=["SPY", "IWM"])
     manifest["symbols"] = ["SPY", "IWM"]
     for item in manifest["files"]:
         if item["symbol"] == "QQQ":
@@ -245,6 +259,48 @@ def _dataset_id_mismatch(manifest: Manifest) -> None:
     manifest["dataset_id"] = "other-set"
 
 
+def _manifest_symbols_differ_from_spec(manifest: Manifest) -> None:
+    """Codex karsi ornegi 1: spec SPY/QQQ, manifest ve girdiler SPY/IWM."""
+    manifest["symbols"] = ["SPY", "IWM"]
+    for item in manifest["files"]:
+        if item["symbol"] == "QQQ":
+            item["symbol"] = "IWM"
+
+
+def _first_baseline_day_to_holdout(manifest: Manifest) -> None:
+    """Codex karsi ornegi 2: ayrik ve alt kume, ama kronolojik son %20 degil."""
+    manifest["split"]["holdout"].insert(0, manifest["split"]["baseline"].pop(0))
+
+
+def _last_baseline_day_to_holdout(manifest: Manifest) -> None:
+    """Kronolojik ama yanlis boyut: oran %20 iken holdout buyur."""
+    manifest["split"]["holdout"].insert(0, manifest["split"]["baseline"].pop())
+
+
+def _skipped_baseline_day(manifest: Manifest) -> None:
+    manifest["split"]["baseline"].pop(0)
+
+
+def _extra_baseline_day(manifest: Manifest) -> None:
+    """Tamamlanmis olmayan (hafta sonu) bir gun baseline'a eklenir."""
+    manifest["split"]["baseline"].insert(0, "2026-03-01")
+
+
+def _complete_outside_spec_range(manifest: Manifest) -> None:
+    manifest["sessions"]["complete"].append("2026-03-31")
+    resplit(manifest)
+
+
+def _unsplittable(manifest: Manifest) -> None:
+    manifest["sessions"]["complete"] = manifest["sessions"]["complete"][:1]
+    manifest["split"]["baseline"] = []
+    manifest["split"]["holdout"] = manifest["sessions"]["complete"][:]
+
+
+def _invalid_spec(manifest: Manifest) -> None:
+    respec(manifest, holdout_fraction=1.5)
+
+
 def _duplicate_symbols(manifest: Manifest) -> None:
     manifest["symbols"] = ["SPY", "SPY"]
 
@@ -277,6 +333,14 @@ def _schema(manifest: Manifest) -> None:
         _stale_spec_hash,
         _dataset_id_mismatch,
         _duplicate_symbols,
+        _manifest_symbols_differ_from_spec,
+        _first_baseline_day_to_holdout,
+        _last_baseline_day_to_holdout,
+        _skipped_baseline_day,
+        _extra_baseline_day,
+        _complete_outside_spec_range,
+        _unsplittable,
+        _invalid_spec,
         _schema,
     ],
     ids=lambda item: item.__name__.strip("_"),
