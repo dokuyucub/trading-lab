@@ -22,7 +22,7 @@ Pilot workflow'u değişmez; ana ölçüme, ona P&L eklenerek geçilmez.
 | (a) | Holdout taahhüdü + rapor şeması v2 + testler; bu belge | Kod PR'ı, bağımsız inceleme |
 | (b) | Ayrı giriş modülü, workflow, sözleşme ve sızıntı testleri, süre ölçümü | Kod PR'ı, bağımsız inceleme |
 | (c) | Sentetik veriyle uçtan uca kanıt | Bağımsız inceleme |
-| (d) | Ana tanımı `approved` yapan ayrı commit | Ayrı Codex kararı |
+| (d) | Ana tanımı `approved` yapan ayrı commit; karar kaydı AGENTS §11.1 | Ayrı Codex kararı |
 | (e) | Kullanıcıdan tek tık, tek gerçek koşu | (d)'den sonra |
 
 ## Sabitler (workflow girdi almaz)

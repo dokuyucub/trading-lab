@@ -12,7 +12,7 @@ yapacagini yerelde taklit eder:
     basariliysa.
 
 Kok, gecici bir dizin: sabit dosya adiyla SENTETIK `approved` bir ana
-tanim tasir. Depodaki ana tanim `draft` kalir.
+tanim tasir. Depodaki ana tanim bu testte KULLANILMAZ.
 
 Yonlendirme URETIM KODUNA dokunmadan yapilir: test dizinindeki bir
 `sitecustomize`, SDK sarmalayicilarinin `base_url` varsayilanini yerel

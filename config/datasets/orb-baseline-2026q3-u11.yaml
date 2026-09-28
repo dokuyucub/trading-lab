@@ -18,10 +18,12 @@
 # araligini bu sembolde guvenilir kuramayacagi anlamina gelir.
 # Diger butun alanlar onceki tanimla ayni (test denetler).
 dataset_id: orb-baseline-2026q3-u11
-# draft: indirilemez, olculemez - kod uygular. Pilotun kalite olcumunden
-# sonra esikler gerekceli olarak sabitlenir ve AYRI bir commit ile
-# approved yapilir (Codex, #19).
-status: draft
+# approved (#17, karar kaydi AGENTS §11): iki kalite pilotundan, JPM'nin
+# veri kalitesi gerekcesiyle cikarilmasindan ve #32/#33 incelemelerinden
+# sonra AYRI bir commit ile. Onay YALNIZCA bu sabit tanimin indirilip
+# baseline bolumunun bir kez olculmesine yoneliktir; islem, emir, canli
+# dagitim, holdout'un acilmasi ya da parametre terfisi DEGILDIR.
+status: approved
 symbols: [SPY, QQQ, IWM, AAPL, MSFT, NVDA, AMD, AMZN, GOOGL, META, TSLA]
 timeframe: 1Min
 feed: iex
@@ -37,9 +39,9 @@ retention_days: 90
 # esikler bir seansin OLCULEBILIR olup olmadigini soyler. Uygun olmayan
 # seans varsa olcum P&L uretmeden durur.
 #
-# Asagidaki degerler ONERI; tanim 'draft' oldugu surece hicbir veriye
-# uygulanamaz. Pilotun kalite olcumunden sonra Codex ile kesinlesir.
-# Indirmeden sonra degistirmek yeni dataset_id demektir.
+# Asagidaki degerler onayla KESINLESTI; iki pilotta bu degerlerle olculdu
+# ve gevsetilmedi. Indirmeden sonra degistirmek yeni dataset_id demektir;
+# ayni donemi gecsin diye degistirmek yasak (AGENTS §3, §11).
 #   open_window_minutes >= ORB acilis araligi (15 dk)  - olcum denetler
 #   close_window_minutes <= gun sonu tamponu (10 dk)  - olcum denetler
 #
