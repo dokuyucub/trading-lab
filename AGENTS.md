@@ -492,6 +492,57 @@ bir ek pilot (`2026-05-11..2026-06-05`, yeni `dataset_id`) **bir kez**
 çalışmasıdır; bağımsız performans kanıtı sayılmaz. Uygun sonuç çıkana
 kadar pencere değiştirilmez.
 
+### Doğrulanan — 2026-09-28: ek kalite pilotu ve JPM kararı
+
+| Ne | Kanıt | Kapsam |
+|---|---|---|
+| Ek pilot kalite ölçümü | Koşu `36372943220`, iş `108772841799`, main `e99a9bc` | `pilot-2026-05-u12`: 12 sembol × 19 seans (`2026-05-11..2026-06-05`), IEX 1Min, ilk pilotla aynı politika. P&L ve emir yok. |
+| Özet artefaktı içeriği | Artefakt `10949717868`, 921 bayt, ZIP SHA256 `b6c543cdd305399bd4ffef7e373384af3368644607b3650dafa16b9c65340ac3`; tek dosya `pilot-summary.json` | Codex indirip açtı (#17): alan listeleri, semboller, politika ve üretici commit'i kod/spec ile eşleşti. Gün bazlı tarih özette yok. |
+
+Koşunun sonucu, olduğu gibi (#17):
+
+```
+seans: takvim 19, tamamlanmis 19, uygun 13, uygunsuz 6
+11 sembol: 19/19 seans uygun (toplam eksik 0.00%-1.35%, AMD 4.66%)
+JPM: acilis eksikli seans 4, toplam eksik 5.64%, uygunsuz 6
+sonuc: some_ineligible
+```
+
+JPM'nin 6 uygunsuz seansının gerekçeleri (artefakttan): `acilis_penceresi_eksik`
+4, `eksik_dakika_orani` 3; bir seans iki gerekçeli (4 + 3 = 7, birleşim 6).
+
+İki pilot birlikte, JPM için **iki ayrı sayı**:
+
+| | İlk pilot (5) | Ek pilot (19) | Toplam (24) |
+|---|---|---|---|
+| JPM, herhangi bir kalite uygunsuzluğu | 2 | 6 | **8** |
+| JPM, açılış penceresi eksik | 2 | 4 | **6** |
+| Diğer 11 sembolün her biri, uygunsuz | 0 | 0 | **0** |
+
+**Bu koşunun söylediği ve söylemediği:**
+
+- Söylediği: ek pilot da yalnızca özeti yükledi, temizlik adımı başarılı;
+  log'da fiyat, hesap değeri veya yanıt gövdesi görülmedi, secret'lar
+  maskeli. Yine **tek bir başarı koşusudur**.
+- Söylemediği:
+  - Diğer 11 sembolde 0/24, **betimsel bir gözlemdir**. Ana dönem için
+    güvence, olasılık tahmini veya güven aralığı değildir: semboller ve
+    günler ortak koşullara bağlı, bağımsız denemeler değil; ek pencere de
+    ilk sonuç görüldükten sonra seçildi. Ana dönemde uygunsuz seans çıkarsa
+    katı politika ölçümü P&L'den önce durdurur.
+  - JPM'nin veya IEX'in genel kalitesi hakkında bir hüküm değildir.
+  - İlk pilotun kapanış barı notu (yukarıda) aynen geçerlidir.
+
+**Karar (Codex, #17; #30 ile uygulandı):** JPM, IEX tabanlı ORB ölçüm ve
+işlem evreninden çıkarıldı. Gerekçe yalnızca iki pilotta tekrarlanan veri
+kalitesi uygunsuzluğu; P&L hesaplanmadan ve ana indirme yapılmadan verildi.
+Ana tanım `orb-baseline-2026q3` → `orb-baseline-2026q3-u11`: yalnızca
+`dataset_id` ve semboller değişti, diğer alanlar ve kalite eşikleri aynı,
+durum `draft`. `config/universe.yaml` 11 sembol. İki pilot tanımı 12
+sembolle ölçüldükleri için değişmez (testle sabit). Pilotlar tamamlandı;
+yeni pencere veya tekrar koşu yok. `approved` ve ana ölçüm ayrı tasarım ve
+inceleme gerektirir.
+
 ### Hâlâ doğrulanmayan
 
 - **Emir yaşam döngüsü.** Hiç emir gönderilmedi. Dolum, kayma, kısmi dolum,
@@ -602,8 +653,8 @@ Karar ve kaynak sınırı: `docs/designs/alpaca-pilot-execution.md`.
 SDK bağlantısı §7'de doğrulanmıştır; emir yaşam döngüsü ve kârlılık değildir.
 İlk gerçek veri pilotunun geliştirilmesi kalıcı ham veri taşımasına bağlı değildir:
 
-- Ayrı, incelenen workflow: manuel, yalnız main, sabit `pilot-2026-06-u12`
-  tanımı, tek job içinde indirme ve kalite ölçümü. P&L ve emir yok.
+- Ayrı, incelenen workflow: manuel, yalnız main, koddan sabit pilot tanımı
+  (girdi almaz), tek job içinde indirme ve kalite ölçümü. P&L ve emir yok.
 - Ham barlar, manifest ve veri dizini artifact/cache/log'a yüklenmez. Yalnız
   açık alan listesiyle üretilmiş toplulaştırılmış kalite özeti, kod/spec hash'i
   yayımlanır. Broker secret'ları yalnız indirme adımında bulunur.
@@ -614,5 +665,13 @@ SDK bağlantısı §7'de doğrulanmıştır; emir yaşam döngüsü ve kârlıl�
   alındığı iddiası değildir. Hesaba/veri feed'ine özgü ek şartlar geçerlidir.
   Gerçek ham verinin kalıcı dış artefaktı ayrı değerlendirilir; sentetik
   taşıma ve pilot kodunun ilerlemesi ona bağlanmaz.
-- Claude pilot workflow'unu geliştirir, Codex bağımsız inceler. Bu kayıt
-  workflow'u uygulanmış veya gerçek pilotu çalışmış hale getirmez.
+- Claude pilot workflow'unu geliştirir, Codex bağımsız inceler.
+- **Durum (2026-09-28):** iki pilot tamamlandı ve kaydı §7'de:
+  `pilot-2026-06-u12` (5 seans, koşu `36369564690`) ve ek
+  `pilot-2026-05-u12` (19 seans, koşu `36372943220`; workflow'un sabit
+  tanımı #29'dan beri bu). İki tanım da 12 sembolle ölçüldükleri için
+  değişmez. Yeni pilot penceresi veya tekrar koşu planlanmıyor. Ana tanım
+  artık `orb-baseline-2026q3-u11` (11 sembol, JPM veri kalitesi
+  gerekçesiyle çıkarıldı, `draft`). Pilotların güvenli akışı, ana ölçüm
+  için kalıcı ham veri dış aktarımına izin sayılmaz; ana ölçüme bu
+  workflow'a P&L eklenerek geçilmez.
