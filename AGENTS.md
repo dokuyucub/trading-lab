@@ -707,20 +707,37 @@ bölümünün **bir kez** ölçülmesi. Onay şunları **kapsamaz:**
 durur. Aynı dönemi geçsin diye eşik, parametre, pencere ya da tanım
 değiştirilip **yeniden denenmez**; sonuç #17'de tartışılır.
 
-**Altyapı hatasında yeniden koşu (öneri, Codex kararı bekleniyor):** koşu
-veriden bağımsız bir nedenle yarım kalırsa, hiçbir tanım, config ya da kod
-değişmeden **tek** bir yeniden koşu yapılabilir. Yalnızca şu durumlar
-veriden bağımsız sayılır:
+**Yeniden koşu (Codex kararı, #17, 2026-09-28):** otomatik yeniden deneme
+mekanizması yoktur. Bu bir operasyon sınırıdır.
 
-- adım A başlamadan düşen bir adım (checkout, kurulum);
-- runner kaybı ya da iş zaman aşımı;
-- `FAIL indirme: sunucu hatasi (5xx)`;
-- `FAIL indirme: hiz siniri (429)`;
-- `FAIL indirme: ag, TLS veya zaman asimi hatasi`.
+- **Kayıt önce gelir.** İlk koşunun run/job kimliği, code commit'i ve
+  başarısız adımı #17'ye yazılır. Adım kanıtıyla şu iki şey doğrulanır:
+  B hiç başlamadı ve geçerli bir performans raporu üretilmedi.
+- **Tek istisna:** aynı code commit, tanım, config ve workflow ile **en
+  fazla bir** yeniden koşu. Yalnızca şu iki durumda geçerlidir:
+  - A'dan önce checkout ya da kurulumda açıkça geçici bir altyapı hatası;
+  - A'da sınıflandırılmış `FAIL indirme: sunucu hatasi (5xx)`,
+    `FAIL indirme: hiz siniri (429)` ya da
+    `FAIL indirme: ag, TLS veya zaman asimi hatasi`.
+- **Kısıtlar:**
+  - 429'da oran sınırı geçmeden yeniden tetikleme yapılmaz.
+  - `main` ilerlediyse "aynı commit" varsayımı kurulamaz; yeni bir head
+    otomatik olarak kapsam dışıdır.
+- **Runner kaybı ya da iş zaman aşımı otomatik istisna değildir.** Önce
+  #17'de ayrı karar gerekir. Aynı şey şu durumlar için de geçerlidir:
+  - hangi aşamada düştüğü kanıtlanamıyor;
+  - B başlamış;
+  - geçerli bir rapor oluşmuş;
+  - yalnızca temizlik ya da upload başarısız olmuş.
 
-Bu listede olmayan her hata tartışılmadan yeniden koşulmaz; #17'de
-değerlendirilir. `FAIL beklenmeyen hata`, yetki reddi, onay, bütünlük,
-kalite, politika ve seans sınırı hataları da buna dahildir.
+  Yayımlanmamış bir rapor, "başarıyla ölçülmemiş" sayılmaz.
+- **Dur.** Şu hatalarda yeniden koşu yoktur; yeni bir koşu ayrı inceleme
+  gerektirir:
+  - onay, bütünlük, kalite, politika ya da seans sınırı hatası;
+  - yetki reddi ya da beklenmeyen hata;
+  - tek altyapı tekrarının da başarısız olması.
+
+  Geçsin diye veri, tanım ya da strateji değişikliği yapılmaz.
 
 **Sınır:** yerel sentetik kanıt hosted Actions'ı, secret enjeksiyonunu ve
 artifact yükleme hizmetini doğrulamaz. Gerçek koşunun kaydı (run/job,
