@@ -762,7 +762,10 @@ def test_dataset_cli_end_to_end_through_the_real_sdk(
     )
     assert code == 0
     assert "ACILMADI" in capsys.readouterr().out
-    assert json.loads(report.read_bytes())["holdout"] == {"sessions": 1, "opened": False}
+    holdout = json.loads(report.read_bytes())["holdout"]
+    assert holdout["sessions"] == 1
+    assert holdout["opened"] is False
+    assert holdout["commitment"]["version"] == "tlab/holdout-commitment/v1"
 
 
 def test_sparse_data_stops_the_baseline_before_any_report(
