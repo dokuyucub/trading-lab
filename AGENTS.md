@@ -455,6 +455,43 @@ bastığı dört satırda bakiye, hesap kimliği veya yanıt gövdesi yok. Bu
 için genel bir güvence değildir. Hata yollarındaki sızdırmama güvencesi
 yerel sözleşme testlerinden (`tests/test_sdk_probe.py`) gelir.
 
+### Doğrulanan — 2026-09-28: ilk gerçek veri kalite pilotu
+
+| Ne | Kanıt | Kapsam |
+|---|---|---|
+| Pilot kalite ölçümü uçtan uca çalışıyor | Koşu `36369564690`, iş `108762810599`, main `e7265fa` | `pilot-2026-06-u12`: 12 sembol × 5 seans, IEX 1Min. P&L ve emir yok. |
+
+Koşunun sonucu, olduğu gibi (#17):
+
+```
+seans: takvim 5, tamamlanmis 5, uygun 3, uygunsuz 2
+11 sembol: 5/5 seans uygun (toplam eksik 0.00%-0.82%, AMD 4.21%)
+JPM: acilis eksikli seans 2, toplam eksik 5.69%, uygunsuz 2
+sonuc: some_ineligible
+```
+
+**Bu koşunun söylediği ve söylemediği:**
+
+- Söylediği: pilot aracı gerçek ortamda indirdi, ölçtü, yalnızca özeti
+  yükledi; temizlik adımı başarılı. Bu koşunun log'unda fiyat, hesap değeri
+  veya yanıt gövdesi görülmedi; secret'lar maskeli. **Tek bir başarı
+  koşusudur**; hata yollarının güvencesi yerel sözleşme testlerinden gelir.
+- Söylemediği:
+  - 5 seanslık örnek, ana dönem (~63 seans) için güvenilir bir olasılık
+    tahmini **değildir**. Gözlenen uygunsuzluk bir risk işaretidir.
+  - Kapanış penceresinde bar bulunması gün sonu kapatmasının **dolacağını
+    kanıtlamaz**: tetiklemeden sonra gerçek bir bar gerekir; seans sınırı
+    değişmezi (§3.11) bu yüzden duruyor.
+  - IEX'in bu sembollerde genel kalitesi hakkında bir hüküm değildir.
+
+**Sonraki adım (Codex kararı, #17):** eşik gevşetilmez, JPM şimdilik
+evrenden çıkarılmaz, ana tanım `draft` kalır. Aynı 12 sembol ve aynı
+IEX/kalite politikasıyla, ana dönem ve ilk pilotla örtüşmeyen daha geniş
+bir ek pilot (`2026-05-11..2026-06-05`, yeni `dataset_id`) **bir kez**
+ölçülür. Bu pencere ilk sonuç görüldükten sonra seçildiği için keşif/kalite
+çalışmasıdır; bağımsız performans kanıtı sayılmaz. Uygun sonuç çıkana
+kadar pencere değiştirilmez.
+
 ### Hâlâ doğrulanmayan
 
 - **Emir yaşam döngüsü.** Hiç emir gönderilmedi. Dolum, kayma, kısmi dolum,
