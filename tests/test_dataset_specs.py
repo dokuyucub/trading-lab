@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from datetime import UTC, date, datetime
 from itertools import combinations
 from pathlib import Path
 
 import pytest
 
+from test_dataset import FakeBars, FakeCalendar, minute_bars, session, weekdays
 from tlab.config import load_config
-from tlab.data.dataset import DatasetSpec
+from tlab.data.dataset import DatasetSpec, build_dataset, manifest_sha256, verify_baseline
+from tlab.strategies.orb import ORBParams
 
 SPEC_DIR = Path(__file__).resolve().parents[1] / "config" / "datasets"
 SPECS = sorted(SPEC_DIR.glob("*.yaml"))
@@ -58,9 +61,10 @@ PREVIOUS_MAIN = {
     },
 }
 """Kaldirilan `orb-baseline-2026q3` tanimin kimlik ve semboller disindaki
-alanlari (e99a9bc). Yeni kimlik YALNIZCA sembol kumesini degistirir;
-tarih, feed, bolme veya kalite esigi bu vesileyle sessizce kaymasin.
-`status` onay commit'inde bilincli olarak guncellenir."""
+alanlari (e99a9bc). TARIHSEL kayit: `status` o gunku `draft` degeridir.
+Yeni kimlik YALNIZCA sembol kumesini, onay commit'i YALNIZCA `status`'u
+degistirdi; tarih, feed, bolme veya kalite esigi bu vesileyle sessizce
+kaymasin."""
 
 
 def test_there_are_dataset_specs() -> None:
@@ -131,9 +135,11 @@ def test_the_main_dataset_drops_only_the_documented_symbols() -> None:
 
 
 def test_the_new_main_id_changes_nothing_but_the_symbols() -> None:
-    """Kimlik degisimi yalnizca sembol kumesini degistirdi (#17)."""
+    """Kimlik degisimi yalnizca sembol kumesini, onay yalnizca durumu
+    degistirdi (#17). Tarih, feed, bolme ve kalite esikleri sabit."""
     main = DatasetSpec.from_yaml(MAIN_SPEC)
-    assert main.model_dump(mode="json", exclude={"dataset_id", "symbols"}) == PREVIOUS_MAIN
+    unchanged = {key: value for key, value in PREVIOUS_MAIN.items() if key != "status"}
+    assert main.model_dump(mode="json", exclude={"dataset_id", "symbols", "status"}) == unchanged
 
 
 @pytest.mark.parametrize("path", SPECS, ids=lambda item: item.stem)
@@ -143,14 +149,50 @@ def test_every_spec_states_its_quality_policy_explicitly(path: Path) -> None:
     assert "\nquality:\n" in raw
 
 
-def test_the_main_dataset_stays_a_draft_until_approved_in_its_own_commit() -> None:
-    """Esikler pilottan sonra kesinlesir; o zamana kadar ana tanim indirilemez.
+def test_the_main_dataset_is_approved_only_by_its_own_decision() -> None:
+    """Ana tanim AYRI ve incelenen bir commit ile approved oldu (#17).
 
-    Bu test onay commit'inde BILINCLI olarak guncellenir: approved'a
-    gecis sessizce degil, gerekceli ve incelenen bir degisiklikle olur.
+    Bu test o commit'te BILINCLI olarak guncellendi (onceki hali: draft).
+    Pilotlar pilot kalir: P&L uretemezler.
     """
     main = DatasetSpec.from_yaml(MAIN_SPEC)
-    assert main.status == "draft"
+    assert main.status == "approved"
+    for path in PILOT_SPECS:
+        assert DatasetSpec.from_yaml(path).status == "pilot"
+
+
+def test_the_approved_spec_passes_the_policy_gate_with_the_repo_config(tmp_path: Path) -> None:
+    """On ucus: gercek ana tanimin politikasi ve depodaki gercek ayarlar,
+    olcumun P&L'den onceki politika kapisindan geciyor.
+
+    Onaydan sonra biri config'i (orn. gun sonu tamponunu) degistirirse
+    gercek kosu "politika tutarsiz" diye durur; bu test onu ONCEDEN
+    yakalar. Veri sentetik ve kisa; tanimin tarihleri degil POLITIKASI
+    ve sembolleri kullaniliyor.
+    """
+    main = DatasetSpec.from_yaml(MAIN_SPEC)
+    days = weekdays(date(2026, 3, 2), 10)
+    sessions = [session(day) for day in days]
+    bars = {
+        symbol: [bar for item in sessions for bar in minute_bars(symbol, item)]
+        for symbol in main.symbols
+    }
+    out = tmp_path / "ds"
+    build_dataset(
+        main.model_copy(update={"start": days[0], "end": days[-1]}),
+        bars_source=FakeBars(bars),
+        calendar_source=FakeCalendar(sessions),
+        out_dir=out,
+        downloaded_at=datetime(2026, 4, 1, 12, 0, tzinfo=UTC),
+        producer={"run_id": "test", "commit": "0" * 40},
+    )
+    verified = verify_baseline(out, manifest_sha256(out))
+    config = load_config(Path(__file__).resolve().parents[1])
+    measurable = verified.measurable_sessions(
+        opening_range_minutes=ORBParams().opening_range_minutes,
+        flatten_before_close_minutes=config.session.flatten_before_close_minutes,
+    )
+    assert len(measurable) == len(verified.sessions)
 
 
 def test_the_extra_pilot_changes_only_the_window() -> None:
