@@ -36,6 +36,7 @@ from tlab.data.dataset import (
     QualityPolicy,
     VerifiedBaseline,
     build_dataset,
+    holdout_commitment,
     manifest_sha256,
     verify_baseline,
 )
@@ -179,9 +180,14 @@ def test_the_report_does_not_reveal_holdout_dates(
     hatirlamaya davetiyedir.
     """
     report = run_baseline(verified, config, code_commit="c0ffee")
-    holdout_days = json.loads((dataset / "manifest.json").read_bytes())["split"]["holdout"]
+    manifest = json.loads((dataset / "manifest.json").read_bytes())
+    holdout_days = manifest["split"]["holdout"]
     text = report_bytes(report).decode()
-    assert report["holdout"] == {"sessions": len(holdout_days), "opened": False}
+    assert report["holdout"] == {
+        "sessions": len(holdout_days),
+        "opened": False,
+        "commitment": holdout_commitment(manifest),
+    }
     for day in holdout_days:
         assert day not in text, f"rapor holdout gununu iceriyor: {day}"
 

@@ -33,12 +33,13 @@ from tlab.config import Config
 from tlab.core.calendar import TradingSession
 from tlab.core.types import Timeframe
 from tlab.data.cached import CachedMarketData
-from tlab.data.dataset import VerifiedBaseline, canonical_json
+from tlab.data.dataset import VerifiedBaseline, canonical_json, holdout_commitment
 from tlab.journal.db import apply_migrations
 from tlab.learning import assess
 from tlab.strategies.orb import OpeningRangeBreakout, ORBParams
 
-REPORT_SCHEMA_VERSION = 1
+REPORT_SCHEMA_VERSION = 2
+"""v2: `holdout.commitment` ve `starting_equity_basis` eklendi (#17)."""
 
 
 @dataclass(frozen=True)
@@ -181,6 +182,9 @@ def run_baseline(
     timeframe = Timeframe(manifest["timeframe"])
 
     semantic = config.semantic_dump()
+    # Taahhut P&L'DEN ONCE ve yalnizca manifest belleginden: tutarsiz bir
+    # manifest olcumu tek bir islem hesaplanmadan durdurur.
+    commitment = holdout_commitment(manifest)
     # Onay ve kalite kapisi P&L'DEN ONCE: taslak/pilot tanim ya da uygun
     # olmayan veri tek bir islem hesaplanmadan olcumu durdurur.
     measurable = verified.measurable_sessions(
@@ -207,10 +211,16 @@ def run_baseline(
             "last": max(verified.days).isoformat(),
             "count": len(verified.days),
         },
-        # Holdout hakkinda YALNIZCA sayi. Tarihler bile yazilmiyor:
-        # hangi gunlerin ayrildigini bilmek, o gunlere dair bir sey
-        # hatirlamaya davetiyedir.
-        "holdout": {"sessions": len(manifest["split"]["holdout"]), "opened": False},
+        # Holdout hakkinda YALNIZCA sayi ve tek bir taahhut hash'i.
+        # Tarihler bile yazilmiyor: hangi gunlerin ayrildigini bilmek, o
+        # gunlere dair bir sey hatirlamaya davetiyedir. Taahhut, ileride
+        # acilan holdout'un BU kosunun ayirdigi veri olup olmadigini
+        # sinamaya yarar; tarih ve girdi listesi tasimaz.
+        "holdout": {
+            "sessions": len(manifest["split"]["holdout"]),
+            "opened": False,
+            "commitment": commitment,
+        },
         "quality": {"policy": verified.policy.model_dump(mode="json")},
         "code_commit": code_commit,
         # Hash tek basina ayarlari yeniden kurdurmaz; tam semantik
@@ -220,6 +230,8 @@ def run_baseline(
         "config_sha256": _config_sha256(semantic),
         "deterministic": True,
         "starting_equity": starting_equity,
+        # Baslangic ozsermayesi bir VARSAYIM: hesap ozsermayesi okunmaz.
+        "starting_equity_basis": "synthetic_assumption",
         "primary_scenario": PRIMARY_SCENARIO,
         "scenarios": results,
         "caveats": list(CAVEATS),

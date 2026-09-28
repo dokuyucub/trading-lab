@@ -381,7 +381,16 @@ def split_sessions(
     gunlerin rejimini paylasir ve "gorulmemis" sayilamaz.
     """
     ordered = sorted(complete, key=lambda item: item.day)
-    count = len(ordered)
+    kept, _ = split_sizes(len(ordered), holdout_fraction)
+    return ordered[:kept], ordered[kept:]
+
+
+def split_sizes(count: int, holdout_fraction: float) -> tuple[int, int]:
+    """(baseline, holdout) seans sayilari - bolmenin TEK kurali.
+
+    Veri kumesi uretimi ve holdout taahhudu ayni kurali kullanir; biri
+    degisip digeri eski kalamaz.
+    """
     held = math.ceil(count * holdout_fraction)
     kept = count - held
     if kept < 1 or held < 1:
@@ -390,7 +399,7 @@ def split_sessions(
             "tarih araligini genislet"
         )
         raise DataError(msg)
-    return ordered[:kept], ordered[kept:]
+    return kept, held
 
 
 # ---------------------------------------------------------------------------
@@ -617,6 +626,158 @@ def build_dataset(
     }
     (out_dir / MANIFEST_NAME).write_bytes(canonical_json(manifest))
     return manifest
+
+
+# ---------------------------------------------------------------------------
+# Holdout taahhudu - dosya ACMAZ, yalnizca dogrulanmis manifest bellegi
+# ---------------------------------------------------------------------------
+
+HOLDOUT_COMMITMENT_VERSION = "tlab/holdout-commitment/v1"
+_HEX_DIGITS = frozenset("0123456789abcdef")
+
+
+def _commitment_error(reason: str) -> DatasetIntegrityError:
+    return DatasetIntegrityError(f"holdout taahhudu uretilemedi: {reason}")
+
+
+def _is_digest(value: Any) -> bool:
+    return isinstance(value, str) and len(value) == 64 and set(value) <= _HEX_DIGITS
+
+
+def _day_list(value: Any, label: str) -> list[str]:
+    """Kanonik ISO gunler, tekrarsiz; sirali dondurur."""
+    if not isinstance(value, list):
+        raise _commitment_error(f"{label} bir liste degil")
+    days: list[str] = []
+    for text in value:
+        try:
+            canonical = isinstance(text, str) and date.fromisoformat(text).isoformat() == text
+        except ValueError:
+            canonical = False
+        if not canonical:
+            raise _commitment_error(f"{label} icinde gecersiz gun: {text!r}")
+        days.append(text)
+    if len(set(days)) != len(days):
+        raise _commitment_error(f"{label} icinde tekrarli gun")
+    return sorted(days)
+
+
+def holdout_commitment(manifest: Mapping[str, Any]) -> dict[str, str]:
+    """Holdout'un icerigine baglanan tek bir hash (rapor semasi v2, #17).
+
+    Manifest disari cikmadigi icin holdout dosyalarinin hash'leri kosu
+    bitince kaybolurdu; rapor bu taahhudu tasir, tarihleri ve girdileri
+    TASIMAZ. Yuk: surum etiketi, dataset_id, spec_sha256, sirali holdout
+    seanslari ve her holdout girdisinin (split, symbol, path, bars,
+    content_sha256) bilgisi. Dosya hash'i degil semantik `content_sha256`:
+    Parquet yazicisi degisince ayni icerik baska bayt uretebilir.
+
+    SAF fonksiyon: holdout dosyasi acilmaz, listelenmez. Tutarsiz bir
+    manifest reddedilir - yanlis bir taahhut, taahhut olmamasindan kotudur.
+
+    Sinirlar: saglayicinin dogru veri verdigini ya da ayni verinin ileride
+    yeniden temin edilebilecegini KANITLAMAZ. Holdout acilirken yeni
+    indirmenin beyanina guvenilmez; gercek barlardan hash'ler yeniden
+    hesaplanip BU taahhutle karsilastirilir, uyusmazlikta yeni taahhut
+    kabul edilmez (docs/designs/baseline-measurement-execution.md).
+    """
+    if manifest.get("schema_version") != MANIFEST_SCHEMA_VERSION:
+        raise _commitment_error("desteklenmeyen manifest surumu")
+    spec = manifest.get("spec")
+    spec_sha = manifest.get("spec_sha256")
+    if not isinstance(spec, dict) or not _is_digest(spec_sha):
+        raise _commitment_error("spec veya spec_sha256 eksik")
+    if hashlib.sha256(canonical_json(spec)).hexdigest() != spec_sha:
+        raise _commitment_error("spec_sha256 spec ile uyusmuyor")
+    try:
+        declared = DatasetSpec.model_validate(spec)
+    except ValueError:
+        raise _commitment_error("manifestteki spec gecersiz") from None
+    dataset_id = manifest.get("dataset_id")
+    if dataset_id != declared.dataset_id:
+        raise _commitment_error("dataset_id spec ile uyusmuyor")
+    # Dosyalar ONAYLI sembol evrenine ait olmali: spec baska, manifest
+    # baska sembol soylerse taahhut neye bagli oldugunu bilemez.
+    symbols = manifest.get("symbols")
+    if symbols != list(declared.symbols):
+        raise _commitment_error("manifest sembolleri spec ile uyusmuyor")
+
+    split = manifest.get("split")
+    sessions = manifest.get("sessions")
+    if not isinstance(split, dict) or not isinstance(sessions, dict):
+        raise _commitment_error("split veya sessions eksik")
+    holdout_days = _day_list(split.get("holdout"), "holdout")
+    baseline_days = _day_list(split.get("baseline"), "baseline")
+    complete_days = _day_list(sessions.get("complete"), "tamamlanmis")
+    if any(not declared.start <= date.fromisoformat(day) <= declared.end for day in complete_days):
+        raise _commitment_error("tamamlanmis seans spec araliginin disinda")
+    # Bolme, spec'in kuralindan YENIDEN hesaplanir: ayriklik ve alt kume
+    # yetmez - ilk baseline gunu holdout'a tasinsa ikisi de gecerdi.
+    try:
+        kept, _ = split_sizes(len(complete_days), declared.holdout_fraction)
+    except DataError:
+        raise _commitment_error("tamamlanmis seanslar bolunemiyor") from None
+    if baseline_days != complete_days[:kept] or holdout_days != complete_days[kept:]:
+        raise _commitment_error("bolme, spec'e gore kronolojik son kisim degil")
+
+    files = manifest.get("files")
+    if not isinstance(files, list):
+        raise _commitment_error("dosya listesi eksik")
+    entries: list[dict[str, Any]] = []
+    seen_paths: set[str] = set()
+    seen_symbols: set[str] = set()
+    for entry in files:
+        if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+            raise _commitment_error("gecersiz dosya girdisi")
+        path = entry["path"]
+        if path in seen_paths:
+            raise _commitment_error(f"tekrarli yol: {path}")
+        seen_paths.add(path)
+        try:
+            parts = _safe_relative(path).parts
+        except DatasetIntegrityError:
+            raise _commitment_error(f"guvensiz yol: {path!r}") from None
+        split_name = entry.get("split")
+        if split_name not in (BASELINE_DIR, HOLDOUT_DIR) or parts[0] != split_name:
+            raise _commitment_error(f"bolum ile yol uyusmuyor: {path}")
+        if split_name != HOLDOUT_DIR:
+            continue
+        symbol = entry.get("symbol")
+        bars = entry.get("bars")
+        digest = entry.get("content_sha256")
+        if not isinstance(symbol, str) or symbol not in declared.symbols:
+            raise _commitment_error(f"manifestte olmayan sembol: {symbol!r}")
+        if symbol in seen_symbols:
+            raise _commitment_error(f"tekrarli holdout sembolu: {symbol}")
+        seen_symbols.add(symbol)
+        if isinstance(bars, bool) or not isinstance(bars, int) or bars < 0:
+            raise _commitment_error(f"gecersiz bar sayisi: {path}")
+        if not _is_digest(digest):
+            raise _commitment_error(f"gecersiz content_sha256: {path}")
+        entries.append(
+            {
+                "split": split_name,
+                "symbol": symbol,
+                "path": path,
+                "bars": bars,
+                "content_sha256": digest,
+            }
+        )
+    if seen_symbols != set(declared.symbols):
+        missing = sorted(set(declared.symbols) - seen_symbols)
+        raise _commitment_error(f"holdout girdisi eksik: {missing}")
+
+    payload = {
+        "version": HOLDOUT_COMMITMENT_VERSION,
+        "dataset_id": dataset_id,
+        "spec_sha256": spec_sha,
+        "holdout_sessions": holdout_days,
+        "entries": sorted(entries, key=lambda item: (item["symbol"], item["path"])),
+    }
+    return {
+        "version": HOLDOUT_COMMITMENT_VERSION,
+        "sha256": hashlib.sha256(canonical_json(payload)).hexdigest(),
+    }
 
 
 # ---------------------------------------------------------------------------
