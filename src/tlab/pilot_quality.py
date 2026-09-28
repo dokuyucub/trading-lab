@@ -40,8 +40,11 @@ from tlab.sdk_probe import classify
 if TYPE_CHECKING:
     from tlab.data.dataset import DatasetSpec
 
-PILOT_SPEC = Path("config/datasets/pilot-2026-06-u12.yaml")
-"""SABIT. Workflow'dan serbest sembol, tarih ya da yol alinmaz (#25 sart 1)."""
+PILOT_SPEC = Path("config/datasets/pilot-2026-05-u12.yaml")
+"""SABIT. Workflow'dan serbest sembol, tarih ya da yol alinmaz (#25 sart 1).
+
+Ilk pilot `pilot-2026-06-u12` bir kez olculdu (kosu 36369564690); tanimi
+kayit olarak depoda kalir. Bu, ayni politikayla ek pilottur (#17)."""
 
 SUMMARY_SCHEMA = 1
 

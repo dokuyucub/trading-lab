@@ -1,0 +1,49 @@
+# EK PILOT - kesif/kalite calismasi (#17, Codex karari 2026-09-28).
+#
+# Ilk pilot (pilot-2026-06-u12, kosu 36369564690) 5 seansta JPM'de 2
+# acilis eksigi gosterdi. 5 seans guvenilir bir tahmin icin az; bu pencere
+# ayni 12 sembol, ayni IEX ve AYNI kalite politikasiyla daha genis bir
+# olcum icin.
+#
+# Bu pencere ilk sonuc GORULDUKTEN SONRA secildi: bagimsiz kanit degil,
+# kesif/kalite calismasidir. BIR KEZ olculur; uygun sonuc cikana kadar
+# pencere degistirilmez. P&L yok.
+#
+# Tarihler ne ilk pilotla (06-08..06-12) ne ana veri kumesiyle
+# (06-22..09-18) ortusur; tests/test_dataset_specs.py denetler. Seans
+# sayisini resmi takvim belirler.
+# Pilot indirme: YALNIZCA erisim ve veri kalitesi denemesi. P&L yok.
+#
+# Semboller ana evrenin TAMAMI: pilotun ikinci amaci, IEX'in bu
+# sembollerdeki gercek dakika boslugu oranini OLCMEK. Ana veri
+# kumesinin kalite esikleri tahminle degil bu olcumle, ana indirmeden
+# ONCE sabitlenir (Codex B2, #19). Kalite verisine bakmak performansa
+# bakmak degildir; yine de karar acik kayitla alinir.
+#
+# Tarihler ana veri kumesinin (orb-baseline-2026q3) BASLANGICINDAN
+# ONCE ve onunla ORTUSMUYOR. Bu bilincli: pilotun tarihleri ana
+# kumenin son haftasina denk gelseydi, pilot uzerinde yapilan herhangi
+# bir deneme ana kumenin HOLDOUT'una bakmak olurdu. Ortusmezlik
+# tests/test_dataset_specs.py tarafindan denetleniyor.
+dataset_id: pilot-2026-05-u12
+# pilot: indirilebilir (erisim + kalite), ama P&L URETEMEZ - kod uygular.
+status: pilot
+symbols: [SPY, QQQ, IWM, AAPL, MSFT, NVDA, AMD, AMZN, GOOGL, META, TSLA, JPM]
+timeframe: 1Min
+feed: iex
+adjustment: raw
+start: 2026-05-11
+end: 2026-06-05
+exchange_timezone: America/New_York
+holdout_fraction: 0.20
+split_unit: session
+settle_minutes: 20
+retention_days: 30
+# Pilot kendisi olculmedigi icin varsayilan politika yeterli; burada
+# yalnizca raporlanir.
+quality:
+  open_window_minutes: 15
+  max_missing_open_window: 0
+  close_window_minutes: 10
+  max_missing_fraction: 0.10
+  max_ineligible_sessions: 0

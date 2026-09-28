@@ -78,3 +78,18 @@ def test_the_main_dataset_stays_a_draft_until_approved_in_its_own_commit() -> No
     assert main.status == "draft"
     pilot = DatasetSpec.from_yaml(SPEC_DIR / "pilot-2026-06-u12.yaml")
     assert pilot.status == "pilot"
+
+
+def test_the_extra_pilot_changes_only_the_window() -> None:
+    """Ek pilot ilk pilotla AYNI olcumu genis pencerede tekrarlar (#17).
+
+    Sembol, feed, duzeltme, zaman dilimi ve kalite politikasi degisirse
+    iki sonuc karsilastirilamaz - ve "politika gevsetilmez" karari
+    sessizce delinmis olur. Yalnizca kimlik ve tarihler farkli olabilir.
+    """
+    first = DatasetSpec.from_yaml(SPEC_DIR / "pilot-2026-06-u12.yaml")
+    extra = DatasetSpec.from_yaml(SPEC_DIR / "pilot-2026-05-u12.yaml")
+    ignored = {"dataset_id", "start", "end"}
+    assert first.model_dump(exclude=ignored) == extra.model_dump(exclude=ignored)
+    assert extra.status == "pilot"
+    assert extra.end < first.start, "ek pilot ilk pilottan once bitmeli"
