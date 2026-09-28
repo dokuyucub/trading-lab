@@ -27,7 +27,9 @@ def gappy_bars() -> dict[str, list[Bar]]:
 
     SPY: 2. gun hic bar yok; 4. gun ortada 50 dk eksik (oran > 0.10);
          5. gun (holdout) 3 tekrarli zaman damgasi.
-    QQQ: 1. gun acilistan 5 dk eksik; 3. gun son 15 dk eksik (kapanis).
+    QQQ: 1. gun acilistan 5 dk eksik; 3. gun son 15 dk eksik (kapanis);
+         4. gun acilistan TAM 1 dk eksik (esik kenari: "> 0" ile "> 1"
+         ayrimini yakalar).
     """
     spy: list[Bar] = []
     qqq: list[Bar] = []
@@ -44,6 +46,8 @@ def gappy_bars() -> dict[str, list[Bar]]:
             day_qqq = day_qqq[5:]
         if index == 2:
             day_qqq = minute_bars("QQQ", window, skip=15)
+        if index == 3:
+            day_qqq = day_qqq[1:]
         spy += day_spy
         qqq += day_qqq
     return {"SPY": spy, "QQQ": qqq}
@@ -83,7 +87,7 @@ PILOT_EXPECTED: dict[str, Any] = {
     },
     "producer": {"commit": "0" * 40, "run_id": "test", "workflow": "test"},
     "reasons": {
-        "acilis_penceresi_eksik": 1,
+        "acilis_penceresi_eksik": 2,
         "eksik_dakika_orani": 1,
         "kapanis_penceresinde_bar_yok": 1,
         "seans_ici_bar_yok": 1,
@@ -96,11 +100,11 @@ PILOT_EXPECTED: dict[str, Any] = {
         "QQQ": {
             "duplicate_timestamps": 0,
             "expected_minutes": 1950,
-            "ineligible_sessions": 2,
+            "ineligible_sessions": 3,
             "max_missing_open_window": 5,
-            "missing_fraction": 0.010256,
-            "missing_minutes": 20,
-            "sessions_open_window_incomplete": 1,
+            "missing_fraction": 0.010769,
+            "missing_minutes": 21,
+            "sessions_open_window_incomplete": 2,
             "sessions_with_bars": 5,
             "sessions_without_bars": 0,
             "sessions_without_close_bar": 1,

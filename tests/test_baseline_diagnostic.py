@@ -353,6 +353,9 @@ def test_counts_keep_their_meaning(stub: tuple[str, StubState], tmp_path: Path) 
     assert spy["reason_counts"]["seans_ici_bar_yok"] == 1
     assert qqq["reason_counts"]["acilis_penceresi_eksik"] == 1
     assert qqq["max_missing_open_window"] == 5
+    assert qqq["sessions_open_window_incomplete"] == 1
+    # Bar olmayan seans acilis OLCUSUNDE de eksik sayilir (pilotla ayni anlam).
+    assert spy["sessions_open_window_incomplete"] == 1
     assert result["verdict"] == "some_ineligible"
 
 
