@@ -7,12 +7,22 @@
 #
 # Aralik: 2026-06-22 - 2026-09-18, yaklasik 63 islem seansi.
 # Son %20 tamamlanmis seans holdout'a ayrilir ve ilk olcumde ACILMAZ.
-dataset_id: orb-baseline-2026q3
+#
+# ONCEKI KIMLIK: orb-baseline-2026q3 (12 sembol, hic indirilmedi ve
+# hic olculmedi). Tek fark: JPM cikarildi (Codex karari, #17). Gerekce
+# YALNIZCA veri kalitesi: iki pilotta (IEX, ayni politika) JPM 24
+# seansin 8'inde uygunsuz, bunlarin 6'sinda acilis penceresi eksik;
+# diger 11 sembolde 24 seansta uygunsuz seans gozlenmedi. Karar P&L
+# hesaplanmadan ve ana indirme yapilmadan verildi. Bu, JPM veya IEX
+# hakkinda genel bir hukum DEGIL; yalnizca bu olcumun ORB acilis
+# araligini bu sembolde guvenilir kuramayacagi anlamina gelir.
+# Diger butun alanlar onceki tanimla ayni (test denetler).
+dataset_id: orb-baseline-2026q3-u11
 # draft: indirilemez, olculemez - kod uygular. Pilotun kalite olcumunden
 # sonra esikler gerekceli olarak sabitlenir ve AYRI bir commit ile
 # approved yapilir (Codex, #19).
 status: draft
-symbols: [SPY, QQQ, IWM, AAPL, MSFT, NVDA, AMD, AMZN, GOOGL, META, TSLA, JPM]
+symbols: [SPY, QQQ, IWM, AAPL, MSFT, NVDA, AMD, AMZN, GOOGL, META, TSLA]
 timeframe: 1Min
 feed: iex
 adjustment: raw
