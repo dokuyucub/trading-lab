@@ -48,6 +48,13 @@ Pilot workflow'u değişmez; ana ölçüme, ona P&L eklenerek geçilmez.
    bir dosyaya yazılır.
 3. A holdout dosyalarını diske yazar; manifest onları hash'ler. **Holdout
    okuma yasağı A için değil, B içindir.**
+4. A'nın yetkisi holdout'u indirmek ve manifestlemek; holdout'un kalite
+   sonucunu dışarı açmak değil (Codex, #33 P2). A'nın log'unda holdout
+   için yalnızca seans sayısı yer alır. Uygunsuz sayısı ya da başka bir
+   kalite ölçüsü basılmaz. Bu sonuç manifestte kalır ve temizlikte silinir.
+   Regresyon testi, yalnızca holdout kalitesi farklı iki veri setinde,
+   opak hash'ler dışında log'ların ve raporun birebir aynı olduğunu
+   denetler.
 
 **Adım B: ölçüm.** Secret yok, SDK çağrısı yok.
 
@@ -104,6 +111,16 @@ yoktur.
 config, senaryo, kanıt ve uyarılar. Sızıntı testleri başarı ve hata
 yollarında stdout, stderr ve logging'i yakalar. Ham bar, manifest ve veri
 dizini yüklenmez.
+
+**Log (PR b ile eklendi):**
+
+- Her iki adım boyunca `logging` tamamen kapatılır ve çıkışta eski
+  haline döner. Motor her işlemi fiyat ve P&L ile INFO düzeyinde loglar.
+  urllib3 yeniden denemeleri istek adresini WARNING düzeyinde loglar.
+  Varsayılan log düzeyine güvenmek yapısal bir güvence değildir.
+- Log'a yalnızca aracın kendi sabit satırları gider: sayımlar, hash
+  önekleri ve hata kategorileri. **Performans sayısı log'a basılmaz**;
+  sonuç yalnızca rapor artefaktındadır.
 
 ## Holdout taahhüdü (rapor şeması v2)
 

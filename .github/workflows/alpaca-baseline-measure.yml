@@ -1,0 +1,69 @@
+# Ana baseline olcumu (#17, docs/designs/baseline-measurement-execution.md).
+# Iki adim, tek job: A indirir (secret YALNIZCA orada), B anahtarsiz olcer.
+#
+# Tanim kodda sabit (baseline_job.MAIN_SPEC) ve 'approved' degilse A,
+# anahtar okumadan durur. Disari cikan tek sey olcum raporu; ham barlar,
+# manifest ve veri dizini artifact, cache ya da log'a CIKMAZ. Rapor,
+# temizlik BASARILI olduktan sonra yuklenir. Bu sozlesme
+# tests/test_architecture.py tarafindan denetlenir.
+name: Alpaca baseline measure
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    # Yalnizca main: baska bir dalda degistirilmis kod anahtarlara
+    # erisemesin.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # Butce: kurulum + indirme + olcum + temizlik. Dayanak (#17 PR b,
+    # scripts/benchmark_baseline.py): 11 sembol x 63 seans 1Min sentetik
+    # veride yerelde (4 cpu) kurma 2.4 sn, dogrulama 5.9 sn, dort senaryo
+    # 163 sn; tepe bellek ~0.8 GB. Hosted runner daha yavas olabilir;
+    # bu olagan butce tahminidir, mutlak ust sinir DEGILDIR.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Kilitli calisma zamani bagimliliklarini kur
+        run: |
+          python -m pip install -r requirements.lock
+          python -m pip check
+      # Adim A. Secret'lar YALNIZCA bu adimda.
+      - name: Onayli tanimi indir
+        env:
+          ALPACA_PAPER_API_KEY: ${{ secrets.ALPACA_PAPER_API_KEY }}
+          ALPACA_PAPER_SECRET_KEY: ${{ secrets.ALPACA_PAPER_SECRET_KEY }}
+        run: >-
+          PYTHONPATH=src python -m tlab.baseline_job download
+          --workdir "$RUNNER_TEMP/baseline-data"
+      # Adim B. Secret YOK; ortamda Alpaca anahtari bulunursa arac baslamaz.
+      - name: Baseline'i anahtarsiz olc
+        run: >-
+          PYTHONPATH=src python -m tlab.baseline_job measure
+          --workdir "$RUNNER_TEMP/baseline-data"
+          --out "$RUNNER_TEMP/baseline-report.json"
+      # Basari ya da hata: veri dizini kaldirilir ve yoklugu dogrulanir.
+      # Fiziksel olarak geri getirilemez silme iddiasi DEGILDIR.
+      - name: Veriyi temizle
+        if: always()
+        run: |
+          rm -rf "$RUNNER_TEMP/baseline-data"
+          test ! -e "$RUNNER_TEMP/baseline-data"
+      # Yuklenen TEK dosya: olcum raporu. Kosulsuz adim yalnizca onceki
+      # butun adimlar - temizlik dahil - basariliysa calisir.
+      - name: Olcum raporunu yukle
+        uses: actions/upload-artifact@v4
+        with:
+          name: baseline-report
+          path: ${{ runner.temp }}/baseline-report.json
+          if-no-files-found: error
+          retention-days: 90

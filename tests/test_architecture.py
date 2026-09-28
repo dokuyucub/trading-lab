@@ -102,6 +102,9 @@ CLOCK_ALLOWLIST = {
     # Pilot kalite araci: indirme anini kaydeder; karar yolu degil ve
     # P&L katmanlarini ice aktaramaz (test_the_pilot_cannot_see_performance).
     "pilot_quality.py",
+    # Ana baseline isi: yalnizca `main()` indirme anini duvar saatinden
+    # alir; `download()` zamani disaridan alir, testler enjekte eder.
+    "baseline_job.py",
 }
 
 
@@ -1012,3 +1015,84 @@ def test_the_pilot_workflow_keeps_raw_data_and_secrets_contained() -> None:
     assert cleanup["if"] == "always()"
     assert 'rm -rf "$RUNNER_TEMP/pilot-data"' in cleanup["run"]
     assert 'test ! -e "$RUNNER_TEMP/pilot-data"' in cleanup["run"]
+
+
+# --------------------------------------------------------------------------
+# Ana baseline olcumu workflow sozlesmesi (#17, tasarim belgesi)
+# --------------------------------------------------------------------------
+
+
+def test_the_baseline_workflow_separates_secrets_from_measurement() -> None:
+    """Iki adim, tek job: secret yalnizca indirmede; rapor temizlikten sonra.
+
+    Her madde docs/designs/baseline-measurement-execution.md'deki bir
+    sarta karsilik geliyor; biri gevserse bu test kirilir.
+    """
+    workflow = _workflow("alpaca-baseline-measure.yml")
+    # PyYAML (YAML 1.1) `on` anahtarini True olarak okur.
+    triggers: dict[str, Any] = workflow["on"] if "on" in workflow else workflow[True]
+    assert set(triggers) == {"workflow_dispatch"}
+    assert triggers["workflow_dispatch"] is None, "workflow girdi (input) almamali"
+    assert workflow["permissions"] == {"contents": "read"}
+
+    (job,) = workflow["jobs"].values()
+    assert job["if"] == "github.ref == 'refs/heads/main'"
+    steps = job["steps"]
+    names = [step.get("name") for step in steps]
+
+    checkout = next(
+        step for step in steps if str(step.get("uses", "")).startswith("actions/checkout")
+    )
+    assert checkout["with"]["persist-credentials"] is False
+
+    # Secret'lar workflow/job duzeyinde olamaz: oradaki env her adima gecer.
+    outside_steps = {key: value for key, value in workflow.items() if key != "jobs"}
+    outside_steps["job"] = {key: value for key, value in job.items() if key != "steps"}
+    assert "secrets." not in yaml.safe_dump(outside_steps)
+    assert "env" not in workflow and "env" not in job
+
+    runs = [step for step in steps if "tlab.baseline_job" in step.get("run", "")]
+    assert len(runs) == 2, "tam olarak iki adim: indirme ve olcum"
+    download, measure = runs
+    assert "tlab.baseline_job download" in download["run"]
+    assert "tlab.baseline_job measure" in measure["run"]
+    assert steps.index(download) < steps.index(measure)
+
+    with_secrets = [step for step in steps if "secrets." in yaml.safe_dump(step)]
+    assert with_secrets == [download], "secret'lar yalnizca indirme adiminda olmali"
+    assert "env" not in measure, "olcum adiminin ortami bos olmali"
+    for step in runs:
+        assert "--spec" not in step["run"], "tanim yolu kodda sabit olmali"
+
+    # Hicbir adim hatayi yutmaz; yalnizca temizlik kosullu calisir.
+    assert "continue-on-error" not in job
+    assert not [step.get("name") for step in steps if "continue-on-error" in step]
+    conditional = [step for step in steps if "if" in step]
+    assert len(conditional) == 1
+    cleanup = conditional[0]
+    assert cleanup["if"] == "always()"
+    assert 'rm -rf "$RUNNER_TEMP/baseline-data"' in cleanup["run"]
+    assert 'test ! -e "$RUNNER_TEMP/baseline-data"' in cleanup["run"]
+    assert '--workdir "$RUNNER_TEMP/baseline-data"' in download["run"]
+    assert '--workdir "$RUNNER_TEMP/baseline-data"' in measure["run"]
+
+    # Tek upload, KOSULSUZ (yani yalnizca onceki her adim - temizlik
+    # dahil - basariliysa) ve temizlikten SONRA. Rapor veri dizininin
+    # disinda.
+    uploads = [step for step in steps if str(step.get("uses", "")).startswith("actions/upload")]
+    assert len(uploads) == 1
+    upload = uploads[0]
+    assert names.index(upload.get("name")) > names.index(cleanup.get("name"))
+    assert upload["with"]["path"] == "${{ runner.temp }}/baseline-report.json"
+    assert '--out "$RUNNER_TEMP/baseline-report.json"' in measure["run"]
+    assert upload["with"]["if-no-files-found"] == "error"
+    assert not any(str(step.get("uses", "")).startswith("actions/cache") for step in steps)
+    assert "GITHUB_STEP_SUMMARY" not in yaml.safe_dump(workflow), "log'a rapor yazilmaz"
+
+
+def test_the_baseline_job_measures_one_fixed_spec() -> None:
+    """Ana is tek bir tanimi olcer ve o tanim depoda."""
+    from tlab.baseline_job import MAIN_SPEC
+
+    assert (REPO / MAIN_SPEC).is_file()
+    assert MAIN_SPEC.stem.startswith("orb-baseline-")
