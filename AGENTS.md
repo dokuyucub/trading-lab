@@ -543,6 +543,63 @@ sembolle ölçüldükleri için değişmez (testle sabit). Pilotlar tamamlandı;
 yeni pencere veya tekrar koşu yok. `approved` ve ana ölçüm ayrı tasarım ve
 inceleme gerektirir.
 
+### Doğrulanan — 2026-09-28: ana ölçümün ilk gerçek koşusu (kalite kapısında durdu)
+
+| Ne | Kanıt | Kapsam |
+|---|---|---|
+| Ana ölçüm workflow'u gerçek ortamda uçtan uca çalıştı ve kalite kapısında durdu | Koşu `36474064587`, iş `109103241218`, main `c6c19db`, `run_attempt` 1; kullanıcı bir kez tetikledi | `orb-baseline-2026q3-u11` (`approved`, §11.1). P&L yok, emir yok, rapor yok. |
+
+§11.1'deki onay bu koşuyla **kullanıldı**. Adımlar:
+
+| Adım | Sonuç |
+|---|---|
+| Kurulum | success |
+| A: indirme (secret yalnızca bu adımda, maskeli) | success, 17 sn |
+| B: anahtarsız ölçüm | **failure**, exit 1, ~4 sn |
+| Temizlik (`always()`, `rm -rf` + `test ! -e`) | success |
+| Rapor yükleme | skipped; artefakt listesi boş (Codex doğruladı) |
+
+Aracın bütün çıktısı, olduğu gibi (#17):
+
+```
+OK indirme orb-baseline-2026q3-u11 (manifest faffa591bba1)
+seans: takvim 63, tamamlanmis 63, baseline 50, holdout 13
+kaliteye uymayan baseline seansi: 10
+FAIL kalite: 10 baseline seansi uygunsuz; rapor yazilmadi
+```
+
+**Bu koşunun söylediği ve söylemediği:**
+
+- Söylediği:
+  - Onay kapısı, iki adımlı secret sınırı, anahtarsız ölçüm, P&L öncesi
+    kalite kapısı, temizlik ve "başarısızlıkta rapor yok" gerçek ortamda
+    tasarlandığı gibi çalıştı.
+  - Log'da fiyat, tarih, sembol, yanıt gövdesi ya da performans sayısı yok.
+    Holdout için yalnızca seans sayısı (13) var.
+  - 50 baseline seansının 10'unda en az bir sembol mevcut politikaya göre
+    uygunsuz.
+- Söylemediği:
+  - **Stratejinin performansı.** Hesaplanmadı; ORB'nin gerçek veride
+    sonucu hâlâ bilinmiyor.
+  - **Hangi semboller, hangi gerekçeler.** Araç yalnızca sayıyı basar;
+    manifest temizlikte silindi, elde yalnızca hash öneki var.
+  - **Pilotlarla farkın nedeni.** Pilotlarda bu 11 sembolde 24 seansta
+    uygunsuzluk görülmemişti. 0/24 bir güvence değildi (Codex); farkın
+    nedeni bilinmiyor.
+  - **Tekrarlanabilirlik.** Yeni bir indirmenin aynı baytları vereceği
+    kanıtlanamaz; sağlayıcı ya da takvim revizyonu mümkündür.
+
+**Karar (Codex, #17):**
+
+- Bu bir altyapı hatası değildir; §11.1'deki tek yeniden koşu istisnasına
+  girmez. **Ana ölçüm workflow'u yeniden koşulmaz.**
+- Eşik, evren, tarih ya da strateji "geçsin diye" değişmez.
+- Sonraki adım ayrı, P&L'siz, yalnızca baseline için bir kalite teşhisidir.
+  Önce tasarım, sonra incelenen PR, sonra tek bir tetikleme. Teşhis sonucu
+  performans onayını kendiliğinden yeniden açmaz.
+- Kalite nedenleri bilinmeden SIP, yeni dönem, başka evren ya da tolerans
+  hakkında karar verilmez.
+
 ### Hâlâ doğrulanmayan
 
 - **Emir yaşam döngüsü.** Hiç emir gönderilmedi. Dolum, kayma, kısmi dolum,
@@ -551,8 +608,9 @@ inceleme gerektirir.
   başlatma/mutabakat, çift emir engeli, gün sonu kapatma gerçek ortamda
   sınanmadı.
 - **Stratejinin kârlılığı.** ORB gerçek piyasa verisiyle bir kez bile
-  backtest edilmedi. Sistemin sağlam olması, stratejinin kazandırdığı
-  anlamına gelmez; bunlar ayrı iki sorudur ve ikincisine henüz dokunulmadı.
+  backtest edilmedi: ilk ana ölçüm kalite kapısında, P&L'den önce durdu
+  (yukarıda). Sistemin sağlam olması, stratejinin kazandırdığı anlamına
+  gelmez; bunlar ayrı iki sorudur ve ikincisine henüz dokunulmadı.
 
 Bu üçü tamamlanmadan hiçbir yerde "sistem hazır" yazılmamalı.
 
