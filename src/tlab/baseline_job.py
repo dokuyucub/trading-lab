@@ -245,16 +245,16 @@ def _download(
         print(f"FAIL hash dosyasi: {type(exc).__name__}")
         return 1
 
-    sessions, split, quality = manifest["sessions"], manifest["split"], manifest["quality"]
+    sessions, split = manifest["sessions"], manifest["split"]
     print(f"OK indirme {manifest['dataset_id']} (manifest {digest[:12]})")
     print(
         f"seans: takvim {sessions['calendar']}, tamamlanmis {len(sessions['complete'])}, "
         f"baseline {len(split['baseline'])}, holdout {len(split['holdout'])}"
     )
-    print(
-        f"kaliteye uymayan: baseline {quality['ineligible']['baseline']}, "
-        f"holdout {quality['ineligible']['holdout']}"
-    )
+    # Holdout hakkinda YALNIZCA seans sayisi (Codex #33 P2). Holdout'un
+    # kalite sonucu - uygunsuz sayisi dahil - veriye bagli bir bilgidir
+    # ve disari cikmaz; manifestte kalir, veri dizini temizlikte silinir.
+    print(f"kaliteye uymayan baseline seansi: {manifest['quality']['ineligible']['baseline']}")
     return 0
 
 
@@ -298,7 +298,7 @@ def measure(env: Mapping[str, str], *, workdir: Path, out: Path, root: Path) -> 
 def _measure_step(env: Mapping[str, str], *, workdir: Path, out: Path, root: Path) -> int:
     leaked = _secret_names(env)
     if leaked:
-        # Deger degil, yalnizca ad; deger hic okunmaz.
+        # Yalnizca ad yazdirilir; deger yazdirilmaz.
         print(f"FAIL yapilandirma: olcum adiminda anahtar degiskeni var ({', '.join(leaked)})")
         return 1
 

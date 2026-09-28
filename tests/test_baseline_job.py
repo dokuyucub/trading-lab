@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import socket
 from collections.abc import Iterator, Mapping
 from datetime import UTC, date, datetime
@@ -107,12 +108,14 @@ def stub_rows(bars: list[Bar]) -> list[dict[str, Any]]:
     ]
 
 
-def market(state: StubState) -> None:
+def market(state: StubState, *, drop_holdout_open: bool = False) -> None:
+    """`drop_holdout_open`: yalnizca SON gunun (holdout) SPY acilis bari eksik."""
     state.calendar = [{"date": day.isoformat(), "open": "09:30", "close": "16:00"} for day in DAYS]
-    state.bars = {
-        "bars": {symbol: stub_rows(breakout_bars(symbol)) for symbol in SYMBOLS},
-        "next_page_token": None,
-    }
+    rows = {symbol: stub_rows(breakout_bars(symbol)) for symbol in SYMBOLS}
+    if drop_holdout_open:
+        first = session(DAYS[-1]).open.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        rows["SPY"] = [row for row in rows["SPY"] if row["t"] != first]
+    state.bars = {"bars": rows, "next_page_token": None}
 
 
 def spec_file(tmp_path: Path, status: str = "approved") -> Path:
@@ -550,6 +553,43 @@ def test_download_then_measure_end_to_end(
     assert report["dataset_id"] == "main-test"
     assert report["holdout"]["sessions"] == 1
     assert report["holdout"]["opened"] is False
+
+
+def test_holdout_quality_changes_no_external_output(
+    stub: tuple[str, StubState], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Codex #33 P2: holdout kalitesi hicbir dis ciktidan anlasilamamali.
+
+    Iki veri seti yalnizca HOLDOUT gununun SPY acilis barinda ayrilir.
+    Opak hash'ler (manifest, taahhut) disinda A ve B log'lari ve rapor
+    birebir ayni olmali. Ayni esitlik, baseline sonuclarinin holdout
+    iceriginden bagimsiz oldugunu da gosterir.
+    """
+    url, state = stub
+    runs: list[tuple[str, dict[str, Any]]] = []
+    for name, drop in (("tam", False), ("eksik", True)):
+        market(state, drop_holdout_open=drop)
+        root = tmp_path / name
+        root.mkdir()
+        assert (
+            baseline_job.download(
+                keys_env(), NOW, workdir=root / "work", spec_path=spec_file(root), base_url=url
+            )
+            == 0
+        )
+        manifest = json.loads((root / "work" / "dataset" / "manifest.json").read_bytes())
+        assert manifest["quality"]["ineligible"]["holdout"] == (1 if drop else 0)
+        assert manifest["quality"]["ineligible"]["baseline"] == 0
+        assert measure(root, root / "work") == 0
+        log = re.sub(r"manifest [0-9a-f]{12}", "manifest <hash>", capsys.readouterr().out)
+        report = json.loads((root / "report.json").read_bytes())
+        report.pop("manifest_sha256")
+        report["holdout"]["commitment"].pop("sha256")
+        runs.append((log, report))
+
+    (full_log, full_report), (gap_log, gap_report) = runs
+    assert full_log == gap_log, f"log holdout kalitesini ele veriyor:\n{full_log}\n{gap_log}"
+    assert full_report == gap_report, "rapor holdout kalitesinden etkileniyor"
 
 
 def test_the_entry_point_fixes_the_main_spec(tmp_path: Path) -> None:
