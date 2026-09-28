@@ -997,6 +997,17 @@ def test_the_pilot_workflow_keeps_raw_data_and_secrets_contained() -> None:
     assert uploads[0]["with"]["if-no-files-found"] == "error"
     assert not any(str(step.get("uses", "")).startswith("actions/cache") for step in steps)
 
+    # Secret'lar workflow ya da job duzeyinde de olamaz: orada tanimlanan
+    # env her adima gecer (Codex #27 notu). Ayni sekilde hicbir adim
+    # hatayi yutmaz, ve yalnizca temizlik kosullu calisir.
+    outside_steps = {key: value for key, value in workflow.items() if key != "jobs"}
+    outside_steps["job"] = {key: value for key, value in job.items() if key != "steps"}
+    assert "secrets." not in yaml.safe_dump(outside_steps)
+    assert "env" not in workflow and "env" not in job
+    assert "continue-on-error" not in job
+    assert not [step.get("name") for step in steps if "continue-on-error" in step]
+    assert [step.get("name") for step in steps if "if" in step] == [steps[-1].get("name")]
+
     cleanup = steps[-1]
     assert cleanup["if"] == "always()"
     assert 'rm -rf "$RUNNER_TEMP/pilot-data"' in cleanup["run"]

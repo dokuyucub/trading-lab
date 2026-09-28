@@ -25,7 +25,7 @@ import pytest
 
 from alpaca_stub import StubState, alpaca_stub
 from tlab import pilot_quality
-from tlab.data.dataset import DatasetSpec
+from tlab.data.dataset import DatasetSpec, QualityPolicy
 
 NOW = datetime(2026, 2, 1, 12, 0, tzinfo=UTC)
 DAYS = ("2026-01-05", "2026-01-06")
@@ -94,16 +94,24 @@ def stub() -> Iterator[tuple[str, StubState]]:
         yield running
 
 
-def _run(stub: tuple[str, StubState], tmp_path: Path, status: str = "pilot") -> int:
+def _run(
+    stub: tuple[str, StubState],
+    tmp_path: Path,
+    status: str = "pilot",
+    *,
+    workdir: Path | None = None,
+    out: Path | None = None,
+    base_url: str | None = None,
+) -> int:
     url, _ = stub
     return pilot_quality.run(
         MARKERS["api_key"],
         MARKERS["secret"],
         NOW,
-        workdir=tmp_path / "raw",
-        out=tmp_path / "summary.json",
+        workdir=workdir or tmp_path / "raw",
+        out=out or tmp_path / "summary.json",
         spec_path=_spec(tmp_path, status),
-        base_url=url,
+        base_url=base_url or url,
     )
 
 
@@ -251,4 +259,134 @@ def test_missing_keys_fail_before_anything(tmp_path: Path) -> None:
         "", "", NOW, workdir=tmp_path / "raw", out=tmp_path / "s.json", spec_path=tmp_path
     )
     assert code == 1
+    assert not (tmp_path / "raw").exists()
+
+
+# --------------------------------------------------------------------------
+# Calisma dizini sahipligi (Codex #27 P2)
+#
+# Eski surum var olan bir dizini reddettikten sonra `finally` icinde
+# kosulsuz siliyordu: Codex existing/keep.txt ile calistirdi, dosya
+# gitti. Arac yalnizca KENDI olusturdugu dizini silebilir.
+# --------------------------------------------------------------------------
+
+
+def test_an_existing_directory_is_refused_and_left_untouched(
+    stub: tuple[str, StubState], tmp_path: Path
+) -> None:
+    existing = tmp_path / "existing"
+    existing.mkdir()
+    (existing / "keep.txt").write_text("degerli veri", "utf-8")
+
+    _market(stub[1])
+    assert _run(stub, tmp_path, workdir=existing) == 1
+    assert (existing / "keep.txt").read_text("utf-8") == "degerli veri"
+    assert stub[1].requests == [], "dizin reddedilmeden ag istegi yapildi"
+
+
+def test_an_existing_file_at_the_workdir_path_is_left_untouched(
+    stub: tuple[str, StubState], tmp_path: Path
+) -> None:
+    existing = tmp_path / "a-file"
+    existing.write_text("dokunma", "utf-8")
+    assert _run(stub, tmp_path, workdir=existing) == 1
+    assert existing.read_text("utf-8") == "dokunma"
+    assert stub[1].requests == []
+
+
+def test_a_symlink_at_the_workdir_path_is_not_followed(
+    stub: tuple[str, StubState], tmp_path: Path
+) -> None:
+    target = tmp_path / "target"
+    target.mkdir()
+    (target / "keep.txt").write_text("hedef", "utf-8")
+    link = tmp_path / "link"
+    link.symlink_to(target, target_is_directory=True)
+
+    assert _run(stub, tmp_path, workdir=link) == 1
+    assert link.is_symlink()
+    assert (target / "keep.txt").read_text("utf-8") == "hedef"
+    assert stub[1].requests == []
+
+
+def test_the_summary_cannot_live_inside_the_raw_directory(
+    stub: tuple[str, StubState], tmp_path: Path
+) -> None:
+    """Ham dizin silinirken ozet de giderdi - ya da ozet ham verinin
+    yaninda disari tasinmaya aday olurdu. Ag isteginden once ret."""
+    raw = tmp_path / "raw"
+    assert _run(stub, tmp_path, workdir=raw, out=raw / "summary.json") == 1
+    assert not raw.exists()
+    assert stub[1].requests == []
+
+
+def test_the_raw_directory_created_by_the_call_is_removed_on_error(
+    stub: tuple[str, StubState], tmp_path: Path
+) -> None:
+    _, state = stub
+    _market(state)
+    state.fail("/v2/stocks/bars", 500, times=None)
+    assert _run(stub, tmp_path) == 1
+    assert not (tmp_path / "raw").exists()
+
+
+# --------------------------------------------------------------------------
+# Codex #17 onerileri: politika alanlari, HTTP disi hata yollari
+# --------------------------------------------------------------------------
+
+
+def test_the_policy_in_the_summary_is_an_explicit_field_set(
+    stub: tuple[str, StubState], tmp_path: Path
+) -> None:
+    """Manifest sozlugu oldugu gibi gecmez; alanlar tek tek secilir.
+    QualityPolicy'ye alan eklenirse bu test kumenin bilincli
+    guncellenmesini ister."""
+    assert set(QualityPolicy.model_fields) == pilot_quality.POLICY_KEYS
+    _market(stub[1])
+    assert _run(stub, tmp_path) == 0
+    summary = json.loads((tmp_path / "summary.json").read_text("utf-8"))
+    assert set(summary["policy"]) == pilot_quality.POLICY_KEYS
+
+
+def test_an_invalid_bar_is_diagnosed_without_echoing_its_values(
+    stub: tuple[str, StubState],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Bar dogrulama hatasi mesaja DEGERI koyar (ornegin high < low).
+    Arac o mesaji basmamali: yalnizca sabit tani ve sinif adi."""
+    _, state = stub
+    _market(state)
+    broken = dict(state.bars["bars"]["SPY"][0])
+    broken["h"] = float(MARKERS["close"]) - 50  # high < low: gecersiz OHLC
+    state.bars["bars"]["SPY"][0] = broken
+
+    with caplog.at_level(logging.DEBUG):
+        assert _run(stub, tmp_path) == 1
+    output = _all_output(capsys, caplog, tmp_path)
+    assert not _leaked(output), f"gecersiz bar hatasi deger sizdirdi: {_leaked(output)}"
+    assert "FAIL indirme:" in output
+    assert not (tmp_path / "raw").exists()
+
+
+def test_a_dropped_connection_is_a_network_diagnosis(
+    stub: tuple[str, StubState],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Sunucu yok: baglanti reddedilir. Tani 'ag' olmali ve sizinti olmamali."""
+    import socket
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        closed_port = probe.getsockname()[1]
+
+    with caplog.at_level(logging.DEBUG):
+        code = _run(stub, tmp_path, base_url=f"http://127.0.0.1:{closed_port}")
+    assert code == 1
+    output = _all_output(capsys, caplog, tmp_path)
+    assert "ag, TLS veya zaman asimi hatasi" in output
+    assert not _leaked(output)
     assert not (tmp_path / "raw").exists()

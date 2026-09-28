@@ -33,9 +33,12 @@ import shutil
 from collections import Counter
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from tlab.sdk_probe import classify
+
+if TYPE_CHECKING:
+    from tlab.data.dataset import DatasetSpec
 
 PILOT_SPEC = Path("config/datasets/pilot-2026-06-u12.yaml")
 """SABIT. Workflow'dan serbest sembol, tarih ya da yol alinmaz (#25 sart 1)."""
@@ -82,6 +85,19 @@ SYMBOL_KEYS = frozenset(
 )
 
 PRODUCER_KEYS = frozenset({"run_id", "workflow", "commit"})
+
+POLICY_KEYS = frozenset(
+    {
+        "open_window_minutes",
+        "max_missing_open_window",
+        "close_window_minutes",
+        "max_missing_fraction",
+        "max_ineligible_sessions",
+    }
+)
+"""Politikadan ozete gecen alanlar - manifest sozlugu OLDUGU GIBI gecmez.
+`QualityPolicy`'ye alan eklenirse test bu kumenin bilincli
+guncellenmesini ister."""
 
 REASON_CATEGORIES = {
     "seans ici bar yok": "seans_ici_bar_yok",
@@ -158,7 +174,7 @@ def pilot_summary(manifest: dict[str, Any], manifest_sha256: str) -> dict[str, A
         "feed": manifest["feed"],
         "timeframe": manifest["timeframe"],
         "adjustment": manifest["adjustment"],
-        "policy": quality["policy"],
+        "policy": {key: quality["policy"][key] for key in sorted(POLICY_KEYS)},
         "sessions": {
             "calendar": manifest["sessions"]["calendar"],
             "complete": len(manifest["sessions"]["complete"]),
@@ -227,7 +243,7 @@ def run(
         print("FAIL yapilandirma: zaman dilimi gerekli")
         return 1
 
-    from tlab.data.dataset import DatasetSpec, build_dataset, manifest_sha256
+    from tlab.data.dataset import DatasetSpec
 
     try:
         spec = DatasetSpec.from_yaml(spec_path)
@@ -240,6 +256,50 @@ def run(
         print(f"FAIL tanim: status '{spec.status}', yalnizca 'pilot' kabul edilir")
         return 1
 
+    workdir, out = Path(workdir), Path(out)
+    if _inside(out, workdir):
+        print("FAIL yapilandirma: ozet dosyasi ham veri dizininin icinde olamaz")
+        return 1
+    # Sahiplik: dizini BU cagri olusturur (ozel mkdir). Onceden var olan
+    # bir dizin, dosya ya da symlink reddedilir ve ona DOKUNULMAZ; silme
+    # yalnizca bu cagrinin olusturdugu dizini kapsar (Codex #27 P2: eski
+    # surum var olan bir dizini reddettikten sonra kosulsuz siliyordu).
+    try:
+        workdir.parent.mkdir(parents=True, exist_ok=True)
+        workdir.mkdir()
+    except FileExistsError:
+        print("FAIL yapilandirma: calisma dizini zaten var; dokunulmadi")
+        return 1
+    except OSError as exc:
+        print(f"FAIL yapilandirma: calisma dizini olusturulamadi ({type(exc).__name__})")
+        return 1
+
+    try:
+        return _measure(key, secret, now, spec, workdir=workdir, out=out, base_url=base_url)
+    finally:
+        # Ham veri basari ya da hata - her durumda - silinir. Yalnizca
+        # yukarida bu cagrinin olusturdugu dizin.
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _inside(path: Path, directory: Path) -> bool:
+    """`path`, `directory`'nin kendisi ya da altinda mi (symlink cozulerek)."""
+    resolved, root = path.resolve(), directory.resolve()
+    return resolved == root or root in resolved.parents
+
+
+def _measure(
+    key: str,
+    secret: str,
+    now: datetime,
+    spec: DatasetSpec,
+    *,
+    workdir: Path,
+    out: Path,
+    base_url: str | None,
+) -> int:
+    """Indirme ve olcum. Cagiran `workdir`'in sahibi ve temizleyicisi."""
+    from tlab.data.dataset import build_dataset, manifest_sha256
     from tlab.data.market import AlpacaMarketData
     from tlab.execution.alpaca_broker import AlpacaBroker
     from tlab.sdk_compat import bound_transport
@@ -261,30 +321,26 @@ def run(
             return broker.get_calendar(start, end, exchange_timezone=spec.exchange_timezone)
 
     try:
-        try:
-            manifest = build_dataset(
-                spec,
-                bars_source=market,
-                calendar_source=_Calendar(),
-                out_dir=workdir,
-                downloaded_at=now,
-                producer=_producer(),
-            )
-        except Exception as exc:
-            print(f"FAIL indirme: {classify(exc)} ({type(exc).__name__})")
-            return 1
-        try:
-            summary = pilot_summary(manifest, manifest_sha256(workdir))
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(json.dumps(summary, sort_keys=True, indent=2) + "\n", "utf-8")
-        except Exception as exc:
-            print(f"FAIL kalite ozeti: {type(exc).__name__}")
-            return 1
-        _print_summary(summary)
-        return 0
-    finally:
-        # Ham veri basari ya da hata - her durumda - silinir.
-        shutil.rmtree(workdir, ignore_errors=True)
+        manifest = build_dataset(
+            spec,
+            bars_source=market,
+            calendar_source=_Calendar(),
+            out_dir=workdir,
+            downloaded_at=now,
+            producer=_producer(),
+        )
+    except Exception as exc:
+        print(f"FAIL indirme: {classify(exc)} ({type(exc).__name__})")
+        return 1
+    try:
+        summary = pilot_summary(manifest, manifest_sha256(workdir))
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(summary, sort_keys=True, indent=2) + "\n", "utf-8")
+    except Exception as exc:
+        print(f"FAIL kalite ozeti: {type(exc).__name__}")
+        return 1
+    _print_summary(summary)
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
