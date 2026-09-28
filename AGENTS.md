@@ -659,8 +659,8 @@ SDK bağlantısı §7'de doğrulanmıştır; emir yaşam döngüsü ve kârlıl�
   açık alan listesiyle üretilmiş toplulaştırılmış kalite özeti, kod/spec hash'i
   yayımlanır. Broker secret'ları yalnız indirme adımında bulunur.
 - Geçici veri başarı/hata sonunda temizlenir; temizleme güvenli fiziksel silme
-  garantisi sayılmaz. Ana veri tanımı draft kalır; pilot sonrası eşik/onay
-  ayrı commit ve bağımsız inceleme gerektirir.
+  garantisi sayılmaz. Ana veri tanımı pilotlar süresince draft kaldı; onayı
+  ayrı commit ve bağımsız incelemeyle verildi (§11.1).
 - Kişisel analiz için bu mimariyle ilerleme, Alpaca'dan özel bir bulut lisansı
   alındığı iddiası değildir. Hesaba/veri feed'ine özgü ek şartlar geçerlidir.
   Gerçek ham verinin kalıcı dış artefaktı ayrı değerlendirilir; sentetik
@@ -672,6 +672,56 @@ SDK bağlantısı §7'de doğrulanmıştır; emir yaşam döngüsü ve kârlıl�
   tanımı #29'dan beri bu). İki tanım da 12 sembolle ölçüldükleri için
   değişmez. Yeni pilot penceresi veya tekrar koşu planlanmıyor. Ana tanım
   artık `orb-baseline-2026q3-u11` (11 sembol, JPM veri kalitesi
-  gerekçesiyle çıkarıldı, `draft`). Pilotların güvenli akışı, ana ölçüm
-  için kalıcı ham veri dış aktarımına izin sayılmaz; ana ölçüme bu
-  workflow'a P&L eklenerek geçilmez.
+  gerekçesiyle çıkarıldı; o gün `draft`, onayı §11.1'de). Pilotların
+  güvenli akışı, ana ölçüm için kalıcı ham veri dış aktarımına izin
+  sayılmaz; ana ölçüme bu workflow'a P&L eklenerek geçilmez.
+
+### 11.1 Ana ölçüm onayı — #17, 2026-09-28
+
+`orb-baseline-2026q3-u11` ayrı bir commit ile `approved` yapıldı. Yürütme
+sözleşmesi: `docs/designs/baseline-measurement-execution.md`. Değişen tek
+alan `status`; tarih, feed, bölme, settle, retention ve kalite eşikleri
+testle sabit (`tests/test_dataset_specs.py`).
+
+**Dayanak:**
+
+- İki kalite pilotu, aynı politikayla: 5 + 19 seans (§7).
+- JPM, iki pilotta tekrarlanan veri kalitesi uygunsuzluğu gerekçesiyle
+  P&L görülmeden çıkarıldı (#30).
+- Holdout taahhüdü ve rapor şeması v2 (#32).
+- İki adımlı iş, sızıntı ve sözleşme testleri, iki ayrı süreçte yerel
+  sentetik uçtan uca kanıt (#33).
+- Hedef ölçekli sentetik benchmark: Claude ve Codex ayrı ayrı çalıştırdı.
+- Politika ön uçuş testi: gerçek tanım + gerçek config, P&L öncesi politika
+  kapısından geçiyor.
+
+**Onayın kapsamı:** yalnızca bu sabit tanımın indirilmesi ve baseline
+bölümünün **bir kez** ölçülmesi. Onay şunları **kapsamaz:**
+
+- işlem ya da emir;
+- canlı dağıtım;
+- holdout'un açılması;
+- parametre terfisi.
+
+**Durma kuralı:** kalite ya da seans sınırı hatasında ölçüm rapor üretmeden
+durur. Aynı dönemi geçsin diye eşik, parametre, pencere ya da tanım
+değiştirilip **yeniden denenmez**; sonuç #17'de tartışılır.
+
+**Altyapı hatasında yeniden koşu (öneri, Codex kararı bekleniyor):** koşu
+veriden bağımsız bir nedenle yarım kalırsa, hiçbir tanım, config ya da kod
+değişmeden **tek** bir yeniden koşu yapılabilir. Yalnızca şu durumlar
+veriden bağımsız sayılır:
+
+- adım A başlamadan düşen bir adım (checkout, kurulum);
+- runner kaybı ya da iş zaman aşımı;
+- `FAIL indirme: sunucu hatasi (5xx)`;
+- `FAIL indirme: hiz siniri (429)`;
+- `FAIL indirme: ag, TLS veya zaman asimi hatasi`.
+
+Bu listede olmayan her hata tartışılmadan yeniden koşulmaz; #17'de
+değerlendirilir. `FAIL beklenmeyen hata`, yetki reddi, onay, bütünlük,
+kalite, politika ve seans sınırı hataları da buna dahildir.
+
+**Sınır:** yerel sentetik kanıt hosted Actions'ı, secret enjeksiyonunu ve
+artifact yükleme hizmetini doğrulamaz. Gerçek koşunun kaydı (run/job,
+artefakt, sonuç) §7'ye ayrıca yazılır.
