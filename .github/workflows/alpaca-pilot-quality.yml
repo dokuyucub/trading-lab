@@ -1,0 +1,71 @@
+# Pilot veri kalitesi (AGENTS §11, #25): gercek Alpaca verisini TEK job
+# icinde indirir, kalitesini olcer ve siler. P&L YOK, emir YOK.
+#
+# Disari cikan tek sey toplulastirilmis kalite ozeti (acik alan listesi,
+# fiyat/hacim/hesap degeri yok). Ham barlar, manifest ve veri dizini
+# artifact, cache ya da log'a CIKMAZ. Bu sozlesme
+# tests/test_architecture.py tarafindan denetlenir.
+name: Alpaca pilot quality
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pilot:
+    # Yalnizca main: baska bir dalda degistirilmis kod anahtarlara
+    # erisemesin.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    # 12 sembol x 5 seans dakikalik veri + kilitli kurulum. Olagan butce
+    # tahmini, mutlak ust sinir degil (bkz. alpaca-sdk-check.yml).
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Kilitli calisma zamani bagimliliklarini kur
+        run: |
+          python -m pip install -r requirements.lock
+          python -m pip check
+      # Secret'lar YALNIZCA bu adimda. Tanim yolu kodda sabit
+      # (pilot_quality.PILOT_SPEC); workflow'dan sembol, tarih ya da yol
+      # alinmaz. Arac ham veriyi kendisi de siler; asagidaki temizlik
+      # ikinci hattir.
+      - name: Pilot verisini indir, kaliteyi olc, ham veriyi sil
+        env:
+          ALPACA_PAPER_API_KEY: ${{ secrets.ALPACA_PAPER_API_KEY }}
+          ALPACA_PAPER_SECRET_KEY: ${{ secrets.ALPACA_PAPER_SECRET_KEY }}
+        run: >-
+          PYTHONPATH=src python -m tlab.pilot_quality
+          --workdir "$RUNNER_TEMP/pilot-data"
+          --out "$RUNNER_TEMP/pilot-summary.json"
+      - name: Kalite ozetini is ozetine yaz
+        run: |
+          {
+            echo '### Pilot kalite ozeti'
+            echo '```json'
+            cat "$RUNNER_TEMP/pilot-summary.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      # Yuklenen TEK dosya: kalite ozeti.
+      - name: Kalite ozetini yukle
+        uses: actions/upload-artifact@v4
+        with:
+          name: pilot-quality-summary
+          path: ${{ runner.temp }}/pilot-summary.json
+          if-no-files-found: error
+          retention-days: 30
+      # Basari ya da hata: ham veri dizini kaldirilir ve yoklugu
+      # dogrulanir. Bu, depolama ortaminda adli olarak geri getirilemez
+      # silme iddiasi DEGILDIR (#25 sart 6).
+      - name: Ham veriyi temizle
+        if: always()
+        run: |
+          rm -rf "$RUNNER_TEMP/pilot-data"
+          test ! -e "$RUNNER_TEMP/pilot-data"

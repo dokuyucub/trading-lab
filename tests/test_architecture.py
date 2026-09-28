@@ -17,6 +17,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -98,6 +99,9 @@ CLOCK_ALLOWLIST = {
     # `run()` zamani disaridan alir ve testler enjekte eder; yalnizca
     # CLI girisi duvar saatine bakar.
     "sdk_probe.py",
+    # Pilot kalite araci: indirme anini kaydeder; karar yolu degil ve
+    # P&L katmanlarini ice aktaramaz (test_the_pilot_cannot_see_performance).
+    "pilot_quality.py",
 }
 
 
@@ -909,6 +913,16 @@ def test_the_dataset_split_cannot_see_performance() -> None:
     )
 
 
+def test_the_pilot_cannot_see_performance() -> None:
+    """Pilot yalnizca veri kalitesini olcer; P&L hesaplayabilecek hicbir
+    katmani ice aktaramaz (AGENTS §11, #25 sart 3)."""
+    path = SRC / "pilot_quality.py"
+    offenders = sorted(
+        module for module in imports_of(path) if module.startswith(PERFORMANCE_PACKAGES)
+    )
+    assert not offenders, "Pilot araci performans katmani ice aktariyor: " + ", ".join(offenders)
+
+
 # --------------------------------------------------------------------------
 # CI tetikleyici sozlesmesi
 # --------------------------------------------------------------------------
@@ -936,3 +950,65 @@ def test_every_pull_request_passes_the_same_quality_gate() -> None:
     commands = " ".join(step.get("run", "") for step in quality["steps"])
     for gate in ("ruff check", "ruff format --check", "mypy", "pytest --cov"):
         assert gate in commands, f"quality kapisindan dusmus: {gate}"
+
+
+# --------------------------------------------------------------------------
+# Pilot kalite workflow sozlesmesi (AGENTS §11, #25)
+# --------------------------------------------------------------------------
+
+
+def _workflow(name: str) -> dict[Any, Any]:
+    loaded: dict[Any, Any] = yaml.safe_load(
+        (REPO / ".github" / "workflows" / name).read_text("utf-8")
+    )
+    return loaded
+
+
+def test_the_pilot_workflow_keeps_raw_data_and_secrets_contained() -> None:
+    """Ham veri disari cikmaz, secret'lar tek adimda, tetik yalnizca elle.
+
+    Her madde #25'in bir kabul sartina karsilik geliyor; biri gevserse
+    bu test kirilir.
+    """
+    workflow = _workflow("alpaca-pilot-quality.yml")
+    # PyYAML (YAML 1.1) `on` anahtarini True olarak okur.
+    triggers: dict[str, Any] = workflow["on"] if "on" in workflow else workflow[True]
+    assert set(triggers) == {"workflow_dispatch"}
+    assert triggers["workflow_dispatch"] is None, "workflow girdi (input) almamali"
+    assert workflow["permissions"] == {"contents": "read"}
+
+    (job,) = workflow["jobs"].values()
+    assert job["if"] == "github.ref == 'refs/heads/main'"
+    steps = job["steps"]
+
+    checkout = next(
+        step for step in steps if str(step.get("uses", "")).startswith("actions/checkout")
+    )
+    assert checkout["with"]["persist-credentials"] is False
+
+    with_secrets = [step for step in steps if "secrets." in yaml.safe_dump(step)]
+    assert len(with_secrets) == 1, "secret'lar yalnizca indirme adiminda olmali"
+    assert "tlab.pilot_quality" in with_secrets[0]["run"]
+    assert "--spec" not in with_secrets[0]["run"], "tanim yolu kodda sabit olmali"
+
+    uploads = [step for step in steps if str(step.get("uses", "")).startswith("actions/upload")]
+    assert len(uploads) == 1
+    assert uploads[0]["with"]["path"] == "${{ runner.temp }}/pilot-summary.json"
+    assert uploads[0]["with"]["if-no-files-found"] == "error"
+    assert not any(str(step.get("uses", "")).startswith("actions/cache") for step in steps)
+
+    # Secret'lar workflow ya da job duzeyinde de olamaz: orada tanimlanan
+    # env her adima gecer (Codex #27 notu). Ayni sekilde hicbir adim
+    # hatayi yutmaz, ve yalnizca temizlik kosullu calisir.
+    outside_steps = {key: value for key, value in workflow.items() if key != "jobs"}
+    outside_steps["job"] = {key: value for key, value in job.items() if key != "steps"}
+    assert "secrets." not in yaml.safe_dump(outside_steps)
+    assert "env" not in workflow and "env" not in job
+    assert "continue-on-error" not in job
+    assert not [step.get("name") for step in steps if "continue-on-error" in step]
+    assert [step.get("name") for step in steps if "if" in step] == [steps[-1].get("name")]
+
+    cleanup = steps[-1]
+    assert cleanup["if"] == "always()"
+    assert 'rm -rf "$RUNNER_TEMP/pilot-data"' in cleanup["run"]
+    assert 'test ! -e "$RUNNER_TEMP/pilot-data"' in cleanup["run"]

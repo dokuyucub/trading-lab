@@ -540,6 +540,11 @@ def cmd_dataset_build(args: argparse.Namespace) -> int:
     ortam degiskenlerinden okunur (problarla ayni kaynak). `paper=True`
     sabit. Cikti yalnizca sayilar ve hash'ler: fiyat, P&L ya da holdout
     gunleri basilmaz.
+
+    YEREL ARAC - genel bir kosuya (Actions) BAGLANAMAZ: hata yolunda
+    `main()` istisna metnini basar ve adaptorler SDK hatasini mesaja
+    koyar; yani bir yanit govdesi log'a gecebilir. Actions icin
+    `tlab.pilot_quality` var (sabit tani metni, ham veri silinir).
     """
     import os
 
