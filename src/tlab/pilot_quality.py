@@ -31,10 +31,12 @@ import json
 import os
 import shutil
 from collections import Counter
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from tlab.core.calendar import TradingSession
+from tlab.data.quality_summary import summarize_symbols
 from tlab.sdk_probe import classify
 
 if TYPE_CHECKING:
@@ -102,21 +104,6 @@ POLICY_KEYS = frozenset(
 `QualityPolicy`'ye alan eklenirse test bu kumenin bilincli
 guncellenmesini ister."""
 
-REASON_CATEGORIES = {
-    "seans ici bar yok": "seans_ici_bar_yok",
-    "acilis penceresinde": "acilis_penceresi_eksik",
-    "kapanistan onceki": "kapanis_penceresinde_bar_yok",
-    "eksik dakika orani": "eksik_dakika_orani",
-}
-"""Gerekce metni -> sabit kategori. Ozet gerekce METNINI tasimaz."""
-
-
-def _category(reason: str) -> str:
-    for prefix, category in REASON_CATEGORIES.items():
-        if reason.startswith(prefix):
-            return category
-    return "diger"
-
 
 def pilot_summary(manifest: dict[str, Any], manifest_sha256: str) -> dict[str, Any]:
     """Manifestten toplulastirilmis kalite ozeti - YALNIZCA acik alanlar.
@@ -130,38 +117,37 @@ def pilot_summary(manifest: dict[str, Any], manifest_sha256: str) -> dict[str, A
     hours = manifest["sessions"]["hours"]
     split_days = [*manifest["split"]["baseline"], *manifest["split"]["holdout"]]
 
+    # Kapsam ACIK: pilot bolmenin iki tarafini da olcer (pilot P&L
+    # uretemez). Toplama ortak modulde; kapsami burada biz veriyoruz.
+    scope = [
+        TradingSession(
+            day=date.fromisoformat(day),
+            open=datetime.fromisoformat(hours[day][0]),
+            close=datetime.fromisoformat(hours[day][1]),
+        )
+        for day in split_days
+    ]
+    quality_by_symbol = summarize_symbols(
+        per_session,
+        scope,
+        manifest["symbols"],
+        max_missing_fraction=float(quality["policy"]["max_missing_fraction"]),
+    )
     symbols: dict[str, dict[str, Any]] = {}
     reasons: Counter[str] = Counter()
-    for symbol in manifest["symbols"]:
-        with_bars = without_bars = open_incomplete = no_close = ineligible = 0
-        missing = expected = max_open_missing = 0
-        for day in split_days:
-            metrics = per_session[day]["symbols"][symbol]
-            opened, closed = (datetime.fromisoformat(value) for value in hours[day])
-            expected += int((closed - opened) / timedelta(minutes=1))
-            if metrics["bars"]:
-                with_bars += 1
-            else:
-                without_bars += 1
-            missing += int(metrics.get("missing_minutes", 0))
-            open_missing = int(metrics.get("missing_open_window", 0))
-            max_open_missing = max(max_open_missing, open_missing)
-            open_incomplete += int(open_missing > 0)
-            no_close += int(metrics.get("close_window_bars", 1) == 0)
-            if metrics["reasons"]:
-                ineligible += 1
-                reasons.update(_category(reason) for reason in metrics["reasons"])
+    for symbol, stats in quality_by_symbol.items():
+        reasons.update({key: value for key, value in stats.reason_counts.items() if value})
         symbols[symbol] = {
-            "sessions_with_bars": with_bars,
-            "sessions_without_bars": without_bars,
-            "missing_minutes": missing,
-            "expected_minutes": expected,
-            "missing_fraction": round(missing / expected, 6) if expected else None,
-            "sessions_open_window_incomplete": open_incomplete,
-            "max_missing_open_window": max_open_missing,
-            "sessions_without_close_bar": no_close,
+            "sessions_with_bars": stats.sessions_with_bars,
+            "sessions_without_bars": stats.sessions_without_bars,
+            "missing_minutes": stats.missing_minutes,
+            "expected_minutes": stats.expected_minutes,
+            "missing_fraction": stats.missing_fraction,
+            "sessions_open_window_incomplete": stats.sessions_open_window_incomplete,
+            "max_missing_open_window": stats.max_missing_open_window,
+            "sessions_without_close_bar": stats.sessions_without_close_bar,
             "duplicate_timestamps": int(quality["symbols"][symbol]["duplicate_timestamps"]),
-            "ineligible_sessions": ineligible,
+            "ineligible_sessions": stats.ineligible_sessions,
         }
 
     eligible = sum(1 for day in split_days if per_session[day]["eligible"])
