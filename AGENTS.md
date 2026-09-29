@@ -600,6 +600,87 @@ FAIL kalite: 10 baseline seansi uygunsuz; rapor yazilmadi
 - Kalite nedenleri bilinmeden SIP, yeni dönem, başka evren ya da tolerans
   hakkında karar verilmez.
 
+### Doğrulanan — 2026-09-29: baseline kalite teşhisi (tek koşu)
+
+| Ne | Kanıt | Kapsam |
+|---|---|---|
+| Baseline kalite teşhisi gerçek ortamda bir kez koştu ve özet yayımlandı | Koşu `36502365666`, iş `109195931115`, main `44ca3bb`, `run_attempt` 1; kullanıcı `main` CI'sı başarıyla bittikten sonra bir kez tetikledi | `diag-orb-baseline-2026q3-u11-quality-1` (§11.2). Yalnızca baseline, P&L yok, emir yok, holdout barı yok. |
+| Özet artefaktının içeriği | Artefakt `11004953510`, 1489 bayt, ZIP SHA256 `5ae3e3e0ab21e3a3bb70d3b6cfe7fadebe506c90f4b200c863fb43711dd7ea98`; tek üye `baseline-quality-diagnostic.json` | Codex indirip açtı (#17). Kontrol edilenler: alan kümeleri, 11 sembol, kaynak hash'i `369f4e7f…c027dc505`, eski run/head/manifest öneki, producer, IEX/1Min/raw, politika ve notlar. Ham, günlük, hesap ya da holdout kalitesi alanı yok. Claude artefaktı açamadı (oturum ağ politikası, 403); Claude'un denetimi log'a dayanır. |
+
+Adımlar: kurulum success (16 sn), teşhis success (10 sn; secret yalnızca bu
+adımda, maskeli), özet yükleme success.
+
+Aracın bütün çıktısı, olduğu gibi (#17):
+
+```
+OK teshis diag-orb-baseline-2026q3-u11-quality-1 (kaynak orb-baseline-2026q3-u11)
+seans: takvim 63, tamamlanmis 63, baseline 50, holdout 13
+baseline: uygun 40, uygunsuz 10 (seans birlesimi); uygunsuz sembol-seans 11
+  SPY    uygunsuz  0 | gerekce: bar yok 0, acilis 0, kapanis 0, oran 0, diger 0 | eksik 0.02%, tekrar 0
+  QQQ    uygunsuz  1 | gerekce: bar yok 0, acilis 1, kapanis 0, oran 0, diger 0 | eksik 1.16%, tekrar 0
+  IWM    uygunsuz  0 | gerekce: bar yok 0, acilis 0, kapanis 0, oran 0, diger 0 | eksik 0.66%, tekrar 0
+  AAPL   uygunsuz  0 | gerekce: bar yok 0, acilis 0, kapanis 0, oran 0, diger 0 | eksik 0.01%, tekrar 0
+  MSFT   uygunsuz  0 | gerekce: bar yok 0, acilis 0, kapanis 0, oran 0, diger 0 | eksik 0.23%, tekrar 0
+  NVDA   uygunsuz  0 | gerekce: bar yok 0, acilis 0, kapanis 0, oran 0, diger 0 | eksik 0.01%, tekrar 0
+  AMD    uygunsuz 10 | gerekce: bar yok 0, acilis 0, kapanis 0, oran 10, diger 0 | eksik 5.48%, tekrar 0
+  AMZN   uygunsuz  0 | gerekce: bar yok 0, acilis 0, kapanis 0, oran 0, diger 0 | eksik 0.33%, tekrar 0
+  GOOGL  uygunsuz  0 | gerekce: bar yok 0, acilis 0, kapanis 0, oran 0, diger 0 | eksik 0.07%, tekrar 0
+  META   uygunsuz  0 | gerekce: bar yok 0, acilis 0, kapanis 0, oran 0, diger 0 | eksik 0.55%, tekrar 0
+  TSLA   uygunsuz  0 | gerekce: bar yok 0, acilis 0, kapanis 0, oran 0, diger 0 | eksik 0.07%, tekrar 0
+yayginlik (uygunsuz seans basina uygunsuz sembol): 1 sembol: 9, 2 sembol: 1
+not: sembol ve gerekce toplamlari ortusur; toplanarak seans birlesimi aciklanmaz
+sonuc: some_ineligible
+```
+
+**Bu koşunun söylediği ve söylemediği:**
+
+- Söylediği:
+  - Sayımlar tutarlı: 40 uygun + 10 uygunsuz = 50. Histogram 9×1 + 2×1 =
+    11 sembol-seans, birleşim 10.
+  - **Uygunsuz 10 seansın hepsi bir AMD seansı.** Bu bir çıkarım değil,
+    sayımların sonucu: birleşim 10 ve AMD'nin 10 uygunsuz seansı var.
+  - AMD'nin tek gerekçesi eksik dakika oranı: 10 seansta düzenli seans
+    dakikalarının %10'undan fazlası için IEX barı yok. Toplam oran
+    0,054821. Açılış ya da kapanış eksiği yok.
+  - QQQ: bir seansta açılış penceresinde **tam 1 dakika** eksik
+    (`max_missing_open_window = 1`). Bu seans AMD'nin 10 gününden biriyle
+    çakışıyor.
+  - Diğer 9 sembolde uygunsuzluk yok.
+  - Bu kalite eşiklerine göre aynı seansta en fazla 2 sembol uygunsuz.
+  - Mevcut politikayla yalnızca AMD'yi çıkarmak ölçümü geçirmezdi (QQQ'nun
+    tek seansı kalırdı).
+- Söylemediği:
+  - **Stratejinin performansı.** Hesaplanmadı.
+  - **Başarısız ana koşuyla aynı bayt ya da aynı günler.** Sayı yine 10,
+    ama yeni bir erişim; kanıtlanamaz.
+  - **Neden.** "IEX'te o dakika bar yok" bir gözlemdir; nedeni (o dakikada
+    IEX'te işlem olmaması ya da sağlayıcı tarafı) bu teşhisten çıkmaz.
+    Eşiği geçmeyen ortak eksikler olabilir; histogram sağlayıcı ya da
+    altyapı kaynaklı bir nedeni dışlamaz.
+  - **Pilotlarla farkın nedeni.** Pilotlarda AMD'nin toplam eksiği %4,21 ve
+    %4,66'ydı, uygunsuz seansı 0/24'tü; bu dönemde 10/50.
+
+**Karar (Codex, #17):**
+
+- **D:** `orb-baseline-2026q3-u11` üzerindeki IEX ana ölçüm denemesi kalite
+  nedeniyle **durmuş olarak kapatılır.** Tanım ve geçmiş değişmez.
+  - A ya da B yok: AMD ya da QQQ çıkarılmaz, seans dışlanmaz, eşik
+    gevşetilmez.
+  - Bu tanım için P&L onayı tüketilmiştir.
+- **Proje durmuyor. Sınırlı C:** ayrı kimlikli, P&L'siz bir tarihsel SIP
+  erişimi ve kalite karşılaştırması görevi tasarlanır. Kapsam: aynı 11
+  sembol, aynı baseline kapsamı ve aynı politika.
+  - Bu yeni bir performans veri kümesi değildir; eski tanımın feed'ini de
+    değiştirmez.
+  - SIP üzerinden de holdout'a erişilmez. Örtüşmezlik testi gevşetilmez.
+  - Tarihsel SIP erişimi hesabımızda **doğrulanmadı**. Erişim reddinde
+    görev açık sonuçla durur; IEX'e sessiz dönüş ya da ücretli plana geçiş
+    yoktur. Abonelik ya da ücret kararı yok.
+  - Önce tasarım, sonra incelenen kod, sonra tek koşu.
+- Bu karar, ölçüm dönemi kalite gözleminden **sonra** alınmış bir araştırma
+  kararı olarak kayıtlıdır. İleride yapılacak bir SIP P&L değerlendirmesine
+  otomatik onay değildir.
+
 ### Hâlâ doğrulanmayan
 
 - **Emir yaşam döngüsü.** Hiç emir gönderilmedi. Dolum, kayma, kısmi dolum,
@@ -608,9 +689,10 @@ FAIL kalite: 10 baseline seansi uygunsuz; rapor yazilmadi
   başlatma/mutabakat, çift emir engeli, gün sonu kapatma gerçek ortamda
   sınanmadı.
 - **Stratejinin kârlılığı.** ORB gerçek piyasa verisiyle bir kez bile
-  backtest edilmedi: ilk ana ölçüm kalite kapısında, P&L'den önce durdu
-  (yukarıda). Sistemin sağlam olması, stratejinin kazandırdığı anlamına
-  gelmez; bunlar ayrı iki sorudur ve ikincisine henüz dokunulmadı.
+  backtest edilmedi: ilk ana ölçüm kalite kapısında, P&L'den önce durdu ve
+  IEX üzerindeki bu tanım kalite nedeniyle kapatıldı (yukarıda). Sistemin
+  sağlam olması, stratejinin kazandırdığı anlamına gelmez; bunlar ayrı iki
+  sorudur ve ikincisine henüz dokunulmadı.
 
 Bu üçü tamamlanmadan hiçbir yerde "sistem hazır" yazılmamalı.
 
@@ -831,3 +913,9 @@ baseline için ayrı bir kalite teşhisine geliştirme onayı verdi. Sözleşme:
 Teşhis **bir kez** çalışır. Sonucu performans onayını kendiliğinden yeniden
 açmaz; bir sonraki adım #17'de ayrı karardır. Gerçek teşhis, kod PR'ının son
 head'i bağımsız incelenip birleştikten sonra kullanıcıdan tek tıkla istenir.
+
+**Sonuç (2026-09-29):** teşhis bir kez koştu (run `36502365666`, §7).
+Uygunsuz seansların hepsi AMD'de; QQQ'da bir seansta tam 1 dakikalık açılış
+eksiği var. Codex kararıyla IEX ana ölçüm denemesi kapatıldı; sonraki adım,
+ayrı kimlikli ve P&L'siz bir tarihsel SIP kalite karşılaştırmasının
+tasarımıdır. Bu teşhis tekrar koşulmaz.
