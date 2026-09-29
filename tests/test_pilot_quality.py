@@ -390,3 +390,89 @@ def test_a_dropped_connection_is_a_network_diagnosis(
     assert "ag, TLS veya zaman asimi hatasi" in output
     assert not _leaked(output)
     assert not (tmp_path / "raw").exists()
+
+
+# --------------------------------------------------------------------------
+# Log kapali (#17): arac boyunca `logging` kapatilir
+#
+# Bugun pilotun yolunda loglayan bir modul yok; urllib3 ve requests kendi
+# NullHandler'larini takar, yani log yapilandirmasi YOKKEN hicbir kayit
+# ekrana dusmez. Guvence yapilandirma VARKEN de gecerli olmali: pytest'in
+# log yakalamasi tam da o durumu kurar.
+# --------------------------------------------------------------------------
+
+
+def _address_warnings(records: list[logging.LogRecord]) -> list[str]:
+    return [
+        record.getMessage()
+        for record in records
+        if record.levelno >= logging.WARNING and "/v2/stocks/bars" in record.getMessage()
+    ]
+
+
+def test_the_broken_header_really_logs_the_request_address(
+    stub: tuple[str, StubState], caplog: pytest.LogCaptureFixture
+) -> None:
+    """KONTROL: senaryo gercek. Arac DISINDA ayni istek, adresi tarih ve
+    sembolle WARNING duzeyinde loglar. Bu test duserse asagidaki log
+    testi bos yere yesil kalir (ornegin urllib3 bu uyariyi kaldirdi)."""
+    from tlab.core.types import Timeframe
+    from tlab.data.market import AlpacaMarketData
+
+    url, state = stub
+    _market(state)
+    state.broken_header_paths.add("/v2/stocks/bars")
+    market = AlpacaMarketData(MARKERS["api_key"], MARKERS["secret"], base_url=url)
+    start = datetime.fromisoformat(f"{DAYS[0]}T14:30:00+00:00")
+    with caplog.at_level(logging.DEBUG):
+        bars = market.bars("SPY", Timeframe.M1, start=start)
+
+    assert bars, "bozuk baslik govdeyi okutmadi; senaryo gecersiz"
+    warnings = _address_warnings(caplog.records)
+    assert warnings, "bozuk baslik adresli bir WARNING uretmedi"
+    assert "symbols=SPY" in warnings[0]
+    assert DAYS[0] in warnings[0]
+
+
+@pytest.mark.parametrize("fails", [False, True], ids=["basari", "indirme-hatasi"])
+def test_no_log_record_is_created_while_the_tool_runs(
+    stub: tuple[str, StubState],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+    fails: bool,
+) -> None:
+    """Ayni senaryo ARACIN ICINDE: hicbir duzeyde kayit olusmaz; istek
+    adresi ve tarih hicbir ciktida yok."""
+    _, state = stub
+    _market(state)
+    state.broken_header_paths.add("/v2/stocks/bars")
+    if fails:
+        state.fail("/v2/stocks/bars", 500, times=None)
+
+    with caplog.at_level(logging.DEBUG):
+        assert _run(stub, tmp_path) == (1 if fails else 0)
+
+    assert caplog.records == [], [record.getMessage()[:80] for record in caplog.records]
+    output = _all_output(capsys, caplog, tmp_path)
+    assert "/v2/stocks/bars" not in output
+    for day in DAYS:
+        assert day not in output, f"cikti bir gun tasiyor: {day}"
+
+
+@pytest.mark.parametrize("fails", [False, True], ids=["basari", "indirme-hatasi"])
+@pytest.mark.parametrize("previous", [logging.NOTSET, logging.INFO], ids=["acik", "info-kapali"])
+def test_the_callers_logging_setting_is_restored(
+    stub: tuple[str, StubState], tmp_path: Path, fails: bool, previous: int
+) -> None:
+    """Kapatma aracla sinirli: cikista cagiranin ayari - ne ise - geri gelir."""
+    _, state = stub
+    _market(state)
+    if fails:
+        state.fail("/v2/stocks/bars", 500, times=None)
+    logging.disable(previous)
+    try:
+        assert _run(stub, tmp_path) == (1 if fails else 0)
+        assert logging.root.manager.disable == previous
+    finally:
+        logging.disable(logging.NOTSET)

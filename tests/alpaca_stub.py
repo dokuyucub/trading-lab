@@ -270,6 +270,11 @@ class StubState:
             {"date": "2026-11-27", "open": "09:30", "close": "13:00"},  # yarim gun
         ]
         self.quotes: dict[str, Any] = QUOTES
+        self.broken_header_paths: set[str] = set()
+        """Bu yollarin yanitlari BOZUK bir baslik satiri tasir (iki nokta
+        ustu yok). Govde ve durum kodu normal kalir; urllib3 yaniti okur
+        ama "Failed to parse headers (url=...)" uyarisini TAM ISTEK
+        ADRESIYLE WARNING duzeyinde loglar. Log sizintisi testleri icin."""
 
     def fail(
         self,
@@ -320,6 +325,9 @@ def _handler(state: StubState) -> type[BaseHTTPRequestHandler]:
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(raw)))
+            if urlparse(self.path).path in state.broken_header_paths:
+                # Gercek basliklardan SONRA: onlar yine okunur.
+                self.send_header("X-Tlab-Broken", "1\r\nbaslik satiri iki nokta ustu olmadan")
             self.end_headers()
             self.wfile.write(raw)
 

@@ -4,7 +4,7 @@ AGENTS §11 / #25. Bu arac bir soruya cevap verir: ucretsiz IEX
 verisi, ana olcumun kalite politikasini karsilayacak kadar tam mi?
 Esikler bu olcume bakilarak - ve P&L gorulmeden - sabitlenecek.
 
-Uc kati kural:
+Dort kati kural:
 
   * P&L YOK. Yalnizca `status: pilot` bir tanimla calisir; strateji,
     backtest veya ogrenme katmanini ice aktarmaz (mimari test).
@@ -15,6 +15,15 @@ Uc kati kural:
   * HATA METNI DISARI CIKMAZ. Istisna metni SDK'nin yanit govdesini
     tasiyabilir; cikti yalnizca sabit tani metni ve istisna SINIF
     adidir (`sdk_probe.classify`, metne degil tipe bakar).
+  * LOG KAPALI. Arac boyunca `logging` kapatilir (`job_io.silenced`)
+    ve cikista cagiranin ayari geri gelir; ana olcum ve teshis
+    araclariyla ayni. Bu, dogrulanmis bir sizintinin duzeltmesi DEGIL:
+    kaynagina bakilan yolda (tlab.data, alpaca-py REST istemcisi,
+    urllib3/requests - son ikisi kendi NullHandler'larini takar) bilinen
+    bir sizinti yok. Guvence, ileride bir log yapilandirmasi ya da
+    bagimlilik degisikligi olsa da cikti siniri ayni kalsin diye YAPISAL.
+    (urllib3 bozuk yanit basliginda tam istek adresini - tarih ve
+    sembol - WARNING'de loglar; test bunu yapilandirilmis logla dener.)
 
 Silme, depolama ortaminda adli olarak geri getirilemez silme iddiasi
 DEGILDIR (#25 sart 6).
@@ -37,6 +46,7 @@ from typing import TYPE_CHECKING, Any
 
 from tlab.core.calendar import TradingSession
 from tlab.data.quality_summary import summarize_symbols
+from tlab.job_io import silenced
 from tlab.sdk_probe import classify
 
 if TYPE_CHECKING:
@@ -219,8 +229,24 @@ def run(
     """Indir, olc, ozeti yaz, HAM VERIYI SIL. Cikti yalnizca sabit satirlar.
 
     `spec_path` ve `base_url` YALNIZCA testler icin: `main()` ikisini de
-    gecirmez ve ortamdan da okumaz.
+    gecirmez ve ortamdan da okumaz. Arac boyunca `logging` kapalidir.
     """
+    with silenced():
+        return _run(
+            key, secret, now, workdir=workdir, out=out, spec_path=spec_path, base_url=base_url
+        )
+
+
+def _run(
+    key: str,
+    secret: str,
+    now: datetime,
+    *,
+    workdir: Path,
+    out: Path,
+    spec_path: Path,
+    base_url: str | None,
+) -> int:
     key, secret = key.strip(), secret.strip()
     if not key or not secret:
         print("FAIL yapilandirma: paper anahtar ve secret gerekli")

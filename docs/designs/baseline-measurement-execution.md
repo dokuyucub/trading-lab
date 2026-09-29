@@ -115,9 +115,20 @@ dizini yüklenmez.
 **Log (PR b ile eklendi):**
 
 - Her iki adım boyunca `logging` tamamen kapatılır ve çıkışta eski
-  haline döner. Motor her işlemi fiyat ve P&L ile INFO düzeyinde loglar.
-  urllib3 yeniden denemeleri istek adresini WARNING düzeyinde loglar.
-  Varsayılan log düzeyine güvenmek yapısal bir güvence değildir.
+  haline döner. Neden:
+  - Oturum yürütücüsü (`tlab.runner`) her işlemi fiyat ve P&L ile INFO
+    düzeyinde, günlük zarar kesicisini yüzdesiyle WARNING düzeyinde
+    loglar. Bu loglayıcının `NullHandler`'ı yok: WARNING kaydı, log
+    yapılandırması olmasa da stderr'e düşer.
+  - urllib3 istek adresini (tarih ve sembol) DEBUG düzeyinde, bozuk
+    yanıt başlığında WARNING düzeyinde kaydeder. Kendi `NullHandler`'ı
+    olduğu için bunlar ancak log yapılandırılırsa görünür.
+  - Varsayılan log düzeyine ya da yapılandırmanın yokluğuna güvenmek
+    yapısal bir güvence değildir.
+- *Düzeltme (2026-09-29, #17):* bu maddenin ilk hâli "urllib3 yeniden
+  denemeleri istek adresini WARNING düzeyinde loglar" diyordu. Mevcut
+  yapılandırmada urllib3 düzeyinde yeniden deneme yok (requests
+  varsayılanı 0), o uyarı oluşmaz. Kapatma kararı değişmedi.
 - Log'a yalnızca aracın kendi sabit satırları gider: sayımlar, hash
   önekleri ve hata kategorileri. **Performans sayısı log'a basılmaz**;
   sonuç yalnızca rapor artefaktındadır.
