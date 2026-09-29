@@ -919,3 +919,49 @@ Uygunsuz seansların hepsi AMD'de; QQQ'da bir seansta tam 1 dakikalık açılı�
 eksiği var. Codex kararıyla IEX ana ölçüm denemesi kapatıldı; sonraki adım,
 ayrı kimlikli ve P&L'siz bir tarihsel SIP kalite karşılaştırmasının
 tasarımıdır. Bu teşhis tekrar koşulmaz.
+
+### 11.3 Tarihsel SIP kalite karşılaştırması — #17, 2026-09-29
+
+IEX ana ölçüm denemesi kalite nedeniyle kapatıldı (§7, §11.2). Codex,
+ayrı kimlikli ve P&L'siz bir tarihsel SIP erişim + kalite karşılaştırmasına
+geliştirme onayı verdi. Bu karar, ölçüm dönemi kalite gözleminden **sonra**
+alınmış bir araştırma kararıdır; gelecekteki bir SIP P&L değerlendirmesine
+otomatik onay değildir. Sözleşme: `docs/designs/baseline-feed-comparison.md`.
+
+**Kararlar:**
+
+- Yeni veri kümesi yok: `config/datasets/` değişmez, örtüşmezlik ve "tek ana
+  tanım" testleri gevşemez. Dondurulmuş `SIP_TASK`
+  (`feedcmp-orb-baseline-2026q3-u11-sip-1`) ana tanımı hash'iyle ve
+  tanımdaki feed'le (`iex`) kilitler.
+- SIP, tanımda değil görevde yazılı açık bir override'dır. Kaynak hash'i
+  override'ı kapsamaz; provenance, kaynak hash'i ile görevdeki override
+  birliktedir. Görev hiç IEX isteği yapmaz; SIP reddedilirse başka bir
+  feed'e dönülmez; ücretli plana geçiş yoktur.
+- Kapsam, IEX teşhisiyle aynıdır: aynı 11 sembol, aynı 50 baseline seansı,
+  aynı kalite politikası. Holdout barı hiçbir feed'den istenmez. Kilitler,
+  bar toplama ve kalite toplaması teşhisle ortaktır (ikinci algoritma yok);
+  IEX teşhisinin kimliği, alanları, notları ve çıktısı değişmez.
+- Erişim kapısı ilk SIP isteğidir. Bar isteğinde HTTP 401/403 →
+  `FAIL erisim` (gerçek kodla); kesin neden belirlenmez ve başarılı paper
+  takvimi 403'ün SIP aboneliğinden olduğunu kanıtlamaz. Erişim reddinde
+  artefakt yoktur. Ağ, diğer HTTP ve SDK dönüşüm hataları `FAIL indirme`.
+- 200 ama boş yanıt erişim reddi değildir, kalite ölçüsüdür. Özetteki
+  erişim alanı yalnız alınan yanıtları söyler; hepsi boşsa "kullanılabilir
+  bar doğrulandı" sonucu çıkmaz. 11 sembolün hepsi yanıtlanmadan özet yoktur.
+- Karşılaştırma araçta değil, incelemede yapılır: IEX özeti (§7, artefakt
+  `11004953510`) ile SIP özeti yan yana konur. İki gözlem farklı erişim
+  zamanlarına aittir; eş zamanlı değil, neden kanıtı değil.
+
+**Yeniden koşu:** §11.1'deki istisna bu göreve **devredilmez**. Hangi adımda
+olursa olsun her başarısızlık bir olaydır: run, job, head, attempt ve hata
+kategorisi önce #17'ye yazılır; her yeniden koşu ayrı karardır. SDK taşıma
+katmanının mevcut sınırlı HTTP tekrarı dışında yeni döngü ya da otomatik
+tekrar yoktur.
+
+**Kapsam dışı:** P&L, holdout, IEX'in yeniden indirilmesi, abonelik ya da
+ücret kararı, evren/dönem/eşik değişikliği, emir. Tarihsel SIP'in başarısı
+canlı IEX/SIP eşdeğerliğini ya da ORB'nin canlıya hazırlığını göstermez.
+
+Gerçek koşu, kod PR'ının son head'i bağımsız incelenip birleştikten sonra
+kullanıcıdan tek tıkla istenir.
