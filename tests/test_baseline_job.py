@@ -34,6 +34,7 @@ from tlab.backtest.engine import CarriedPositionError
 from tlab.config import load_config
 from tlab.core.types import Bar
 from tlab.data.dataset import DatasetSpec, build_dataset, manifest_sha256
+from tlab.job_io import write_new
 
 REPO = Path(__file__).resolve().parents[1]
 NOW = datetime(2026, 2, 1, 12, 0, tzinfo=UTC)
@@ -522,9 +523,9 @@ def test_logging_is_restored_after_each_step(tmp_path: Path) -> None:
 
 def test_the_writer_is_atomic_and_never_overwrites(tmp_path: Path) -> None:
     target = tmp_path / "report.json"
-    baseline_job._write_new(target, b"ilk")
+    write_new(target, b"ilk")
     with pytest.raises(FileExistsError):
-        baseline_job._write_new(target, b"ikinci")
+        write_new(target, b"ikinci")
     assert target.read_bytes() == b"ilk"
     assert [path.name for path in tmp_path.iterdir()] == ["report.json"], "gecici dosya kaldi"
 

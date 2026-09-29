@@ -28,16 +28,16 @@ Temizlik, fiziksel olarak geri getirilemez silme garantisi degildir.
 from __future__ import annotations
 
 import argparse
-import contextlib
-import logging
 import os
 import shutil
 import stat
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
+from tlab.job_io import silenced as _silenced
+from tlab.job_io import write_new as _write_new
 from tlab.sdk_probe import classify
 
 MAIN_SPEC = Path("config/datasets/orb-baseline-2026q3-u11.yaml")
@@ -58,21 +58,6 @@ SECRET_ENV_PREFIXES = ("ALPACA_", "APCA_")
 # --------------------------------------------------------------------------
 
 
-@contextlib.contextmanager
-def _silenced() -> Iterator[None]:
-    """Adim boyunca BUTUN log kayitlarini kapatir; cikista eski haline doner.
-
-    Ciktinin tek kaynagi aracin kendi sabit `print` satirlari olur.
-    Kutuphane ya da motor logu - hangi duzeyde olursa olsun - gecemez.
-    """
-    previous = logging.root.manager.disable
-    logging.disable(logging.CRITICAL)
-    try:
-        yield
-    finally:
-        logging.disable(previous)
-
-
 def _inside(path: Path, directory: Path) -> bool:
     """`path`, `directory`'nin kendisi ya da altinda mi (symlink cozulerek)."""
     resolved, root = path.resolve(), directory.resolve()
@@ -87,30 +72,6 @@ def _producer(env: Mapping[str, str]) -> dict[str, str]:
         "workflow": env.get("GITHUB_WORKFLOW", "local"),
         "commit": env.get("GITHUB_SHA") or current_git_sha(Path.cwd()) or "unknown",
     }
-
-
-def _write_new(path: Path, payload: bytes) -> None:
-    """`path`'e ATOMIK ve USTUNE YAZMADAN yazar.
-
-    Once ayni dizinde O_EXCL ile gecici dosya, sonra `os.link` ile hedef:
-    hedef varsa link basarisiz olur ve hicbir sey ezilmez. Hangi yoldan
-    cikilirsa cikilsin gecici dosya silinir; yarim bir hedef olusmaz.
-    """
-    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-    handle = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        try:
-            view = memoryview(payload)
-            while view:
-                written = os.write(handle, view)
-                view = view[written:]
-            os.fsync(handle)
-        finally:
-            os.close(handle)
-        os.link(temporary, path)
-    finally:
-        with contextlib.suppress(FileNotFoundError):
-            temporary.unlink()
 
 
 # --------------------------------------------------------------------------

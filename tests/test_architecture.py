@@ -105,6 +105,9 @@ CLOCK_ALLOWLIST = {
     # Ana baseline isi: yalnizca `main()` indirme anini duvar saatinden
     # alir; `download()` zamani disaridan alir, testler enjekte eder.
     "baseline_job.py",
+    # Baseline kalite teshisi: yalnizca `main()` erisim anini duvar
+    # saatinden alir; `run()` zamani disaridan alir.
+    "baseline_diagnostic.py",
 }
 
 
@@ -1088,6 +1091,67 @@ def test_the_baseline_workflow_separates_secrets_from_measurement() -> None:
     assert upload["with"]["if-no-files-found"] == "error"
     assert not any(str(step.get("uses", "")).startswith("actions/cache") for step in steps)
     assert "GITHUB_STEP_SUMMARY" not in yaml.safe_dump(workflow), "log'a rapor yazilmaz"
+
+
+@pytest.mark.parametrize(
+    "relative",
+    ["baseline_diagnostic.py", "job_io.py", "data/quality_summary.py"],
+)
+def test_the_quality_diagnostic_cannot_see_performance(relative: str) -> None:
+    """Teshis P&L'siz: ne kendisi ne ortak yardimcilari performans
+    katmani ice aktarir (#17). `job_io` bu yuzden `baseline_job`'dan
+    ayri; teshis ana olcum yurutucusune baglanmaz."""
+    path = SRC / relative
+    offenders = sorted(
+        module
+        for module in imports_of(path)
+        if module.startswith(PERFORMANCE_PACKAGES) or module == "tlab.baseline_job"
+    )
+    assert not offenders, f"{relative} performans katmani ice aktariyor: " + ", ".join(offenders)
+
+
+def test_the_diagnostic_workflow_is_one_step_with_secrets_and_one_upload() -> None:
+    """Teshis: manuel, yalniz main, secret tek adimda, ham veri yok, tek ozet."""
+    workflow = _workflow("alpaca-baseline-quality-diagnostic.yml")
+    # PyYAML (YAML 1.1) `on` anahtarini True olarak okur.
+    triggers: dict[str, Any] = workflow["on"] if "on" in workflow else workflow[True]
+    assert set(triggers) == {"workflow_dispatch"}
+    assert triggers["workflow_dispatch"] is None, "workflow girdi (input) almamali"
+    assert workflow["permissions"] == {"contents": "read"}
+
+    (job,) = workflow["jobs"].values()
+    assert job["if"] == "github.ref == 'refs/heads/main'"
+    steps = job["steps"]
+    checkout = next(
+        step for step in steps if str(step.get("uses", "")).startswith("actions/checkout")
+    )
+    assert checkout["with"]["persist-credentials"] is False
+
+    outside_steps = {key: value for key, value in workflow.items() if key != "jobs"}
+    outside_steps["job"] = {key: value for key, value in job.items() if key != "steps"}
+    assert "secrets." not in yaml.safe_dump(outside_steps)
+    assert "env" not in workflow and "env" not in job
+
+    runs = [step for step in steps if "tlab.baseline_diagnostic" in step.get("run", "")]
+    assert len(runs) == 1
+    (diagnose,) = runs
+    with_secrets = [step for step in steps if "secrets." in yaml.safe_dump(step)]
+    assert with_secrets == [diagnose], "secret'lar yalnizca teshis adiminda olmali"
+    assert "--spec" not in diagnose["run"] and "--task" not in diagnose["run"]
+    assert '--out "$RUNNER_TEMP/baseline-quality-diagnostic.json"' in diagnose["run"]
+
+    # Hicbir adim kosullu degil ve hatayi yutmaz: upload yalnizca teshis
+    # basariliysa calisir.
+    assert "continue-on-error" not in job
+    assert not [step for step in steps if "continue-on-error" in step or "if" in step]
+    uploads = [step for step in steps if str(step.get("uses", "")).startswith("actions/upload")]
+    assert len(uploads) == 1
+    (upload,) = uploads
+    assert steps.index(upload) > steps.index(diagnose)
+    assert upload["with"]["path"] == "${{ runner.temp }}/baseline-quality-diagnostic.json"
+    assert upload["with"]["if-no-files-found"] == "error"
+    assert not any(str(step.get("uses", "")).startswith("actions/cache") for step in steps)
+    assert "GITHUB_STEP_SUMMARY" not in yaml.safe_dump(workflow)
 
 
 def test_the_baseline_job_measures_one_fixed_spec() -> None:
