@@ -108,6 +108,8 @@ CLOCK_ALLOWLIST = {
     # Baseline kalite teshisi: yalnizca `main()` erisim anini duvar
     # saatinden alir; `run()` zamani disaridan alir.
     "baseline_diagnostic.py",
+    # SIP kalite karsilastirmasi: ayni dar istisna, yalnizca `main()`.
+    "feed_comparison.py",
 }
 
 
@@ -1095,7 +1097,7 @@ def test_the_baseline_workflow_separates_secrets_from_measurement() -> None:
 
 @pytest.mark.parametrize(
     "relative",
-    ["baseline_diagnostic.py", "job_io.py", "data/quality_summary.py"],
+    ["baseline_diagnostic.py", "feed_comparison.py", "job_io.py", "data/quality_summary.py"],
 )
 def test_the_quality_diagnostic_cannot_see_performance(relative: str) -> None:
     """Teshis P&L'siz: ne kendisi ne ortak yardimcilari performans
@@ -1110,9 +1112,28 @@ def test_the_quality_diagnostic_cannot_see_performance(relative: str) -> None:
     assert not offenders, f"{relative} performans katmani ice aktariyor: " + ", ".join(offenders)
 
 
-def test_the_diagnostic_workflow_is_one_step_with_secrets_and_one_upload() -> None:
-    """Teshis: manuel, yalniz main, secret tek adimda, ham veri yok, tek ozet."""
-    workflow = _workflow("alpaca-baseline-quality-diagnostic.yml")
+@pytest.mark.parametrize(
+    ("file", "module", "out"),
+    [
+        (
+            "alpaca-baseline-quality-diagnostic.yml",
+            "tlab.baseline_diagnostic",
+            "baseline-quality-diagnostic.json",
+        ),
+        (
+            "alpaca-baseline-feed-comparison.yml",
+            "tlab.feed_comparison",
+            "baseline-feed-comparison.json",
+        ),
+    ],
+    ids=["iex-teshis", "sip-karsilastirma"],
+)
+def test_the_diagnostic_workflow_is_one_step_with_secrets_and_one_upload(
+    file: str, module: str, out: str
+) -> None:
+    """Teshis ve SIP karsilastirmasi: manuel, yalniz main, secret tek
+    adimda, ham veri yok, tek ozet, feed/tanim/gorev girdisi yok."""
+    workflow = _workflow(file)
     # PyYAML (YAML 1.1) `on` anahtarini True olarak okur.
     triggers: dict[str, Any] = workflow["on"] if "on" in workflow else workflow[True]
     assert set(triggers) == {"workflow_dispatch"}
@@ -1132,13 +1153,14 @@ def test_the_diagnostic_workflow_is_one_step_with_secrets_and_one_upload() -> No
     assert "secrets." not in yaml.safe_dump(outside_steps)
     assert "env" not in workflow and "env" not in job
 
-    runs = [step for step in steps if "tlab.baseline_diagnostic" in step.get("run", "")]
+    runs = [step for step in steps if module in step.get("run", "")]
     assert len(runs) == 1
     (diagnose,) = runs
     with_secrets = [step for step in steps if "secrets." in yaml.safe_dump(step)]
     assert with_secrets == [diagnose], "secret'lar yalnizca teshis adiminda olmali"
-    assert "--spec" not in diagnose["run"] and "--task" not in diagnose["run"]
-    assert '--out "$RUNNER_TEMP/baseline-quality-diagnostic.json"' in diagnose["run"]
+    for flag in ("--spec", "--task", "--feed"):
+        assert flag not in diagnose["run"]
+    assert f'--out "$RUNNER_TEMP/{out}"' in diagnose["run"]
 
     # Hicbir adim kosullu degil ve hatayi yutmaz: upload yalnizca teshis
     # basariliysa calisir.
@@ -1148,7 +1170,7 @@ def test_the_diagnostic_workflow_is_one_step_with_secrets_and_one_upload() -> No
     assert len(uploads) == 1
     (upload,) = uploads
     assert steps.index(upload) > steps.index(diagnose)
-    assert upload["with"]["path"] == "${{ runner.temp }}/baseline-quality-diagnostic.json"
+    assert upload["with"]["path"] == "${{ runner.temp }}/" + out
     assert upload["with"]["if-no-files-found"] == "error"
     assert not any(str(step.get("uses", "")).startswith("actions/cache") for step in steps)
     assert "GITHUB_STEP_SUMMARY" not in yaml.safe_dump(workflow)

@@ -16,9 +16,14 @@ Log'a yalnizca sabit satirlar gider: sayimlar, hash onekleri ve sabit
 hata kategorileri. Fiyat, tarih, yanit govdesi, traceback ya da
 PERFORMANS SAYISI basilmaz; disari cikan tek sonuc rapor artefaktidir.
 Bu, varsayilan log duzeyine guvenilerek DEGIL yapisal olarak saglanir:
-her iki adim boyunca `logging` tamamen kapatilir (`_silenced`). Motor
-her islemi fiyat ve P&L ile INFO'da loglar; urllib3 yeniden denemeleri
-istek adresiyle WARNING'de loglar.
+her iki adim boyunca `logging` tamamen kapatilir (`job_io.silenced`).
+Oturum yurutucusu (`tlab.runner`) her islemi fiyat ve P&L ile INFO'da,
+gunluk zarar kesicisini yuzdesiyle WARNING'de loglar; bu loglayicinin
+NullHandler'i yok, yani WARNING log yapilandirmasi OLMADAN da stderr'e
+duser. urllib3 istek adresini (tarih, sembol) DEBUG'da, bozuk yanit
+basliginda WARNING'de kaydeder; kendi NullHandler'i oldugu icin bunlar
+ancak log yapilandirilirsa gorunur. (Ilk surum "urllib3 yeniden
+denemeleri" diyordu: urllib3 duzeyinde yeniden deneme yok - #17.)
 
 B icin isletim sistemi duzeyinde ag yalitimi YOKTUR ve iddia edilmez;
 ag cagrisi olmadigi testte `socket.connect` yasaklanarak gosterilir.

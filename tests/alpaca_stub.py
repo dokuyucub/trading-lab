@@ -270,6 +270,16 @@ class StubState:
             {"date": "2026-11-27", "open": "09:30", "close": "13:00"},  # yarim gun
         ]
         self.quotes: dict[str, Any] = QUOTES
+        self.broken_header_paths: set[str] = set()
+        """Bu yollarin yanitlari BOZUK bir baslik satiri tasir (iki nokta
+        ustu yok). Govde ve durum kodu normal kalir; urllib3 yaniti okur
+        ama "Failed to parse headers (url=...)" uyarisini TAM ISTEK
+        ADRESIYLE WARNING duzeyinde loglar. Log sizintisi testleri icin."""
+        self.bar_pages: list[dict[str, Any]] | None = None
+        """Verilirse bar yaniti SAYFALI: `page_token` yoksa 0. sayfa,
+        `page-k` ise k. sayfa; son sayfa disinda `next_page_token` dolu.
+        Gercek SDK sayfalama dongusunu (#36 bagimsiz denemesi) kalici
+        sozlesme testine tasimak icin."""
 
     def fail(
         self,
@@ -278,15 +288,20 @@ class StubState:
         *,
         times: int | None = None,
         body: dict[str, Any] | None = None,
+        after: int = 0,
     ) -> None:
         """Bir yolu belirtilen durum koduyla dusur.
 
         `times=None` kalici; `times=2` iki istek dusup sonrakiler
-        normale doner (gecici hatayi taklit eder).
+        normale doner (gecici hatayi taklit eder). `after=k`: ilk k
+        istek normal yanitlanir, dusurme ondan sonra baslar (ornegin
+        ikinci sembol ya da ikinci sayfa). `status=0`: yanit YOK,
+        baglanti kapatilir (ag hatasi).
         """
         self.fail_paths[path] = {
             "status": status,
             "times": times,
+            "after": after,
             "body": body if body is not None else {"message": "simulated failure"},
         }
 
@@ -320,6 +335,9 @@ def _handler(state: StubState) -> type[BaseHTTPRequestHandler]:
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(raw)))
+            if urlparse(self.path).path in state.broken_header_paths:
+                # Gercek basliklardan SONRA: onlar yine okunur.
+                self.send_header("X-Tlab-Broken", "1\r\nbaslik satiri iki nokta ustu olmadan")
             self.end_headers()
             self.wfile.write(raw)
 
@@ -327,9 +345,14 @@ def _handler(state: StubState) -> type[BaseHTTPRequestHandler]:
             state.record(method, self.path, body)
             path = urlparse(self.path).path
             rule = state.fail_paths.get(path)
-            if rule is not None and (rule["times"] is None or rule["times"] > 0):
+            if rule is not None and rule["after"] > 0:
+                rule["after"] -= 1
+            elif rule is not None and (rule["times"] is None or rule["times"] > 0):
                 if rule["times"] is not None:
                     rule["times"] -= 1
+                if rule["status"] == 0:
+                    self.close_connection = True
+                    return
                 self._send(rule.get("body", {"message": "simulated failure"}), rule["status"])
                 return
 
@@ -367,7 +390,18 @@ def _handler(state: StubState) -> type[BaseHTTPRequestHandler]:
             elif path.startswith("/v2/orders/"):
                 self._send({}, 204)
             elif path == "/v2/stocks/bars":
-                self._send(state.bars)
+                if state.bar_pages is None:
+                    self._send(state.bars)
+                else:
+                    token = query.get("page_token", [""])[0]
+                    index = int(token.removeprefix("page-")) if token else 0
+                    last = index + 1 >= len(state.bar_pages)
+                    self._send(
+                        {
+                            **state.bar_pages[index],
+                            "next_page_token": None if last else f"page-{index + 1}",
+                        }
+                    )
             elif path == "/v2/stocks/quotes/latest":
                 self._send(state.quotes)
             else:
