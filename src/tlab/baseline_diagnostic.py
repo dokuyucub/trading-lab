@@ -1,5 +1,10 @@
 """Baseline kalite teshisi: P&L'SIZ, holdout barsiz, tek seferlik (#17).
 
+DURUM (2026-10-08): kaynak tanim aktif tanimlardan cikarildi (AGENTS
+§11.4). Arac depo dizininde kaynak kilidinde, anahtar ve SDK'dan ONCE
+durur; tekrar kosulmaz. Tanimin bayt-bayt kopyasi
+tests/fixtures/closed_datasets/ altinda (regresyon testleri onu kullanir).
+
 Ana olcumun ilk gercek kosusu (run 36474064587) kalite kapisinda durdu:
 50 baseline seansinin 10'u uygunsuz; hangi sembol ve gerekce oldugu
 bilinmiyor. Bu arac yalnizca o soruyu cevaplar. Sozlesme:

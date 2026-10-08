@@ -3,8 +3,8 @@
 #
 # JPM cikarildi (#17): IEX'te acilis dakikalari iki kalite pilotunda
 # tekrar tekrar eksikti; olcemedigimiz bir sembolde islem yapmayiz.
-# Ana olcum tanimi (config/datasets/orb-baseline-2026q3-u11.yaml) ile
-# bu liste ayni kalmali - test denetler.
+# Aktif ana olcum tanimi (config/datasets/orb-baseline-2026q3-u11-sip.yaml)
+# ile bu liste ayni kalmali - test denetler.
 symbols:
   - SPY
   - QQQ

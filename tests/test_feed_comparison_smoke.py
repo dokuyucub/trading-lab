@@ -50,6 +50,12 @@ def run_cli(tmp_path: Path, url: str) -> tuple[subprocess.CompletedProcess[str],
     (support / "sitecustomize.py").write_text(SITE, "utf-8")
     work = tmp_path / "work"
     shutil.copytree(REPO / "config", work / "root" / "config")
+    # Kapatilan IEX tanimi aktif dizinde yok (§11.4); gorev o tanima
+    # kilitli. Regresyon kaniti, bayt-bayt kopyasi eski yoluna konarak.
+    shutil.copy(
+        REPO / "tests" / "fixtures" / "closed_datasets" / "orb-baseline-2026q3-u11.yaml",
+        work / "root" / "config" / "datasets" / "orb-baseline-2026q3-u11.yaml",
+    )
     (work / "runner-temp").mkdir()
     before = files_under(work)
 

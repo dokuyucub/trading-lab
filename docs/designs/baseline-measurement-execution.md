@@ -28,6 +28,10 @@ Pilot workflow'u değişmez; ana ölçüme, ona P&L eklenerek geçilmez.
 ## Sabitler (workflow girdi almaz)
 
 - Tanım: kodda sabit yol, `config/datasets/orb-baseline-2026q3-u11.yaml`.
+  *2026-10-08 notu:* bu IEX tanımı kalite nedeniyle kapatıldı ve aktif
+  tanımlardan çıkarıldı. Aktif tanım SIP taslağıdır,
+  `config/datasets/orb-baseline-2026q3-u11-sip.yaml` (AGENTS §11.4).
+  Yürütme sözleşmesi aynıdır.
 - Ayarlar: repodaki `config/base.yaml` + `universe.yaml`. Rapor semantik
   ayarları ve hash'ini taşır; yerel yollar hariç.
 - Strateji: `ORBParams()` varsayılanları.

@@ -3,6 +3,11 @@
 Karar kaydı: AGENTS §11.3. Tartışma: #17 (Claude ön raporu ve Codex kararı,
 2026-09-29). Kod: `src/tlab/feed_comparison.py`.
 
+> **Durum (2026-10-08):** kaynak tanım `orb-baseline-2026q3-u11` aktif
+> tanımlardan çıkarıldı (AGENTS §11.4). Bu araç depo dizininde kaynak
+> kilidinde, anahtar ve SDK'dan önce durur; tekrar koşulmaz. Tanımın
+> bayt-bayt kopyası `tests/fixtures/closed_datasets/` altında.
+
 ## Neden
 
 IEX ana ölçüm denemesi kalite kapısında kapatıldı: 50 baseline seansının

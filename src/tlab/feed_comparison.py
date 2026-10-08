@@ -1,5 +1,10 @@
 """Tarihsel SIP kalite karsilastirmasi: P&L'SIZ, holdout barsiz, tek seferlik (#17).
 
+DURUM (2026-10-08): kaynak tanim aktif tanimlardan cikarildi (AGENTS
+§11.4). Arac depo dizininde kaynak kilidinde, anahtar ve SDK'dan ONCE
+durur; tekrar kosulmaz. Tanimin bayt-bayt kopyasi
+tests/fixtures/closed_datasets/ altinda (regresyon testleri onu kullanir).
+
 IEX ana olcum denemesi kalite kapisinda kapatildi (AGENTS §7, §11.2):
 50 baseline seansinin 10'u uygunsuz, hepsi AMD. Bu arac iki soruyu
 cevaplar, AYNI 11 sembol, AYNI baseline kapsami ve AYNI kalite

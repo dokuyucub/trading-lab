@@ -593,6 +593,25 @@ def test_holdout_quality_changes_no_external_output(
     assert full_report == gap_report, "rapor holdout kalitesinden etkileniyor"
 
 
+def test_the_repo_main_spec_is_a_draft_and_cannot_be_downloaded(
+    stub: tuple[str, StubState], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Depodaki GERCEK ana tanim (SIP taslagi, §11.4) onaysiz: indirme
+    anahtar okunmadan, ag istegi ve dizin olmadan durur. `approved` ayri
+    inceleme ve kararla gelir."""
+    url, state = stub
+    market(state)
+    env = keys_env()
+    code = baseline_job.download(
+        env, NOW, workdir=tmp_path / "work", spec_path=REPO / baseline_job.MAIN_SPEC, base_url=url
+    )
+    assert code == 1
+    assert "FAIL onay" in capsys.readouterr().out
+    assert env.read == [], f"onaydan once ortam okundu: {env.read}"
+    assert state.requests == []
+    assert not (tmp_path / "work").exists()
+
+
 def test_the_entry_point_fixes_the_main_spec(tmp_path: Path) -> None:
     """`main()` tanim yolunu disaridan almaz: `--spec` bir hata."""
     spec = DatasetSpec.from_yaml(REPO / baseline_job.MAIN_SPEC)
