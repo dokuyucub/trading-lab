@@ -42,10 +42,17 @@ denetler.
 - **Token yalnızca GitHub API'sine gider.** ZIP adresine yönlendirme elle
   izlenir ve o isteğe `Authorization` başlığı eklenmez. Python'un yerleşik
   yönlendirme izleyicisi başlıkları yeni host'a taşırdı.
+- **Tek yönlendirme.** Hiçbir istek yönlendirmeyi kendiliğinden izlemez.
+  İndirme host'u yeniden yönlendirirse ikinci adres okunmaz, istenmez ve
+  basılmaz; şeması https olsa bile. Hata sabit:
+  `FAIL indirme: ikinci yonlendirme reddedildi (HTTP <kod>)` (Codex P2,
+  #41). Bu yüzden yeşil bir hosted koşu, o koşudaki indirme yolunda en
+  fazla bir yönlendirme olduğunu da gösterir: ikinci bir hop sessizce
+  izlenmez, kırmızı olur.
 - **Yönlendirme adresi, token, yanıt gövdesi ve istisna metni basılmaz.**
   Çıktı sabit satırlardır; hata yalnızca kategori ve HTTP kodu.
 - **Adres şeması:** yalnızca https; yerel test sunucusu için loopback http.
-  Bu denetim istekten önce yapılır.
+  Bu denetim, izlenen tek yönlendirme için istekten önce yapılır.
 
 ## Sözleşme testleri
 
@@ -59,6 +66,11 @@ denetler.
   sahte sunucu (API ve indirme host'u). Zincirin her halkası bozulunca
   kırmızı. Token indirme host'una gitmez; token ve imzalı adres hiçbir
   çıktıda yok.
+- **Bağlantı koruması:** testler doğrulayıcının denediği her TCP
+  bağlantısını kaydeder. İki test sunucusunun tam adres-port çifti
+  dışındaki her hedef, bağlanılmadan durdurulur. "Loopback'e izin" yetmez:
+  vekil sunucu da loopback'te olabilir. Güvensiz ilk adres ve ikinci
+  yönlendirme bu düzeyde sınanır.
 
 ## Kanıtın sınırı
 

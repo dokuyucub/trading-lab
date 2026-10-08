@@ -7,6 +7,9 @@ indirme host'unu taklit eder. Kanitlananlar:
     BAGIMSIZ sabite karsi icerik hash'i, JSON.
   * Token yalnizca API host'una gider; indirme host'una Authorization
     basligi GITMEZ.
+  * TEK yonlendirme: indirme host'unun ikinci yonlendirmesi izlenmez.
+    Baglanti korumasi (`connections`) iki test sunucusu disindaki her
+    hedefe baglanma denemesini kaydeder ve durdurur.
   * Token ve yonlendirme adresi (imzali sorgu dahil) hicbir ciktida yok.
   * Zincirin her halkasi bozulunca kirmizi ve SABIT bir kategoriyle.
 """
@@ -17,6 +20,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import socket
 import threading
 import zipfile
 from collections.abc import Iterator
@@ -74,6 +78,7 @@ class Fake:
     zip_status: int = 302
     location: str | None = None
     blob_status: int = 200
+    blob_location: str | None = None
     api_headers: list[dict[str, str]] = field(default_factory=list)
     blob_headers: list[dict[str, str]] = field(default_factory=list)
     api_paths: list[str] = field(default_factory=list)
@@ -116,7 +121,11 @@ def _blob_handler(fake: Fake) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             fake.blob_headers.append(dict(self.headers.items()))
-            _send(self, fake.blob_status, fake.blob, Content_Type="application/zip")
+            if fake.blob_status in (301, 302, 303, 307, 308):
+                extra = {} if fake.blob_location is None else {"Location": fake.blob_location}
+                _send(self, fake.blob_status, b"", **extra)
+            else:
+                _send(self, fake.blob_status, fake.blob, Content_Type="application/zip")
 
         def log_message(self, *args: Any) -> None:
             """Sessiz."""
@@ -150,6 +159,34 @@ def servers() -> Iterator[Servers]:
             server.shutdown()
             server.server_close()
             thread.join(timeout=5)
+
+
+def server_addresses(servers: Servers) -> set[tuple[str, int]]:
+    addresses = set()
+    for url in (servers.api, servers.blob):
+        parts = urlparse(url)
+        assert parts.hostname is not None and parts.port is not None
+        addresses.add((parts.hostname, parts.port))
+    return addresses
+
+
+@pytest.fixture
+def connections(servers: Servers, monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, int]]:
+    """Dogrulayicinin denedigi HER TCP baglantisi kaydedilir. Iki test
+    sunucusunun TAM adres-port cifti disindaki hedef, baglanmadan durdurulur.
+    "Loopback'e izin" yetmez: bu ortamda HTTPS_PROXY de loopback'te."""
+    allowed = server_addresses(servers)
+    seen: list[tuple[str, int]] = []
+    real = socket.create_connection
+
+    def guarded(address: tuple[str, int], *args: Any, **kwargs: Any) -> socket.socket:
+        seen.append((address[0], address[1]))
+        if (address[0], address[1]) not in allowed:
+            raise AssertionError("test sunuculari disinda bir adrese baglanti denendi")
+        return real(address, *args, **kwargs)
+
+    monkeypatch.setattr(socket, "create_connection", guarded)
+    return seen
 
 
 def arrange(servers: Servers, blob: bytes, **changes: Any) -> str:
@@ -207,7 +244,7 @@ def test_the_payload_matches_the_independent_constant() -> None:
 
 
 def test_a_consistent_roundtrip_passes_and_the_token_stays_on_the_api_host(
-    servers: Servers, capsys: pytest.CaptureFixture[str]
+    servers: Servers, connections: list[tuple[str, int]], capsys: pytest.CaptureFixture[str]
 ) -> None:
     digest = arrange(servers, good_zip())
     assert run(servers, digest) == 0
@@ -223,6 +260,7 @@ def test_a_consistent_roundtrip_passes_and_the_token_stays_on_the_api_host(
     assert parse_qs(listing.query) == {"name": [verify.ARTIFACT_NAME]}
     assert len(fake.blob_headers) == 1
     assert "Authorization" not in fake.blob_headers[0], "token indirme host'una gitti"
+    assert set(connections) == server_addresses(servers)
 
 
 def test_the_sha256_prefix_on_the_upload_digest_is_accepted(servers: Servers) -> None:
@@ -387,21 +425,48 @@ def test_download_errors_print_a_fixed_category(
 
 
 def test_a_non_https_redirect_off_loopback_is_refused_before_any_request(
-    servers: Servers, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    servers: Servers, connections: list[tuple[str, int]], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Sema denetimi istekten ONCE: adres ne istenir ne basilir."""
-    calls: list[object] = []
-
-    def recording_urlopen(*args: object, **kwargs: object) -> None:
-        calls.append(args)
-        raise AssertionError("istek yapilmamaliydi")
-
-    monkeypatch.setattr(verify.urllib.request, "urlopen", recording_urlopen)
+    """Sema denetimi istekten ONCE: adres ne istenir ne basilir. Kanit
+    baglanti duzeyinde: yalnizca API sunucusuna baglanildi."""
     location = f"http://example.invalid/a.zip?sig={SIGNATURE}"
     digest = arrange(servers, good_zip(), location=location)
     _fails(servers, capsys, digest, "indirme")
-    assert calls == [], "guvensiz adrese istek yapildi"
     assert servers.fake.blob_headers == []
+    api = urlparse(servers.api)
+    assert connections, "API'ye bile baglanilmadi"
+    assert set(connections) == {(api.hostname, api.port)}, "guvensiz adrese baglanti denendi"
+
+
+SECOND_HOPS = {
+    "loopback-disi-http": "http://example.invalid/second-hop.zip?sig={sig}",
+    "https": "https://example.invalid/second-hop.zip?sig={sig}",
+    "ayni-host": "{blob}/second-hop.zip?sig={sig}",
+}
+
+
+@pytest.mark.parametrize("second_hop", list(SECOND_HOPS.values()), ids=list(SECOND_HOPS))
+def test_a_second_redirect_is_refused_and_never_followed(
+    servers: Servers,
+    connections: list[tuple[str, int]],
+    capsys: pytest.CaptureFixture[str],
+    second_hop: str,
+) -> None:
+    """TEK yonlendirme (Codex P2, #41): indirme host'u yeniden yonlendirirse
+    ikinci adres, semasi ne olursa olsun, okunmaz, istenmez ve basilmaz.
+    Indirme host'u tek istek gorur ve Authorization almaz."""
+    location = second_hop.format(blob=servers.blob, sig=SIGNATURE)
+    digest = arrange(servers, good_zip(), blob_status=302, blob_location=location)
+    assert run(servers, digest) == 1
+    captured = capsys.readouterr()
+    assert captured.out == "FAIL indirme: ikinci yonlendirme reddedildi (HTTP 302)\n"
+    assert captured.err == ""
+    assert_clean(captured.out)
+
+    fake = servers.fake
+    assert len(fake.blob_headers) == 1, "ikinci yonlendirme izlendi"
+    assert "Authorization" not in fake.blob_headers[0], "token indirme host'una gitti"
+    assert set(connections) <= server_addresses(servers), "baska bir adrese baglanti denendi"
 
 
 def test_an_oversized_download_is_refused(

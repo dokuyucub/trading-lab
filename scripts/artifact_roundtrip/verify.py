@@ -16,6 +16,9 @@ Kati kurallar:
   * Token yalnizca GitHub API isteklerine gider. ZIP adresine yonlendirme
     ELLE izlenir ve o istege Authorization basligi EKLENMEZ: Python'un
     yerlesik yonlendirme izleyicisi basliklari yeni host'a tasir.
+  * TEK yonlendirme: hicbir istek otomatik yonlendirme izlemez. Indirme
+    host'u yeniden yonlendirirse ikinci adres okunmaz ve istenmez; sabit
+    kategoriyle hata (semasi https olsa bile).
   * Yonlendirme adresi, token, yanit govdesi ya da istisna metni BASILMAZ.
     Cikti sabit satirlardir; hata yalnizca kategori ve HTTP kodu.
   * Yalnizca standart kutuphane: dogrulama kendi bagimliligini getirmez.
@@ -115,9 +118,10 @@ def list_artifacts(api: str, repo: str, run_id: str, token: str) -> list[dict[st
 
 
 def download_zip(api: str, repo: str, artifact_id: int, token: str) -> bytes:
-    """API ZIP adresi -> (elle izlenen) yonlendirme -> baytlar.
+    """API ZIP adresi -> TEK (elle izlenen) yonlendirme -> baytlar.
 
-    Ikinci istek YENI bir `Request`'tir: Authorization basligi yoktur.
+    Ikinci istek YENI bir `Request`'tir: Authorization basligi yoktur ve o
+    da ayni opener'la, otomatik yonlendirme izlemeden gider.
     """
     url = f"{api}/repos/{repo}/actions/artifacts/{artifact_id}/zip"
     opener = urllib.request.build_opener(_NoRedirect)
@@ -137,10 +141,15 @@ def download_zip(api: str, repo: str, artifact_id: int, token: str) -> bytes:
 
     plain = urllib.request.Request(_checked_url(location))  # noqa: S310 - sema denetlendi
     try:
-        with urllib.request.urlopen(plain, timeout=TIMEOUT_SECONDS) as response:  # noqa: S310
+        with opener.open(plain, timeout=TIMEOUT_SECONDS) as response:
             return _read_limited(response, MAX_ZIP_BYTES, "indirme")
     except urllib.error.HTTPError as exc:
         exc.close()
+        if exc.code in REDIRECT_CODES:
+            # Ikinci adres okunmaz: ne istenir ne basilir.
+            raise RoundtripError(
+                "indirme", f"ikinci yonlendirme reddedildi (HTTP {exc.code})"
+            ) from None
         raise RoundtripError("indirme", f"ZIP HTTP {exc.code}") from None
     except (urllib.error.URLError, OSError) as exc:
         raise RoundtripError("indirme", f"ZIP okunamadi ({type(exc).__name__})") from None
