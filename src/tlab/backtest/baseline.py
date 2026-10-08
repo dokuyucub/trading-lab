@@ -38,8 +38,11 @@ from tlab.journal.db import apply_migrations
 from tlab.learning import assess
 from tlab.strategies.orb import OpeningRangeBreakout, ORBParams
 
-REPORT_SCHEMA_VERSION = 2
-"""v2: `holdout.commitment` ve `starting_equity_basis` eklendi (#17)."""
+REPORT_SCHEMA_VERSION = 3
+"""v2: `holdout.commitment` ve `starting_equity_basis` eklendi (#17).
+v3: `data_feed` (dogrulanmis manifestten olcum feed'i) ve feed uyusmazlik
+uyarisi eklendi (#17, AGENTS §11.4). Daha eski bir rapor `data_feed`
+tasimaz; hangisi oldugunu `report_schema` soyler."""
 
 
 @dataclass(frozen=True)
@@ -77,6 +80,13 @@ CAVEATS: tuple[str, ...] = (
     "Bu rapor terfi karari DEGILDIR. Otomatik terfi yok.",
 )
 
+FEED_MISMATCH_CAVEAT = (
+    "Olcum '{data_feed}' feed'iyle yapildi; config.data.feed ('{configured}') "
+    "ayarlanmis paper/canli karar feed'idir, o feed'le calisan bir oturumun "
+    "kaniti degildir. Sonuc o feed'e otomatik tasinmaz (AGENTS §11.4)."
+)
+"""Olcum feed'i ayarlanmis feed'den farkliysa rapora KALICI olarak eklenir."""
+
 
 def _config_sha256(payload: dict[str, Any]) -> str:
     return hashlib.sha256(canonical_json(payload)).hexdigest()
@@ -98,6 +108,7 @@ def _run_scenario(
     sessions: tuple[TradingSession, ...],
     starting_equity: float,
     timeframe: Timeframe,
+    data_feed: str,
 ) -> dict[str, Any]:
     first = min(verified.days)
     last = max(verified.days)
@@ -131,6 +142,8 @@ def _run_scenario(
             # sinirinda acik pozisyon kalirsa olcum durur. Yalnizca kalite
             # kapisindan gecen seanslar.
             sessions=sessions,
+            # Journal'a barlarin feed'i gider, config'inki degil.
+            data_feed=data_feed,
         ).run(start, end)
 
         r_values = _r_values(conn, result.run_id)
@@ -185,6 +198,10 @@ def run_baseline(
     # Taahhut P&L'DEN ONCE ve yalnizca manifest belleginden: tutarsiz bir
     # manifest olcumu tek bir islem hesaplanmadan durdurur.
     commitment = holdout_commitment(manifest)
+    # Olcum feed'i P&L'DEN ONCE ve yalnizca dogrulanmis manifestten. Config
+    # sessizce degistirilmez: ayarlanmis feed raporda ayri gorunur ve
+    # `config_sha256` ayni anlami tasir.
+    data_feed = verified.data_feed
     # Onay ve kalite kapisi P&L'DEN ONCE: taslak/pilot tanim ya da uygun
     # olmayan veri tek bir islem hesaplanmadan olcumu durdurur.
     measurable = verified.measurable_sessions(
@@ -199,12 +216,19 @@ def run_baseline(
             sessions=measurable,
             starting_equity=starting_equity,
             timeframe=timeframe,
+            data_feed=data_feed,
         )
         for item in scenarios
     ]
+    caveats = list(CAVEATS)
+    if data_feed != config.data.feed:
+        caveats.append(
+            FEED_MISMATCH_CAVEAT.format(data_feed=data_feed, configured=config.data.feed)
+        )
     return {
         "report_schema": REPORT_SCHEMA_VERSION,
         "dataset_id": verified.dataset_id,
+        "data_feed": data_feed,
         "manifest_sha256": verified.manifest_sha256,
         "baseline_sessions": {
             "first": min(verified.days).isoformat(),
@@ -234,7 +258,7 @@ def run_baseline(
         "starting_equity_basis": "synthetic_assumption",
         "primary_scenario": PRIMARY_SCENARIO,
         "scenarios": results,
-        "caveats": list(CAVEATS),
+        "caveats": caveats,
     }
 
 

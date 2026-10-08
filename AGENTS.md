@@ -1147,3 +1147,12 @@ kararıyla değerlendirilir.
 **Kayda gerçekmiş gibi geçmeyen, doğrulanmamış noktalar:** karar feed'inin
 journal'a yazılması (config yorumu ve docstring söylüyor, uygulama
 doğrulanmadı) ve paper dolumlarının hangi veriye göre simüle edildiği.
+
+*Güncelleme (2026-10-08, Codex kararı A, #17 6052081621):* ölçüm yolu için
+ilki artık test edilmiş durumda. Rapor şeması v3, ölçüm feed'ini
+doğrulanmış manifestten `data_feed` olarak taşır. Ayarlanmış feed'den
+farklıysa rapora kalıcı bir uyarı eklenir. Ölçümün her backtest koşusu
+journal'a manifest feed'ini yazar
+(`docs/designs/baseline-measurement-execution.md`). **Canlı CLI yolunun**
+journal'a yazdığı feed çalışma anında hâlâ doğrulanmadı. Paper dolum
+kaynağı da doğrulanmamış kalıyor.

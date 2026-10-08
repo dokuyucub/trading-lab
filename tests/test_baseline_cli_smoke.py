@@ -38,6 +38,7 @@ import pytest
 
 from alpaca_stub import StubState, alpaca_stub
 from test_baseline_job import DAYS, MARKERS, market
+from tlab.backtest.baseline import FEED_MISMATCH_CAVEAT
 
 REPO = Path(__file__).resolve().parents[1]
 SRC = REPO / "src"
@@ -201,6 +202,13 @@ def test_success_publishes_one_report_after_cleanup(
     assert bar_queries, "bar istegi yapilmadi"
     assert all(query["feed"] == ["sip"] for query in bar_queries)
     assert report["starting_equity_basis"] == "synthetic_assumption"
+    # Rapor v3: olcum feed'i manifestten; depo config'i (iex) ayri gorunur ve
+    # uyusmazlik uyarisi raporda kalici (#17 6052081621).
+    assert report["report_schema"] == 3
+    assert report["data_feed"] == "sip"
+    assert report["config"]["data"]["feed"] == "iex"
+    assert FEED_MISMATCH_CAVEAT.format(data_feed="sip", configured="iex") in report["caveats"]
+    assert "feed sip (ayar iex)" in flow.measure.stdout
 
     # Ciktilar yalnizca aracin sabit satirlari; sizinti ve traceback yok.
     assert flow.download.stdout.startswith("OK indirme")

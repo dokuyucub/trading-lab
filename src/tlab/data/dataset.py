@@ -640,6 +640,10 @@ def _commitment_error(reason: str) -> DatasetIntegrityError:
     return DatasetIntegrityError(f"holdout taahhudu uretilemedi: {reason}")
 
 
+def _feed_error(reason: str) -> DatasetIntegrityError:
+    return DatasetIntegrityError(f"olcum feed'i belirlenemedi: {reason}")
+
+
 def _is_digest(value: Any) -> bool:
     return isinstance(value, str) and len(value) == 64 and set(value) <= _HEX_DIGITS
 
@@ -826,6 +830,23 @@ class VerifiedBaseline:
     @property
     def days(self) -> tuple[date, ...]:
         return tuple(item.day for item in self.sessions)
+
+    @property
+    def data_feed(self) -> str:
+        """Olcumun feed'i: YALNIZCA dogrulanmis manifestten.
+
+        Manifest feed'i spec'in beyanindan ayrica yazar. Ikisi ayni ve
+        desteklenen bir deger olmali; bos, bilinmeyen ya da spec'le
+        uyusmayan deger sessizce kabul edilmez (Codex, #17 6052081621).
+        Config'in AYARLANMIS feed'iyle karistirilmaz.
+        """
+        try:
+            declared = DatasetSpec.model_validate(self.manifest.get("spec"))
+        except ValueError:
+            raise _feed_error("manifestteki spec gecersiz") from None
+        if self.manifest.get("feed") != declared.feed:
+            raise _feed_error("manifest feed'i spec ile uyusmuyor")
+        return declared.feed
 
     def store(self) -> MemoryBarStore:
         return MemoryBarStore(self.bars, self.timeframe)

@@ -622,6 +622,7 @@ def cmd_baseline(args: argparse.Namespace) -> int:
     args.out.write_bytes(report_bytes(report))
 
     print(f"veri kumesi : {report['dataset_id']}  ({report['manifest_sha256'][:12]})")
+    print(f"olcum feed'i: {report['data_feed']}  (ayar: {report['config']['data']['feed']})")
     first, last = report["baseline_sessions"]["first"], report["baseline_sessions"]["last"]
     print(f"baseline    : {report['baseline_sessions']['count']} seans, {first} - {last}")
     print(f"holdout     : {report['holdout']['sessions']} seans, ACILMADI")

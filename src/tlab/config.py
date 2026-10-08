@@ -25,6 +25,10 @@ from tlab.errors import ConfigError
 
 Percent = Annotated[float, Field(gt=0, le=100)]
 
+SUPPORTED_FEEDS: frozenset[str] = frozenset({"iex", "sip"})
+"""Alpaca hisse bar feed'leri. Ayar, veri kumesi ve backtest journal'i
+ayni kumeye bakar; tek kaynak burasi."""
+
 
 class Secrets(BaseSettings):
     """API anahtarlari. Sadece ortam degiskenlerinden / .env dosyasindan."""
@@ -120,8 +124,7 @@ class DataSection(Strict):
     @field_validator("feed")
     @classmethod
     def _known_feed(cls, value: str) -> str:
-        allowed = {"iex", "sip"}
-        if value not in allowed:
+        if value not in SUPPORTED_FEEDS:
             msg = f"feed 'iex' veya 'sip' olmali, alinan: {value!r}"
             raise ValueError(msg)
         return value
