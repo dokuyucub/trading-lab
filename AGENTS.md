@@ -686,7 +686,7 @@ sonuc: some_ineligible
 | Ne | Kanıt | Kapsam |
 |---|---|---|
 | SIP karşılaştırması gerçek ortamda bir kez koştu ve özet yayımlandı | Koşu `37096896917`, iş `111128551838`, main `9b3c37f`, `run_attempt` 1, `workflow_dispatch`; 2026-10-03 04:32:45 UTC'de `dokuyucub` hesabından, #38'in merge CI'sı (`37092765560`) başarıyla bittikten sonra tetiklendi | `feedcmp-orb-baseline-2026q3-u11-sip-1` (§11.3). Yalnızca baseline; P&L yok, emir yok, holdout barı yok. Feed `iex -> sip`, görev düzeyinde. Codex run, job, log ve artefakt API'sini bağımsız doğruladı (#17). |
-| Özet artefaktı | Artefakt `11264113777`, 1754 bayt. Upload log'undaki ZIP SHA256 ile API `digest` aynı: `3e90ef13112df983acc60f49b009130ba3c109761344d39e4f3a6a08534b8c9b`. Son geçerlilik 2027-01-01. | **ZIP/JSON bağımsız doğrulaması BEKLİYOR.** Claude da Codex de dosya baytlarını indiremedi (Claude: oturum ağ politikası, 403; Codex: HTTP 403 / `error code: 1010`). Bu, Alpaca'nın bir 403'ü değil; tamamlanmış raporun indirme sorunu. API ve log digest'lerinin eşleşmesi, indirilen dosyanın yerel hash doğrulamasının yerine geçmez. Alan kümesi, `source`/`feed_override`/`reference` ve JSON'daki `missing_fraction` değerleri henüz bağımsız onaylanmadı. Mevcut ZIP'in kullanıcı tarafından yüklenmesi istendi; yeni koşu yok. |
+| Özet artefaktı | Artefakt `11264113777`, 1754 bayt. Upload log'undaki ZIP SHA256 ile API `digest` aynı: `3e90ef13112df983acc60f49b009130ba3c109761344d39e4f3a6a08534b8c9b`. Son geçerlilik 2027-01-01. | **ZIP/JSON bağımsız doğrulandı (Codex, 2026-10-08).** Kullanıcı mevcut ZIP'i iletti; yeni koşu yok. Yerelde hesaplanan SHA256 API ve upload digest'iyle aynı; 1754 bayt; tek üye `baseline-feed-comparison.json`; CRC temiz. Programatik denetim: üst ve iç alan kümeleri; schema, kind ve görev; `source` kimliği ve hash `369f4e7f…c027dc505` (depodaki tanımdan yeniden hesaplandı); `iex -> sip` override; IEX `reference` (run, artefakt, hash); producer run `37096896917`, commit `9b3c37f` ve workflow; politika, 11 sembol, sayımlar ve notlar. İlk indirme denemeleri çözülmüş bir indirme olayıdır (Claude: oturum ağ politikası, 403; Codex: HTTP 403 / `error code: 1010`); Alpaca'nın 403'ü değildir. |
 
 Adımlar: kurulum success (14 sn), karşılaştırma success (16 sn; secret
 yalnızca bu adımda, maskeli), özet yükleme success (`upload-artifact@v4`).
@@ -724,25 +724,28 @@ sonuc: all_eligible
   - **Kalite:** SIP verisiyle 50 baseline seansının hepsi mevcut kalite
     politikasını geçti (`all_eligible`). Hiçbir sembolde bar-yok, açılış,
     kapanış ya da oran gerekçesi yok; tekrarlı zaman damgası yok.
-  - **"eksik 0.00%"** log'daki iki ondalıklı yüzde gösterimidir. JSON'daki
-    `missing_fraction` da `round(eksik / beklenen, 6)` ile altı ondalığa
-    yuvarlanmış bir orandır. Bu kayıt JSON değerleri hakkında iddia taşımaz;
-    doğrulama bekliyor.
+  - **JSON'da kayıtlı değerler (Codex doğruladı):** 11 sembolün her birinde
+    `sessions_with_bars = 50` ve `missing_fraction = 0.0`; bar-yok, açılış,
+    kapanış, oran, uygunsuz ve tekrar sayıları 0. Oran, `round(eksik /
+    beklenen, 6)` ile altı ondalığa yuvarlanmış bir **rapor değeridir**;
+    log'daki "eksik 0.00%" onun iki ondalıklı yüzde gösterimidir.
   - **IEX teşhisiyle yan yana.** Aynı politika, aynı 11 sembol, aynı 50
-    baseline seansı. IEX değerleri Codex'in yeniden açtığı JSON'dan, SIP
-    değerleri log'dan:
+    baseline seansı. İki sütun da Codex'in açtığı JSON'lardan; oranlar altı
+    ondalıklı rapor değerleri:
 
     | | IEX (run `36502365666`, 2026-09-29) | SIP (run `37096896917`, 2026-10-03) |
     |---|---|---|
     | Uygun / uygunsuz baseline seansı | 40 / 10 | 50 / 0 |
-    | AMD: uygunsuz seans; eksik oran | 10; 0,054821 | 0; log'da 0.00% |
-    | QQQ: uygunsuz seans; eksik oran | 1 (açılışta tam 1 dk); 0,011641 | 0; log'da 0.00% |
+    | AMD: uygunsuz seans; eksik oran | 10; 0,054821 | 0; 0,0 |
+    | QQQ: uygunsuz seans; eksik oran | 1 (açılışta tam 1 dk); 0,011641 | 0; 0,0 |
     | Diğer 9 sembol: uygunsuz seans | 0 | 0 |
 
     IEX'te görülen eksiklerin SIP'te görülmemesi, bu eksiklerin IEX'e özgü
     olmasıyla **tutarlıdır**.
-  - Codex IEX ZIP'ini yeniden açtı (hash `5ae3e3e0…` eşit); 40/10 → 50/0
-    karşılaştırmasını IEX JSON'u ve SIP log'u üzerinden doğruladı.
+  - Codex iki ZIP'i de açtı (IEX `5ae3e3e0…`, SIP `3e90ef13…`; ikisi de
+    kayıtlı hash'lerle eşit). Politika, 11 sembol, 1Min/raw ve 63/63/50/13
+    sayımları iki JSON'da aynı; 40/10 → 50/0 karşılaştırması iki JSON
+    üzerinden doğrulandı.
 - Söylemediği:
   - **Neden.** İki erişim yaklaşık dört gün arayla yapıldı; eş zamanlı
     değil, sağlayıcı revizyonu mümkün. Gözlem, neden kanıtı değildir.
@@ -751,13 +754,16 @@ sonuc: all_eligible
     kuralı yalnızca bu tarihsel aralık için gözlendi.
   - **Performans.** P&L hesaplanmadı. Kalite kapsamı işlem ya da dolum
     anlamı taşımaz.
+  - **Fiyat ve hacim doğruluğu.** Ham barlar raporda yok; barların fiyat ve
+    hacim doğruluğu yeniden ölçülmüş değildir.
   - **İzin.** Yeni veri kümesi, SIP üzerinde P&L ölçümü ya da holdout
     açılması için otomatik izin değildir.
 
 **Karar (Codex, #17, 2026-10-08):**
 
-- Run, log ve API düzeyindeki sonuç doğrulandı. ZIP/JSON doğrulaması
-  bekleyen madde olarak kalır; başarılı tarihsel olay kaydı onu beklemez.
+- Run, log ve API düzeyindeki sonuç doğrulandı. ZIP/JSON doğrulaması da
+  2026-10-08'de tamamlandı: kullanıcı mevcut ZIP'i iletti, yeni koşu yok
+  (yukarıdaki tablo).
 - SIP üzerinde bir P&L değerlendirmesi için önce yalnızca **tasarım ön
   raporu**. İçeriği:
   - aynı dönemde feed seçiminin kalite gözleminden **sonra** yapıldığı
@@ -1059,6 +1065,7 @@ kullanıcıdan tek tıkla istenir.
 
 **Sonuç (2026-10-03):** görev bir kez koştu (run `37096896917`, §7). Hesap
 bu tarihsel aralık için SIP barı aldı (11/11 sembol); 50 baseline seansının
-hepsi politikayı geçti. ZIP/JSON bağımsız doğrulaması bekliyor. Bu
+hepsi politikayı geçti. ZIP/JSON bağımsız doğrulaması 2026-10-08'de
+tamamlandı (Codex; kullanıcı mevcut ZIP'i iletti, yeni koşu yok). Bu
 karşılaştırma tekrar koşulmaz; SIP üzerinde P&L değerlendirmesi ayrı bir
 tasarım ve karar ister (§7, Codex kararı 2026-10-08).
