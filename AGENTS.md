@@ -681,6 +681,94 @@ sonuc: some_ineligible
   kararı olarak kayıtlıdır. İleride yapılacak bir SIP P&L değerlendirmesine
   otomatik onay değildir.
 
+### Doğrulanan — 2026-10-03: tarihsel SIP kalite karşılaştırması (tek koşu)
+
+| Ne | Kanıt | Kapsam |
+|---|---|---|
+| SIP karşılaştırması gerçek ortamda bir kez koştu ve özet yayımlandı | Koşu `37096896917`, iş `111128551838`, main `9b3c37f`, `run_attempt` 1, `workflow_dispatch`; 2026-10-03 04:32:45 UTC'de `dokuyucub` hesabından, #38'in merge CI'sı (`37092765560`) başarıyla bittikten sonra tetiklendi | `feedcmp-orb-baseline-2026q3-u11-sip-1` (§11.3). Yalnızca baseline; P&L yok, emir yok, holdout barı yok. Feed `iex -> sip`, görev düzeyinde. Codex run, job, log ve artefakt API'sini bağımsız doğruladı (#17). |
+| Özet artefaktı | Artefakt `11264113777`, 1754 bayt. Upload log'undaki ZIP SHA256 ile API `digest` aynı: `3e90ef13112df983acc60f49b009130ba3c109761344d39e4f3a6a08534b8c9b`. Son geçerlilik 2027-01-01. | **ZIP/JSON bağımsız doğrulaması BEKLİYOR.** Claude da Codex de dosya baytlarını indiremedi (Claude: oturum ağ politikası, 403; Codex: HTTP 403 / `error code: 1010`). Bu, Alpaca'nın bir 403'ü değil; tamamlanmış raporun indirme sorunu. API ve log digest'lerinin eşleşmesi, indirilen dosyanın yerel hash doğrulamasının yerine geçmez. Alan kümesi, `source`/`feed_override`/`reference` ve JSON'daki `missing_fraction` değerleri henüz bağımsız onaylanmadı. Mevcut ZIP'in kullanıcı tarafından yüklenmesi istendi; yeni koşu yok. |
+
+Adımlar: kurulum success (14 sn), karşılaştırma success (16 sn; secret
+yalnızca bu adımda, maskeli), özet yükleme success (`upload-artifact@v4`).
+
+Aracın bütün çıktısı, olduğu gibi (#17):
+
+```
+OK karsilastirma feedcmp-orb-baseline-2026q3-u11-sip-1 (kaynak orb-baseline-2026q3-u11; feed iex -> sip, gorev duzeyinde)
+erisim: 11/11 sembol yanit aldi; baseline bari gelen sembol 11/11
+seans: takvim 63, tamamlanmis 63, baseline 50, holdout 13
+baseline: uygun 50, uygunsuz 0 (seans birlesimi); uygunsuz sembol-seans 0
+  SPY    uygunsuz  0 | gerekce: bar yok 0, acilis 0, kapanis 0, oran 0, diger 0 | eksik 0.00%, tekrar 0
+  QQQ    uygunsuz  0 | gerekce: bar yok 0, acilis 0, kapanis 0, oran 0, diger 0 | eksik 0.00%, tekrar 0
+  IWM    uygunsuz  0 | gerekce: bar yok 0, acilis 0, kapanis 0, oran 0, diger 0 | eksik 0.00%, tekrar 0
+  AAPL   uygunsuz  0 | gerekce: bar yok 0, acilis 0, kapanis 0, oran 0, diger 0 | eksik 0.00%, tekrar 0
+  MSFT   uygunsuz  0 | gerekce: bar yok 0, acilis 0, kapanis 0, oran 0, diger 0 | eksik 0.00%, tekrar 0
+  NVDA   uygunsuz  0 | gerekce: bar yok 0, acilis 0, kapanis 0, oran 0, diger 0 | eksik 0.00%, tekrar 0
+  AMD    uygunsuz  0 | gerekce: bar yok 0, acilis 0, kapanis 0, oran 0, diger 0 | eksik 0.00%, tekrar 0
+  AMZN   uygunsuz  0 | gerekce: bar yok 0, acilis 0, kapanis 0, oran 0, diger 0 | eksik 0.00%, tekrar 0
+  GOOGL  uygunsuz  0 | gerekce: bar yok 0, acilis 0, kapanis 0, oran 0, diger 0 | eksik 0.00%, tekrar 0
+  META   uygunsuz  0 | gerekce: bar yok 0, acilis 0, kapanis 0, oran 0, diger 0 | eksik 0.00%, tekrar 0
+  TSLA   uygunsuz  0 | gerekce: bar yok 0, acilis 0, kapanis 0, oran 0, diger 0 | eksik 0.00%, tekrar 0
+yayginlik (uygunsuz seans basina uygunsuz sembol): yok
+not: sembol ve gerekce toplamlari ortusur; toplanarak seans birlesimi aciklanmaz
+not: referans IEX teshisiyle farkli erisim zamani; karsilastirma incelemede
+sonuc: all_eligible
+```
+
+**Bu koşunun söylediği ve söylemediği:**
+
+- Söylediği:
+  - **Erişim:** bu paper hesabı, bu tarihsel aralık için SIP 1Min barı aldı.
+    11 sembolün hepsi yanıtlandı ve hepsinde baseline barı geldi. Erişim
+    reddi yok.
+  - **Kalite:** SIP verisiyle 50 baseline seansının hepsi mevcut kalite
+    politikasını geçti (`all_eligible`). Hiçbir sembolde bar-yok, açılış,
+    kapanış ya da oran gerekçesi yok; tekrarlı zaman damgası yok.
+  - **"eksik 0.00%"** log'daki iki ondalıklı yüzde gösterimidir. JSON'daki
+    `missing_fraction` da `round(eksik / beklenen, 6)` ile altı ondalığa
+    yuvarlanmış bir orandır. Bu kayıt JSON değerleri hakkında iddia taşımaz;
+    doğrulama bekliyor.
+  - **IEX teşhisiyle yan yana.** Aynı politika, aynı 11 sembol, aynı 50
+    baseline seansı. IEX değerleri Codex'in yeniden açtığı JSON'dan, SIP
+    değerleri log'dan:
+
+    | | IEX (run `36502365666`, 2026-09-29) | SIP (run `37096896917`, 2026-10-03) |
+    |---|---|---|
+    | Uygun / uygunsuz baseline seansı | 40 / 10 | 50 / 0 |
+    | AMD: uygunsuz seans; eksik oran | 10; 0,054821 | 0; log'da 0.00% |
+    | QQQ: uygunsuz seans; eksik oran | 1 (açılışta tam 1 dk); 0,011641 | 0; log'da 0.00% |
+    | Diğer 9 sembol: uygunsuz seans | 0 | 0 |
+
+    IEX'te görülen eksiklerin SIP'te görülmemesi, bu eksiklerin IEX'e özgü
+    olmasıyla **tutarlıdır**.
+  - Codex IEX ZIP'ini yeniden açtı (hash `5ae3e3e0…` eşit); 40/10 → 50/0
+    karşılaştırmasını IEX JSON'u ve SIP log'u üzerinden doğruladı.
+- Söylemediği:
+  - **Neden.** İki erişim yaklaşık dört gün arayla yapıldı; eş zamanlı
+    değil, sağlayıcı revizyonu mümkün. Gözlem, neden kanıtı değildir.
+  - **Canlı veri.** Canlı SIP erişimini, canlı IEX/SIP eşdeğerliğini ya da
+    abonelik ihtiyacını göstermez. Alpaca FAQ'taki "uç en az 15 dakika eski"
+    kuralı yalnızca bu tarihsel aralık için gözlendi.
+  - **Performans.** P&L hesaplanmadı. Kalite kapsamı işlem ya da dolum
+    anlamı taşımaz.
+  - **İzin.** Yeni veri kümesi, SIP üzerinde P&L ölçümü ya da holdout
+    açılması için otomatik izin değildir.
+
+**Karar (Codex, #17, 2026-10-08):**
+
+- Run, log ve API düzeyindeki sonuç doğrulandı. ZIP/JSON doğrulaması
+  bekleyen madde olarak kalır; başarılı tarihsel olay kaydı onu beklemez.
+- SIP üzerinde bir P&L değerlendirmesi için önce yalnızca **tasarım ön
+  raporu**. İçeriği:
+  - aynı dönemde feed seçiminin kalite gözleminden **sonra** yapıldığı
+    açıkça kaydedilir;
+  - eski IEX tanımı değişmez; yeni çalışmanın kimliği ve soy ilişkisi,
+    mevcut örtüşmezlik kuralıyla uyumlu olarak önerilir;
+  - holdout kapalı kalır;
+  - geçmiş SIP ile paper/canlı feed farkının nasıl ele alınacağı yazılır.
+- Bu karar yeni veri indirme, P&L koşusu ya da holdout açma onayı değildir.
+- Bu karşılaştırma tekrar koşulmaz.
+
 ### Hâlâ doğrulanmayan
 
 - **Emir yaşam döngüsü.** Hiç emir gönderilmedi. Dolum, kayma, kısmi dolum,
@@ -690,7 +778,10 @@ sonuc: some_ineligible
   sınanmadı.
 - **Stratejinin kârlılığı.** ORB gerçek piyasa verisiyle bir kez bile
   backtest edilmedi: ilk ana ölçüm kalite kapısında, P&L'den önce durdu ve
-  IEX üzerindeki bu tanım kalite nedeniyle kapatıldı (yukarıda). Sistemin
+  IEX üzerindeki bu tanım kalite nedeniyle kapatıldı (yukarıda). Aynı
+  dönemin baseline'ında tarihsel SIP verisi kalite kapısını geçti
+  (2026-10-03, yukarıda); SIP üzerinde P&L ölçümü ayrı tasarım ve karar
+  ister. Sistemin
   sağlam olması, stratejinin kazandırdığı anlamına gelmez; bunlar ayrı iki
   sorudur ve ikincisine henüz dokunulmadı.
 
@@ -965,3 +1056,9 @@ canlı IEX/SIP eşdeğerliğini ya da ORB'nin canlıya hazırlığını gösterm
 
 Gerçek koşu, kod PR'ının son head'i bağımsız incelenip birleştikten sonra
 kullanıcıdan tek tıkla istenir.
+
+**Sonuç (2026-10-03):** görev bir kez koştu (run `37096896917`, §7). Hesap
+bu tarihsel aralık için SIP barı aldı (11/11 sembol); 50 baseline seansının
+hepsi politikayı geçti. ZIP/JSON bağımsız doğrulaması bekliyor. Bu
+karşılaştırma tekrar koşulmaz; SIP üzerinde P&L değerlendirmesi ayrı bir
+tasarım ve karar ister (§7, Codex kararı 2026-10-08).
