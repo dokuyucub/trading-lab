@@ -34,16 +34,22 @@ CLOSED_IEX_MAIN = (
 CLOSED_IEX_RECORD = {
     "path": "config/datasets/orb-baseline-2026q3-u11.yaml",
     "approved_in": "221123fe0dc6ffa8fde4de5743834819ba1047f3",
-    "last_main_with_file": "f8dd4958d26e44d6387be05205577c29f0124233",
+    "last_main_with_file": "747dcf7d0c8085ca91e77ea21ec854a1f004948a",
     "git_blob": "566a0f2c440d9928ccb3538d29a5a1fb37319618",
     "file_sha256": "e0bab7a3d724cb779022a70fb46120b9f9f5f74da7ab76870e9dabbc5627f87e",
     "spec_sha256": "369f4e7fc94267583bf848fc4b983915525ac461c0fae5725b79e72c027dc505",
 }
 """Kalite nedeniyle kapatilan IEX ana tanimi (#17, AGENTS §7, §11.4). #30
-deseniyle aktif tanimlardan cikarildi; ICERIGI VE HASH'I DEGISMEDI. Git
-kaydi: `approved_in` commit'i son degisikligi, `last_main_with_file` dosyanin
-o yolda bulundugu son main; `git_blob` git'in nesne kimligi. Fixture bu
-kaydin bayt-bayt kopyasidir."""
+deseniyle aktif tanimlardan cikarildi; ICERIGI VE HASH'I DEGISMEDI.
+
+KAYIT (testle dogrulanmaz): `approved_in` dosyanin son degistigi onay
+commit'i, `last_main_with_file` dosyanin o yolda bulundugu son main (bu
+degisiklikten onceki main, #41 birlesmesi). Test bu commit'leri Git
+gecmisinden COZMEZ; CI sig klonla calisir.
+
+TESTLE DOGRULANAN: fixture'in dosya SHA256'si (`file_sha256`), git blob
+kimligi (`git_blob`) ve tanim hash'i (`spec_sha256`); tanim hash'inin iki
+kapali aracin kilidine esitligi; `path`'in aktif dizinde olmamasi."""
 PILOT_SPECS = (SPEC_DIR / "pilot-2026-06-u12.yaml", SPEC_DIR / "pilot-2026-05-u12.yaml")
 
 PILOT_SYMBOLS = (

@@ -1115,9 +1115,12 @@ kararıyla değerlendirilir.
 - `orb-baseline-2026q3-u11` aktif tanımlardan çıkarıldı. İçeriği ve hash'i
   **yeniden yazılmadı**: bayt-bayt kopyası
   `tests/fixtures/closed_datasets/` altında.
-- Git kaydı bir test sabitinde ve testle doğrulanıyor: onay commit'i
-  `221123f`, o yolda bulunduğu son main `f8dd495`, git blob, dosya hash'i
-  ve tanım hash'i (`369f4e7f…`).
+- Kayıt bir test sabitinde. İki commit **kayıttır**, test onları Git
+  geçmişinden çözmez: onay commit'i `221123f` ve dosyanın o yolda
+  bulunduğu son main `747dcf7` (#41 birleşmesi).
+- **Testin doğruladıkları:** fixture'ın dosya SHA256'sı, git blob kimliği
+  ve tanım hash'i (`369f4e7f…`). Tanım hash'i iki kapalı aracın kilidine
+  eşit; eski yol aktif dizinde yok.
 - Örtüşmezlik ve "tek aktif ana tanım" testlerinin denetimi değişmedi;
   yalnızca birinin açıklama metni güncellendi.
 - Kapanmış iki tek seferlik araç (teşhis, SIP karşılaştırması) depo
