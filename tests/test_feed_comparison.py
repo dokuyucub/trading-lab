@@ -48,6 +48,7 @@ from tlab.core.types import Bar
 from tlab.data.dataset import DatasetSpec, canonical_json
 
 BARS = "/v2/stocks/bars"
+CLOSED_IEX_MAIN = REPO / "tests" / "fixtures" / "closed_datasets" / "orb-baseline-2026q3-u11.yaml"
 
 # --------------------------------------------------------------------------
 # Yardimcilar
@@ -431,14 +432,17 @@ def test_a_session_count_mismatch_stops_before_any_bar_request(
     assert nothing_written(tmp_path)
 
 
-def test_the_sip_task_is_locked_to_the_repo_main_spec_and_the_iex_reference() -> None:
+def test_the_sip_task_stays_locked_to_the_closed_iex_main_and_reference() -> None:
+    """Sabit gorev kapatilan IEX tanimina kilitli kalir (§11.4); tanimin
+    bayt-bayt kopyasi test fixture'inda, aktif dizinde degil."""
     task = feed_comparison.SIP_TASK
     iex = baseline_diagnostic.TASK
     assert task.comparison_id == "feedcmp-orb-baseline-2026q3-u11-sip-1"
     assert task.source_spec == iex.source_spec == baseline_diagnostic.MAIN_SPEC
+    assert not (REPO / task.source_spec).exists(), "kapatilan tanim aktif dizinde"
     assert task.source_dataset_id == iex.source_dataset_id
     assert task.source_spec_sha256 == iex.source_spec_sha256
-    spec = DatasetSpec.from_yaml(REPO / task.source_spec)
+    spec = DatasetSpec.from_yaml(CLOSED_IEX_MAIN)
     digest = hashlib.sha256(canonical_json(spec.model_dump(mode="json"))).hexdigest()
     assert digest == task.source_spec_sha256
     assert spec.status == "approved"
@@ -451,6 +455,21 @@ def test_the_sip_task_is_locked_to_the_repo_main_spec_and_the_iex_reference() ->
         "artifact_id": 11004953510,
         "artifact_zip_sha256": "5ae3e3e0ab21e3a3bb70d3b6cfe7fadebe506c90f4b200c863fb43711dd7ea98",
     }
+
+
+def test_the_closed_task_stops_before_keys_and_sdk_in_the_repo(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Depo dizininde (kaynak tanim artik yok) tek seferlik karsilastirma
+    anahtar, SDK ve cikti dosyasindan ONCE durur: tekrar kosulamaz."""
+    monkeypatch.chdir(REPO)
+    env = keys_env()
+    out = tmp_path / "out" / "comparison.json"
+    code = feed_comparison.run(env, NOW, out=out, base_url="http://127.0.0.1:9")
+    assert code == 1
+    assert capsys.readouterr().out.startswith("FAIL kaynak: tanim okunamadi")
+    assert env.read == [], f"kaynak kilidinden once ortam okundu: {env.read}"
+    assert not out.parent.exists()
 
 
 def test_the_entry_point_takes_no_task_feed_or_spec(tmp_path: Path) -> None:

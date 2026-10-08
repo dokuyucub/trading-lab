@@ -2,6 +2,11 @@
 
 Tarih: 2026-09-28. Koordinasyon: #17. Karar kaydı: AGENTS §11.2.
 
+> **Durum (2026-10-08):** kaynak tanım `orb-baseline-2026q3-u11` aktif
+> tanımlardan çıkarıldı (AGENTS §11.4). Bu araç depo dizininde kaynak
+> kilidinde, anahtar ve SDK'dan önce durur; tekrar koşulmaz. Tanımın
+> bayt-bayt kopyası `tests/fixtures/closed_datasets/` altında.
+
 ## Neden
 
 Ana ölçümün ilk gerçek koşusu (run `36474064587`, main `c6c19db`) kalite

@@ -45,8 +45,13 @@ from tlab.job_io import silenced as _silenced
 from tlab.job_io import write_new as _write_new
 from tlab.sdk_probe import classify
 
-MAIN_SPEC = Path("config/datasets/orb-baseline-2026q3-u11.yaml")
-"""SABIT. Workflow'dan sembol, tarih ya da yol alinmaz."""
+MAIN_SPEC = Path("config/datasets/orb-baseline-2026q3-u11-sip.yaml")
+"""SABIT. Workflow'dan sembol, tarih ya da yol alinmaz.
+
+2026-10-08'den itibaren SIP taslak tanimi (AGENTS §11.4). Onceki IEX
+tanimi (orb-baseline-2026q3-u11) kalite nedeniyle kapatildi ve aktif
+tanimlardan cikarildi. Tanim `approved` olmadan indirme kapisi durur.
+"""
 
 DATASET_DIR = "dataset"
 HASH_FILE = "manifest.sha256"

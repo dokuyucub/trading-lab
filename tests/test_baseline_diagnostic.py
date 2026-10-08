@@ -36,6 +36,7 @@ from tlab.core.types import Bar
 from tlab.data.dataset import DatasetSpec, canonical_json
 
 REPO = Path(__file__).resolve().parents[1]
+CLOSED_IEX_MAIN = REPO / "tests" / "fixtures" / "closed_datasets" / "orb-baseline-2026q3-u11.yaml"
 NOW = datetime(2026, 2, 1, 12, 0, tzinfo=UTC)
 DAYS = weekdays(date(2026, 1, 5), 5)
 SESSIONS = [session(day) for day in DAYS]
@@ -224,14 +225,14 @@ def test_a_session_count_mismatch_stops_before_any_bar_request(
     assert not (tmp_path / "out" / "diagnostic.json").exists()
 
 
-def test_the_task_is_locked_to_the_repo_main_spec() -> None:
-    """Sabit gorev depodaki gercek ana tanima kilitli; tanima her dokunus
-    teshisi gecersiz kilar."""
-    from tlab.baseline_job import MAIN_SPEC
-
+def test_the_task_stays_locked_to_the_closed_iex_main() -> None:
+    """Sabit gorev, kapatilan IEX ana tanimina kilitli kalir (§11.4): kaynak
+    yolu ve hash'i degismedi. Tanim aktif dizinden cikarildi; bayt-bayt
+    kopyasi test fixture'inda. Tanima her dokunus teshisi gecersiz kilar."""
     task = baseline_diagnostic.TASK
-    assert task.source_spec == MAIN_SPEC
-    spec = DatasetSpec.from_yaml(REPO / task.source_spec)
+    assert task.source_spec == Path("config/datasets/orb-baseline-2026q3-u11.yaml")
+    assert not (REPO / task.source_spec).exists(), "kapatilan tanim aktif dizinde"
+    spec = DatasetSpec.from_yaml(CLOSED_IEX_MAIN)
     assert spec.dataset_id == task.source_dataset_id
     assert spec.status == "approved"
     digest = hashlib.sha256(canonical_json(spec.model_dump(mode="json"))).hexdigest()
@@ -244,6 +245,21 @@ def test_the_task_is_locked_to_the_repo_main_spec() -> None:
     }
     assert task.failed_run_id == 36474064587
     assert task.failed_head.startswith("c6c19db")
+
+
+def test_the_closed_task_stops_before_keys_and_sdk_in_the_repo(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Depo dizininde (kaynak tanim artik yok) tek seferlik arac anahtar,
+    SDK ve cikti dosyasindan ONCE durur: tekrar kosulamaz (§11.2, §11.4)."""
+    monkeypatch.chdir(REPO)
+    env = keys_env()
+    out = tmp_path / "out" / "diagnostic.json"
+    code = baseline_diagnostic.run(env, NOW, out=out, base_url="http://127.0.0.1:9")
+    assert code == 1
+    assert capsys.readouterr().out.startswith("FAIL kaynak: tanim okunamadi")
+    assert env.read == [], f"kaynak kilidinden once ortam okundu: {env.read}"
+    assert not out.parent.exists()
 
 
 def test_the_entry_point_takes_no_task_or_spec(tmp_path: Path) -> None:

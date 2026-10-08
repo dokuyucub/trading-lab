@@ -32,6 +32,7 @@ import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -112,10 +113,11 @@ def _root(tmp_path: Path, status: str) -> Path:
     (root / "config" / "datasets").mkdir(parents=True)
     for name in ("base.yaml", "universe.yaml"):
         shutil.copy(REPO / "config" / name, root / "config" / name)
-    spec = root / "config" / "datasets" / "orb-baseline-2026q3-u11.yaml"
+    # Kod sabit `MAIN_SPEC` yolunu okur: aktif ana tanim SIP taslagi (§11.4).
+    spec = root / "config" / "datasets" / "orb-baseline-2026q3-u11-sip.yaml"
     spec.write_text(
-        f"dataset_id: orb-baseline-2026q3-u11\nstatus: {status}\nsymbols: [SPY, QQQ]\n"
-        f"start: {DAYS[0]}\nend: {DAYS[-1]}\n",
+        f"dataset_id: orb-baseline-2026q3-u11-sip\nstatus: {status}\nsymbols: [SPY, QQQ]\n"
+        f"feed: sip\nstart: {DAYS[0]}\nend: {DAYS[-1]}\n",
         encoding="utf-8",
     )
     return root
@@ -189,7 +191,15 @@ def test_success_publishes_one_report_after_cleanup(
     assert not flow.workdir_after_cleanup
     assert flow.uploadable is not None, "basarili kosuda yuklenebilir rapor yok"
     report = json.loads(flow.uploadable.read_bytes())
-    assert report["dataset_id"] == "orb-baseline-2026q3-u11"
+    assert report["dataset_id"] == "orb-baseline-2026q3-u11-sip"
+    # Indirme tanimin feed'iyle yapilir: her bar istegi `feed=sip`.
+    bar_queries = [
+        parse_qs(urlparse(path).query)
+        for _, path, _ in state.requests
+        if urlparse(path).path == "/v2/stocks/bars"
+    ]
+    assert bar_queries, "bar istegi yapilmadi"
+    assert all(query["feed"] == ["sip"] for query in bar_queries)
     assert report["starting_equity_basis"] == "synthetic_assumption"
 
     # Ciktilar yalnizca aracin sabit satirlari; sizinti ve traceback yok.

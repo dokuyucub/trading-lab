@@ -1,0 +1,48 @@
+# ORB baseline olcumu icin TASLAK veri kumesi: ayni donem, tarihsel SIP.
+# Karar kaydi AGENTS §11.4 (#17, Codex 2026-10-08).
+#
+# ARASTIRMA DEGERLENDIRMESIDIR, BAGIMSIZ DOGRULAMA DONEMI DEGILDIR. Bu
+# donem ve bu feed, AYNI donemin veri KALITESI gozlemlendikten SONRA
+# secildi: IEX ana olcum denemesi kalite kapisinda P&L'den once durdu
+# (uygunsuz seanslarin hepsi AMD'de, §7); ardindan ayni 50 baseline
+# seansinda tarihsel SIP kalitesi olculdu ve hepsi gecti (§7). Hicbir
+# P&L, islem ya da sinyal gorulmedi; holdout seanslarinin kalitesi de.
+#
+# ONCEKI TANIM: orb-baseline-2026q3-u11 (IEX, approved). Kalite nedeniyle
+# kapatildi ve #30 deseniyle aktif tanimlardan cikarildi; ICERIGI VE
+# HASH'I DEGISMEDI. Bayt-bayt kopyasi:
+# tests/fixtures/closed_datasets/orb-baseline-2026q3-u11.yaml (test
+# denetler). Bu tanim ondan YALNIZCA dataset_id, feed (iex -> sip) ve
+# status ile ayrilir; tarihler, semboller, bolme ve kalite politikasi
+# ayni (test denetler).
+#
+# Strateji/config, evren ve kalite kurallari P&L gorulmeden onay
+# commit'inde dondurulur. Sonuc gorulduktan sonra ayni donemde ayar
+# degistirip yeni "bagimsiz" kanit uretmek yasak. Sonuc, IEX ile karar
+# veren paper/canli calismaya otomatik tasinmaz (§11.4).
+dataset_id: orb-baseline-2026q3-u11-sip
+# draft: tanim incelemede. `approved` AYRI bir inceleme ve kararla gelir;
+# draft bir tanim indirilemez ve olculemez (baseline_job onay kapisi).
+status: draft
+symbols: [SPY, QQQ, IWM, AAPL, MSFT, NVDA, AMD, AMZN, GOOGL, META, TSLA]
+timeframe: 1Min
+feed: sip
+adjustment: raw
+start: 2026-06-22
+end: 2026-09-18
+exchange_timezone: America/New_York
+holdout_fraction: 0.20
+split_unit: session
+settle_minutes: 20
+retention_days: 90
+# Kalite politikasi: kapatilan IEX tanimiyla AYNI degerler; gevsetilmedi.
+#   open_window_minutes >= ORB acilis araligi (15 dk)  - olcum denetler
+#   close_window_minutes <= gun sonu tamponu (10 dk)  - olcum denetler
+# Acilis penceresinde eksik dakika 0: tek bir eksik dakika acilis
+# araliginin tepe/dibini bozabilir (Codex, #19).
+quality:
+  open_window_minutes: 15
+  max_missing_open_window: 0
+  close_window_minutes: 10
+  max_missing_fraction: 0.10
+  max_ineligible_sessions: 0

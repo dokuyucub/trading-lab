@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, date, datetime
 from itertools import combinations
 from pathlib import Path
@@ -10,13 +11,39 @@ import pytest
 
 from test_dataset import FakeBars, FakeCalendar, minute_bars, session, weekdays
 from tlab.config import load_config
-from tlab.data.dataset import DatasetSpec, build_dataset, manifest_sha256, verify_baseline
+from tlab.data.dataset import (
+    DatasetSpec,
+    build_dataset,
+    canonical_json,
+    manifest_sha256,
+    verify_baseline,
+)
 from tlab.strategies.orb import ORBParams
 
 SPEC_DIR = Path(__file__).resolve().parents[1] / "config" / "datasets"
 SPECS = sorted(SPEC_DIR.glob("*.yaml"))
 
-MAIN_SPEC = SPEC_DIR / "orb-baseline-2026q3-u11.yaml"
+MAIN_SPEC = SPEC_DIR / "orb-baseline-2026q3-u11-sip.yaml"
+
+CLOSED_IEX_MAIN = (
+    Path(__file__).resolve().parent
+    / "fixtures"
+    / "closed_datasets"
+    / "orb-baseline-2026q3-u11.yaml"
+)
+CLOSED_IEX_RECORD = {
+    "path": "config/datasets/orb-baseline-2026q3-u11.yaml",
+    "approved_in": "221123fe0dc6ffa8fde4de5743834819ba1047f3",
+    "last_main_with_file": "f8dd4958d26e44d6387be05205577c29f0124233",
+    "git_blob": "566a0f2c440d9928ccb3538d29a5a1fb37319618",
+    "file_sha256": "e0bab7a3d724cb779022a70fb46120b9f9f5f74da7ab76870e9dabbc5627f87e",
+    "spec_sha256": "369f4e7fc94267583bf848fc4b983915525ac461c0fae5725b79e72c027dc505",
+}
+"""Kalite nedeniyle kapatilan IEX ana tanimi (#17, AGENTS §7, §11.4). #30
+deseniyle aktif tanimlardan cikarildi; ICERIGI VE HASH'I DEGISMEDI. Git
+kaydi: `approved_in` commit'i son degisikligi, `last_main_with_file` dosyanin
+o yolda bulundugu son main; `git_blob` git'in nesne kimligi. Fixture bu
+kaydin bayt-bayt kopyasidir."""
 PILOT_SPECS = (SPEC_DIR / "pilot-2026-06-u12.yaml", SPEC_DIR / "pilot-2026-05-u12.yaml")
 
 PILOT_SYMBOLS = (
@@ -104,8 +131,9 @@ def test_the_main_dataset_covers_the_trading_universe() -> None:
 
 
 def test_there_is_exactly_one_main_dataset() -> None:
-    """Aktif ana tanim tek. Eski kimlik kaldirilir (metni Git gecmisinde);
-    ayni tarihlerle iki tanim, ortusmezlik testine istisna isterdi."""
+    """Aktif ana tanim tek. Eski kimlik kaldirilir (metni Git gecmisinde,
+    kapatilan IEX taniminin kopyasi test fixture'inda); ayni tarihlerle iki
+    tanim, ortusmezlik testine istisna isterdi."""
     mains = [path.stem for path in SPECS if not path.stem.startswith("pilot-")]
     assert mains == [MAIN_SPEC.stem]
 
@@ -134,12 +162,52 @@ def test_the_main_dataset_drops_only_the_documented_symbols() -> None:
     assert set(PILOT_SYMBOLS) - set(main.symbols) == REMOVED_FROM_MAIN
 
 
-def test_the_new_main_id_changes_nothing_but_the_symbols() -> None:
-    """Kimlik degisimi yalnizca sembol kumesini, onay yalnizca durumu
-    degistirdi (#17). Tarih, feed, bolme ve kalite esikleri sabit."""
-    main = DatasetSpec.from_yaml(MAIN_SPEC)
+def test_the_closed_iex_main_changed_nothing_but_the_symbols() -> None:
+    """TARIHSEL zincirin ilk halkasi: `orb-baseline-2026q3` -> IEX u11 yalnizca
+    sembol kumesini, onay yalnizca durumu degistirdi (#17). Tarih, feed,
+    bolme ve kalite esikleri sabit. Kontrol kapatilan tanimin kopyasinda."""
+    closed = DatasetSpec.from_yaml(CLOSED_IEX_MAIN)
     unchanged = {key: value for key, value in PREVIOUS_MAIN.items() if key != "status"}
-    assert main.model_dump(mode="json", exclude={"dataset_id", "symbols", "status"}) == unchanged
+    assert closed.model_dump(mode="json", exclude={"dataset_id", "symbols", "status"}) == unchanged
+
+
+def test_the_closed_iex_main_is_kept_byte_for_byte_and_inactive() -> None:
+    """Kapatilan IEX tanimi yeniden yazilmadi: kopya kayitli dosya hash'ine,
+    tanim hash'i iki tek seferlik aracin kilidine esit; aktif tanimlarda yok."""
+    from tlab import baseline_diagnostic, feed_comparison
+
+    data = CLOSED_IEX_MAIN.read_bytes()
+    assert hashlib.sha256(data).hexdigest() == CLOSED_IEX_RECORD["file_sha256"]
+    blob = hashlib.sha1(b"blob %d\x00" % len(data) + data).hexdigest()  # noqa: S324 - git nesne kimligi
+    assert blob == CLOSED_IEX_RECORD["git_blob"]
+
+    closed = DatasetSpec.from_yaml(CLOSED_IEX_MAIN)
+    digest = hashlib.sha256(canonical_json(closed.model_dump(mode="json"))).hexdigest()
+    assert digest == CLOSED_IEX_RECORD["spec_sha256"]
+    assert digest == baseline_diagnostic.TASK.source_spec_sha256
+    assert digest == feed_comparison.SIP_TASK.source_spec_sha256
+    assert closed.dataset_id == CLOSED_IEX_MAIN.stem
+    assert (closed.status, closed.feed) == ("approved", "iex")
+
+    record_path = Path(CLOSED_IEX_RECORD["path"])
+    assert record_path == baseline_diagnostic.TASK.source_spec
+    assert not (SPEC_DIR.parents[1] / record_path).exists(), "kapatilan tanim aktif dizinde"
+    assert CLOSED_IEX_MAIN.stem not in {path.stem for path in SPECS}
+
+
+def test_the_sip_main_changes_only_id_feed_and_status() -> None:
+    """SIP taslagi kapatilan IEX tanimindan YALNIZCA kimlik, feed ve durumla
+    ayrilir (#17, §11.4): ayni donem, ayni semboller, ayni bolme ve ayni
+    kalite politikasi. Feed secimi kalite gozleminden sonra yapildi; baska
+    hicbir sey bu vesileyle kaymasin."""
+    main = DatasetSpec.from_yaml(MAIN_SPEC)
+    closed = DatasetSpec.from_yaml(CLOSED_IEX_MAIN)
+    ignored = {"dataset_id", "feed", "status"}
+    assert main.model_dump(mode="json", exclude=ignored) == closed.model_dump(
+        mode="json", exclude=ignored
+    )
+    assert (main.feed, closed.feed) == ("sip", "iex")
+    assert main.dataset_id == f"{closed.dataset_id}-sip"
 
 
 @pytest.mark.parametrize("path", SPECS, ids=lambda item: item.stem)
@@ -150,19 +218,21 @@ def test_every_spec_states_its_quality_policy_explicitly(path: Path) -> None:
 
 
 def test_the_main_dataset_is_approved_only_by_its_own_decision() -> None:
-    """Ana tanim AYRI ve incelenen bir commit ile approved oldu (#17).
+    """Ana tanim yalnizca AYRI ve incelenen bir commit ile approved olur (#17).
 
-    Bu test o commit'te BILINCLI olarak guncellendi (onceki hali: draft).
-    Pilotlar pilot kalir: P&L uretemezler.
+    SIP taslagi (§11.4) draft: onay ayri inceleme ve kararla gelir ve bu
+    test o commit'te BILINCLI olarak guncellenir. Kapatilan IEX tanimi
+    tarihsel olarak approved'du. Pilotlar pilot kalir: P&L uretemezler.
     """
     main = DatasetSpec.from_yaml(MAIN_SPEC)
-    assert main.status == "approved"
+    assert main.status == "draft"
+    assert DatasetSpec.from_yaml(CLOSED_IEX_MAIN).status == "approved"
     for path in PILOT_SPECS:
         assert DatasetSpec.from_yaml(path).status == "pilot"
 
 
-def test_the_approved_spec_passes_the_policy_gate_with_the_repo_config(tmp_path: Path) -> None:
-    """On ucus: gercek ana tanimin politikasi ve depodaki gercek ayarlar,
+def test_the_main_spec_passes_the_policy_gate_with_the_repo_config(tmp_path: Path) -> None:
+    """On ucus: aktif ana tanimin politikasi ve depodaki gercek ayarlar,
     olcumun P&L'den onceki politika kapisindan geciyor.
 
     Onaydan sonra biri config'i (orn. gun sonu tamponunu) degistirirse
@@ -179,7 +249,11 @@ def test_the_approved_spec_passes_the_policy_gate_with_the_repo_config(tmp_path:
     }
     out = tmp_path / "ds"
     build_dataset(
-        main.model_copy(update={"start": days[0], "end": days[-1]}),
+        # Durum kapisi ayri test edilir: gercek tanim taslak ve indirilemez.
+        # Burada yalnizca POLITIKA ile depo ayarlarinin uyumu olculuyor; bu
+        # yuzden BELLEKTEKI sentetik kopya, olcumun politika kapisina
+        # ulasabilsin diye onayli isaretlenir. Hicbir dosya degismez.
+        main.model_copy(update={"start": days[0], "end": days[-1], "status": "approved"}),
         bars_source=FakeBars(bars),
         calendar_source=FakeCalendar(sessions),
         out_dir=out,

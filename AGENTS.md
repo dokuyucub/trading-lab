@@ -781,7 +781,9 @@ sonuc: all_eligible
   iptal, bracket bacaklarının davranışı — hiçbiri gerçek ortamda görülmedi.
 - **Gözetimsiz seans.** Sistem bir kez bile canlı çalışmadı. Yeniden
   başlatma/mutabakat, çift emir engeli, gün sonu kapatma gerçek ortamda
-  sınanmadı.
+  sınanmadı. Gözetimsiz paper kabulünden önce ayrıca iki gereksinim var:
+  karar feed'i ile ölçüm feed'inin uyumu ve canlı karar yolunda eksik
+  açılış barı kontrolü (§11.4).
 - **Stratejinin kârlılığı.** ORB gerçek piyasa verisiyle bir kez bile
   backtest edilmedi: ilk ana ölçüm kalite kapısında, P&L'den önce durdu ve
   IEX üzerindeki bu tanım kalite nedeniyle kapatıldı (yukarıda). Aynı
@@ -919,6 +921,10 @@ SDK bağlantısı §7'de doğrulanmıştır; emir yaşam döngüsü ve kârlıl�
 sözleşmesi: `docs/designs/baseline-measurement-execution.md`. Değişen tek
 alan `status`; tarih, feed, bölme, settle, retention ve kalite eşikleri
 testle sabit (`tests/test_dataset_specs.py`).
+
+*Durum (2026-10-08):* bu tanım üzerindeki ölçüm denemesi kapatıldı (§11.2,
+karar D). Tanım aktif tanımlardan çıkarıldı; bayt-bayt kopyası test
+fixture'ında (§11.4).
 
 **Dayanak:**
 
@@ -1069,3 +1075,72 @@ hepsi politikayı geçti. ZIP/JSON bağımsız doğrulaması 2026-10-08'de
 tamamlandı (Codex; kullanıcı mevcut ZIP'i iletti, yeni koşu yok). Bu
 karşılaştırma tekrar koşulmaz; SIP üzerinde P&L değerlendirmesi ayrı bir
 tasarım ve karar ister (§7, Codex kararı 2026-10-08).
+
+### 11.4 SIP üzerinde baseline değerlendirmesi: taslak tanım — #17, 2026-10-08
+
+Codex kararları: #17 6050448152 ve 6051089595. Bu bir **kod geliştirme**
+kararıdır. Veri indirme, P&L koşusu, holdout açma, ücretli abonelik ya da
+emir izni değildir; bunlar tanımın ayrı son onayı ve sonraki yürütme
+kararıyla değerlendirilir.
+
+**Ne olduğu:**
+
+- Tanım `orb-baseline-2026q3-u11-sip`, `draft`. Aynı dönem, aynı 11 sembol,
+  aynı bölme ve kalite politikası; yalnızca feed `sip` (test denetler).
+- **Araştırma değerlendirmesidir, bağımsız doğrulama dönemi değildir.**
+  Dönem ve feed, aynı dönemin veri kalitesi gözlemlendikten sonra seçildi:
+  IEX'te uygunsuz 10 seansın hepsi bir AMD seansıydı; tarihsel SIP'te 50
+  baseline seansının hepsi uygun (§7). P&L, işlem ya da sinyal görülmedi;
+  holdout seanslarının kalitesi de görülmedi.
+- Başka bir dönem seçmek de bu etkiyi tamamen kaldırmazdı; o dönem de şimdi,
+  gözlemden sonra seçilmiş olurdu. Asıl ayrım, gözlemlenmiş geliştirme
+  verisi ile önceden kilitlenmiş değerlendirme arasındadır.
+- §11.1 durma kuralı, aynı dönemi geçirmek için tanımın değiştirilip yeniden
+  denenmesini yasaklar ve sonucu #17'ye bırakır. Bu taslak o tartışmadaki
+  karardır; bu yüzden sonucu bağımsız doğrulama değil, araştırma
+  değerlendirmesi sayılır. IEX tanımının P&L onayı tüketilmiş kalır (§11.2,
+  karar D); SIP tanımı kendi ayrı onayını ister.
+
+**P&L görülmeden dondurulanlar:**
+
+- Strateji ve config, evren ve kalite kuralları `approved` commit'inde
+  dondurulur. Bu bir kod kilidi değil, karar kuralıdır: ölçüm raporu kod
+  commit'ini, ayarları ve ayar hash'ini taşır; inceleme bunları onay
+  commit'indekilerle karşılaştırır.
+- Sonuç görüldükten sonra aynı dönemde ayar değiştirip yeni "bağımsız"
+  kanıt üretmek yasaktır. Olumsuz sonuç saklanmaz.
+
+**Kapatılan IEX tanımı (#30 deseni):**
+
+- `orb-baseline-2026q3-u11` aktif tanımlardan çıkarıldı. İçeriği ve hash'i
+  **yeniden yazılmadı**: bayt-bayt kopyası
+  `tests/fixtures/closed_datasets/` altında.
+- Git kaydı bir test sabitinde ve testle doğrulanıyor: onay commit'i
+  `221123f`, o yolda bulunduğu son main `f8dd495`, git blob, dosya hash'i
+  ve tanım hash'i (`369f4e7f…`).
+- Örtüşmezlik ve "tek aktif ana tanım" testlerinin denetimi değişmedi;
+  yalnızca birinin açıklama metni güncellendi.
+- Kapanmış iki tek seferlik araç (teşhis, SIP karşılaştırması) depo
+  dizininde anahtar ve SDK'dan önce kaynak kilidinde durur (test). Eski
+  kaynağın fixture kopyasıyla regresyon kanıtı sürer (smoke testleri).
+- `baseline_job.MAIN_SPEC` SIP taslağına geçti. Taslak tanım indirme
+  kapısında durur (test).
+
+**Onay:** `approved` ayrı inceleme ve karar olarak gelir.
+
+**Paper ve canlı çalışmayla ilişki:**
+
+- SIP sonuçları, IEX ile karar veren gözetimsiz paper/canlı çalışmaya
+  otomatik **taşınamaz**.
+- Gözetimsiz paper kabulünden önce iki ayrı gereksinim:
+  1. **Feed-uyum değerlendirmesi:** gerçek zamanda görülen IEX barları ile
+     aynı günün tarihsel SIP barları karşılaştırılır. Kapsam: açılış
+     penceresi, açılış aralığı ve sinyal uyumu. P&L hesaplanmaz; eşikler
+     veri görülmeden sabitlenir.
+  2. **Canlı karar yolunda eksik açılış barı kontrolü.**
+- Salt okunur gölge gözlem (Faz 3) bu kanıtı üretmek için yapılabilir.
+  Ölçüm için önceden uyum sonucu istenmez.
+
+**Kayda gerçekmiş gibi geçmeyen, doğrulanmamış noktalar:** karar feed'inin
+journal'a yazılması (config yorumu ve docstring söylüyor, uygulama
+doğrulanmadı) ve paper dolumlarının hangi veriye göre simüle edildiği.
