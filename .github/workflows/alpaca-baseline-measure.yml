@@ -61,7 +61,7 @@ jobs:
       # Yuklenen TEK dosya: olcum raporu. Kosulsuz adim yalnizca onceki
       # butun adimlar - temizlik dahil - basariliysa calisir.
       - name: Olcum raporunu yukle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: baseline-report
           path: ${{ runner.temp }}/baseline-report.json
