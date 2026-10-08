@@ -178,6 +178,33 @@ ileride yeniden temin edilebileceğini de kanıtlamaz. Ham baseline da
 silindiği için raporun ileride birebir yeniden üretimi koşulsuz garanti
 değildir.
 
+## Ölçüm feed'i (rapor şeması v3)
+
+*2026-10-08:* Codex kararı A (#17 6052081621). Manifest feed'i kaydeder,
+ama manifest dışarı çıkmaz. Rapor bu yüzden ölçüm feed'ini ayrıca taşır:
+
+- **`data_feed`:** yalnızca doğrulanmış manifestten. Manifest'in `feed`
+  alanı spec'in beyanıyla aynı ve desteklenen bir değer olmalı. Bu denetim
+  P&L'den önce yapılır: boş, bilinmeyen ya da tutarsız değer ölçümü tek
+  bir backtest kurulmadan durdurur.
+- **Config değişmez.** `config.data.feed` ayarlanmış paper/canlı karar
+  feed'i olarak ayrı görünür; `config_sha256` aynı anlamı taşır. Bu alan,
+  o feed'le çalışan bir oturumun kanıtı değildir.
+- **Kalıcı uyarı.** İki feed farklıysa `caveats` listesine sabit metinli
+  bir satır eklenir: sonuç ayarlanmış feed'e otomatik taşınmaz (AGENTS
+  §11.4). Feed'ler eşitse liste değişmez.
+- **Journal.** Her senaryonun backtest koşusu `runs.data_feed` alanına
+  manifest feed'ini yazar. Açık değer verilmeyen backtest (ör. `tlab
+  backtest`) config'in ayarlanmış feed'ini yazar; bu, önbellekteki
+  barların gerçek feed'inin doğrulaması değildir.
+- **Log.** Ölçüm adımının mevcut `rapor:` satırına yalnızca
+  `feed <x> (ayar <y>)` eklenir; satır sayısı ve biçim sözleşmesi aynı.
+  Fiyat, getiri ya da hesap sayısı eklenmez.
+- **Eski raporlar.** Daha eski şemada `data_feed` yoktur; hangisi olduğunu
+  `report_schema` söyler. Üretim kodunda rapor dosyası okuyan bir tüketici
+  yok: CLI ve ölçüm adımı o koşuda ürettikleri raporu basar; testler de
+  kendi ürettikleri raporu okur.
+
 ## Süre (PR b)
 
 - 11 sembol ve hedef takvim büyüklüğünde sentetik veriyle dört senaryo

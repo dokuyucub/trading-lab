@@ -346,8 +346,11 @@ def _measure_step(env: Mapping[str, str], *, workdir: Path, out: Path, root: Pat
 
     # Performans sayisi LOG'A BASILMAZ; sonuc yalnizca rapor artefaktinda.
     print(f"OK olcum {report['dataset_id']} (manifest {digest[:12]})")
+    # Feed sayi degil: olcumun ve ayarin feed'i ayni satirda, ayri ayri.
     print(
-        f"rapor: sema {report['report_schema']}, senaryo {len(report['scenarios'])}, "
+        f"rapor: sema {report['report_schema']}, "
+        f"feed {report['data_feed']} (ayar {report['config']['data']['feed']}), "
+        f"senaryo {len(report['scenarios'])}, "
         f"baseline {report['baseline_sessions']['count']} seans, "
         f"holdout {report['holdout']['sessions']} seans (acilmadi)"
     )

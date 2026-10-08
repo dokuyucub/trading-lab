@@ -389,13 +389,14 @@ def test_corrupted_holdout_files_do_not_change_the_commitment(
 
 
 def test_the_report_carries_only_version_and_hash(tmp_path: Path) -> None:
-    """Rapor v2: holdout icin sayi + taahhut. Yol, dosya ya da icerik hash'i yok."""
+    """Rapor (v2'den beri): holdout icin sayi + taahhut. Yol, dosya ya da icerik
+    hash'i yok. v3 yalnizca olcum feed'ini ekledi (test_report_feed)."""
     dataset, manifest = build(tmp_path, symbols=SYMBOLS)
     verified = verify_baseline(dataset, manifest_sha256(dataset))
     config = load_config(Path(__file__).resolve().parents[1])
     report = run_baseline(verified, config, code_commit="c0ffee")
 
-    assert report["report_schema"] == REPORT_SCHEMA_VERSION == 2
+    assert report["report_schema"] == REPORT_SCHEMA_VERSION == 3
     assert report["holdout"] == {
         "sessions": len(manifest["split"]["holdout"]),
         "opened": False,

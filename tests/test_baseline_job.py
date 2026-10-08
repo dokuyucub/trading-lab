@@ -297,6 +297,7 @@ def test_missing_keys_stop_after_the_gate_without_a_directory(tmp_path: Path) ->
 REPORT_KEYS = {
     "report_schema",
     "dataset_id",
+    "data_feed",
     "manifest_sha256",
     "baseline_sessions",
     "holdout",

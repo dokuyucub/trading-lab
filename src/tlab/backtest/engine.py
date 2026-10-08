@@ -30,7 +30,7 @@ from zoneinfo import ZoneInfo
 
 from tlab.backtest.metrics import Metrics, compute_metrics
 from tlab.backtest.sim_broker import SimBroker, SimFillModel
-from tlab.config import Config
+from tlab.config import SUPPORTED_FEEDS, Config
 from tlab.core.calendar import TradingSession
 from tlab.core.clock import SimClock
 from tlab.core.types import Bar, Timeframe
@@ -120,8 +120,20 @@ class Backtest:
         history_days: int = 1,
         notes: str | None = None,
         sessions: Sequence[TradingSession] | None = None,
+        data_feed: str | None = None,
     ) -> None:
+        if data_feed is not None and data_feed not in SUPPORTED_FEEDS:
+            msg = (
+                f"desteklenmeyen data_feed {data_feed!r}; "
+                f"gecerli: {', '.join(sorted(SUPPORTED_FEEDS))}"
+            )
+            raise DataError(msg)
         self.config = config
+        self.data_feed = config.data.feed if data_feed is None else data_feed
+        """Journal'in `runs.data_feed` alani. Acik deger, barlarin feed'idir:
+        olcum onu DOGRULANMIS manifestten verir. `None` ise config'in
+        AYARLANMIS feed'i yazilir; onbellekteki barlarin gercek feed'i bu
+        yolda DOGRULANMAZ."""
         self.strategy = strategy
         self.market = market
         self.conn = conn
@@ -179,7 +191,7 @@ class Backtest:
         writer = JournalWriter(self.conn, clock)
         run_id = writer.start_run(
             mode="backtest",
-            data_feed=self.config.data.feed,
+            data_feed=self.data_feed,
             params_version=self.strategy.params_version,
             config=self.config.model_dump(mode="json"),
             git_sha=current_git_sha(self.config.root),
