@@ -154,6 +154,20 @@ def test_the_measured_feed_never_changes_the_config_or_its_hash(tmp_path: Path) 
     assert sip["config_sha256"] == iex["config_sha256"]
 
 
+def test_the_config_hash_follows_the_config_not_the_dataset(tmp_path: Path) -> None:
+    """Codex 6063982093: hash, o kosunun GIRIS config'inin semantik hash'idir
+    (semboller olcum evrenine normalize). Config gercekten degisirse
+    (ayarlanmis feed iex -> sip) hash degisir; ayni veri kumesiyle bile."""
+    verified = verified_with_feed(tmp_path, "sip")
+    iex_config, sip_config = config_with_feed("iex"), config_with_feed("sip")
+    with_iex = run_baseline(verified, iex_config, code_commit="c0ffee")
+    with_sip = run_baseline(verified, sip_config, code_commit="c0ffee")
+    assert with_iex["config_sha256"] == expected_config_sha256(iex_config)
+    assert with_sip["config_sha256"] == expected_config_sha256(sip_config)
+    assert with_iex["config_sha256"] != with_sip["config_sha256"]
+    assert with_iex["data_feed"] == with_sip["data_feed"] == "sip"
+
+
 # --------------------------------------------------------------------------
 # P&L'den once: tutarsiz manifest feed'i
 # --------------------------------------------------------------------------
