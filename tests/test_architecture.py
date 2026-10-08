@@ -1182,3 +1182,112 @@ def test_the_baseline_job_measures_one_fixed_spec() -> None:
 
     assert (REPO / MAIN_SPEC).is_file()
     assert MAIN_SPEC.stem.startswith("orb-baseline-")
+
+
+# --------------------------------------------------------------------------
+# Artefakt yukleme sozlesmesi ve gidis-donus dogrulamasi (#17, #39)
+# --------------------------------------------------------------------------
+
+UPLOAD_ACTION = "actions/upload-artifact@"
+UPLOAD_INPUTS = frozenset({"name", "path", "if-no-files-found", "retention-days"})
+UPLOAD_RETENTION_DAYS = {
+    "alpaca-pilot-quality.yml": 30,
+    "alpaca-baseline-measure.yml": 90,
+    "alpaca-baseline-quality-diagnostic.yml": 90,
+    "alpaca-baseline-feed-comparison.yml": 90,
+    "artifact-roundtrip.yml": 1,
+}
+"""Upload adimi olan BUTUN workflow'lar ve saklama sureleri, MEVCUT
+degerleriyle: pilot ozeti 30 gun, uc gercek rapor 90 gun. Yalnizca sentetik
+dogrulama 1 gun; bu kisa sure gercek raporlara tasinmaz. Yeni bir upload
+yolu ya da sure degisikligi buraya bilincli olarak yazilir."""
+
+ROUNDTRIP = "artifact-roundtrip.yml"
+ROUNDTRIP_PATHS = [".github/workflows/**", "scripts/artifact_roundtrip/**"]
+
+
+def _upload_steps() -> dict[str, list[dict[str, Any]]]:
+    found: dict[str, list[dict[str, Any]]] = {}
+    for path in sorted((REPO / ".github" / "workflows").glob("*.yml")):
+        for job in _workflow(path.name).get("jobs", {}).values():
+            for step in job.get("steps", []):
+                if str(step.get("uses", "")).startswith(UPLOAD_ACTION):
+                    found.setdefault(path.name, []).append(step)
+    return found
+
+
+def test_every_upload_uses_one_version_and_one_input_contract() -> None:
+    """Butun artefakt yuklemeleri AYNI surumde ve AYNI girdi sozlesmesinde.
+
+    Bir yukseltme kullanimlardan birini atlarsa burada kirmizi olur: #39
+    (Dependabot) sonradan eklenen SIP workflow'unu kapsamiyordu. Gidis-donus
+    dogrulamasi da ayni surumu ve ayni girdi anahtarlarini kullandigi icin,
+    onun hosted kosuda yesil olmasi gercek veri workflow'larinin upload
+    adimi icin anlamlidir.
+    """
+    steps = _upload_steps()
+    assert set(steps) == set(UPLOAD_RETENTION_DAYS), "upload yolu listesi degisti"
+    versions = {step["uses"] for items in steps.values() for step in items}
+    assert len(versions) == 1, f"upload surumleri karisik: {sorted(versions)}"
+    for name, items in steps.items():
+        assert len(items) == 1, f"{name}: birden cok upload adimi"
+        (step,) = items
+        inputs = step["with"]
+        assert set(inputs) == UPLOAD_INPUTS, f"{name}: upload girdi kumesi farkli"
+        assert inputs["if-no-files-found"] == "error", name
+        assert str(inputs["path"]).startswith("${{ runner.temp }}/"), name
+        assert str(inputs["path"]).endswith(".json"), name
+        assert inputs["retention-days"] == UPLOAD_RETENTION_DAYS[name], name
+
+
+def test_the_roundtrip_check_is_secret_free_and_least_privileged() -> None:
+    """Gidis-donus dogrulamasi: secret yok, pull_request_target yok, token
+    yalnizca dogrulama adiminda, en az izin; quality kapisindan bagimsiz."""
+    workflow = _workflow(ROUNDTRIP)
+    dumped = yaml.safe_dump(workflow)
+    # PyYAML (YAML 1.1) `on` anahtarini True olarak okur.
+    triggers: dict[str, Any] = workflow["on"] if "on" in workflow else workflow[True]
+    assert set(triggers) == {"pull_request", "workflow_dispatch"}
+    assert triggers["pull_request"] == {"paths": ROUNDTRIP_PATHS}
+    assert triggers["workflow_dispatch"] is None, "workflow girdi almamali"
+    assert "pull_request_target" not in dumped
+    assert "secrets." not in dumped
+    assert "set -x" not in dumped
+    assert workflow["permissions"] == {"contents": "read"}
+    assert "env" not in workflow
+
+    jobs = workflow["jobs"]
+    assert set(jobs) == {"upload", "verify"}
+    assert "permissions" not in jobs["upload"], "upload isi ek izin almamali"
+    assert jobs["verify"]["permissions"] == {"contents": "read", "actions": "read"}
+    assert jobs["verify"]["needs"] == "upload"
+    for name, job in jobs.items():
+        assert "env" not in job, f"{name}: is duzeyinde env olmamali"
+        assert "continue-on-error" not in job
+        assert not [step for step in job["steps"] if "continue-on-error" in step or "if" in step]
+        checkout = next(
+            step
+            for step in job["steps"]
+            if str(step.get("uses", "")).startswith("actions/checkout")
+        )
+        assert checkout["with"]["persist-credentials"] is False, name
+
+    with_token = [
+        (name, step)
+        for name, job in jobs.items()
+        for step in job["steps"]
+        if "github.token" in yaml.safe_dump(step)
+    ]
+    assert [(name, step["name"]) for name, step in with_token] == [
+        ("verify", "Geri indir ve dogrula")
+    ], "token yalnizca dogrulama adiminda olmali"
+    (_, verify_step) = with_token[0]
+    reference = "${{ github.token }}"  # Actions ifadesi; deger degil
+    assert verify_step["env"]["GH_TOKEN"] == reference
+    assert "github.token" not in verify_step["run"], "token komut satirina yazilmaz"
+    assert "scripts/artifact_roundtrip/verify.py" in verify_step["run"]
+
+    # Yuklenen dosya depodaki SABIT sentetik dosya; gercek veri yok.
+    prepare = " ".join(step.get("run", "") for step in jobs["upload"]["steps"])
+    assert "scripts/artifact_roundtrip/payload.json" in prepare
+    assert "tlab" not in dumped, "dogrulama trading koduna dokunmaz"

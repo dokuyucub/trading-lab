@@ -1,0 +1,4 @@
+# Artefakt gidis-donus dogrulamasi: sentetik dosyanin SHA256'si bir
+# SABIT (scripts/artifact_roundtrip/verify.py). Satir sonu donusumu
+# baytlari, dolayisiyla hash'i degistirmesin.
+scripts/artifact_roundtrip/payload.json -text
