@@ -1,0 +1,80 @@
+# Artefakt gidis-donus dogrulamasi (#17, #39 bakim plani).
+#
+# Sabit, SENTETIK bir JSON (scripts/artifact_roundtrip/payload.json) gercek
+# veri workflow'lariyla AYNI upload surumu ve AYNI girdi kumesiyle yuklenir;
+# ikinci is artefakti GitHub API'sinden ZIP olarak geri indirip hash
+# zincirini dogrular (scripts/artifact_roundtrip/verify.py).
+#
+# Secret YOK, gercek veri YOK, Alpaca YOK. Gercek veri workflow'lari bir
+# bagimlilik yukseltmesinin ilk entegrasyon testi olarak kullanilmaz;
+# upload yolunun kaniti bu workflow'dur. Surum ve girdi esitligi
+# tests/test_architecture.py tarafindan denetlenir.
+#
+# Tetikleme: yalnizca workflow dosyalari ya da bu dogrulamanin kendi
+# dosyalari degisen PR'lar (depo gizli; Actions dakikasi kotaya tabi) ve
+# elle. `pull_request_target` KULLANILMAZ. CI'in `quality` kapisi bundan
+# bagimsiz ve filtresiz kalir.
+name: Artifact roundtrip check
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - "scripts/artifact_roundtrip/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      artifact-digest: ${{ steps.upload.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Sentetik dosyayi hazirla
+        run: cp scripts/artifact_roundtrip/payload.json "$RUNNER_TEMP/artifact-roundtrip.json"
+      # Gercek veri workflow'lariyla ayni surum ve ayni girdi anahtarlari;
+      # yalnizca saklama suresi kisa (sentetik dosya).
+      - name: Sentetik dosyayi yukle
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifact-roundtrip
+          path: ${{ runner.temp }}/artifact-roundtrip.json
+          if-no-files-found: error
+          retention-days: 1
+
+  verify:
+    needs: upload
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Artefakt listesi ve ZIP indirme icin yalnizca okuma izni.
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # Token YALNIZCA bu adimda. Betik onu yalnizca GitHub API isteklerine
+      # ekler; ZIP yonlendirmesini elle izler ve o istege eklemez.
+      # Yonlendirme adresi ve token basilmaz.
+      - name: Geri indir ve dogrula
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_ID: ${{ needs.upload.outputs.artifact-id }}
+          UPLOAD_DIGEST: ${{ needs.upload.outputs.artifact-digest }}
+        run: >-
+          python3 -I scripts/artifact_roundtrip/verify.py
+          --artifact-id "$ARTIFACT_ID"
+          --upload-digest "$UPLOAD_DIGEST"
