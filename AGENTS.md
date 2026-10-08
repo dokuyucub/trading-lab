@@ -1129,7 +1129,7 @@ kararıyla değerlendirilir.
 - `baseline_job.MAIN_SPEC` SIP taslağına geçti. Taslak tanım indirme
   kapısında durur (test).
 
-**Onay:** `approved` ayrı inceleme ve karar olarak gelir.
+**Onay:** ayrı inceleme ve kararla verildi; kayıt ve dondurulanlar §11.5'te.
 
 **Paper ve canlı çalışmayla ilişki:**
 
@@ -1156,3 +1156,146 @@ journal'a manifest feed'ini yazar
 (`docs/designs/baseline-measurement-execution.md`). **Canlı CLI yolunun**
 journal'a yazdığı feed çalışma anında hâlâ doğrulanmadı. Paper dolum
 kaynağı da doğrulanmamış kalıyor.
+
+### 11.5 SIP ana ölçüm onayı ve dondurma — #17, 2026-10-08
+
+**Karar zinciri:**
+
+- taslak: §11.4 (Codex 6050448152, 6051089595);
+- sıra ve teslim şartları: Codex 6066165935 ve 6067241410;
+- ön rapor: Claude 6067224557 (çapraz not 6067284363);
+- ön rapora dört karar: Codex 6067588608.
+
+**İki ayrı olay:**
+
+1. **Bu kayıt (onay):** tanımın `approved` statüsünü ve aşağıdaki
+   değerlendirme sözleşmesini onaylar. Bu kaydı taşıyan PR'ın bağımsız
+   incelemesi ve birleşmesiyle verilir. Onay commit'i kendi kimliğini
+   taşımaz; PR head ve merge kimliği inceleme ve devir kaydından bağlanır.
+2. **Yürütme (henüz yok):** gerçek workflow'u çalıştırma yetkisi bu kayıtla
+   **verilmiş değildir**. Sonraki ayrı ve kayıtlı bir yürütme kararı şunları
+   bağlar:
+   - kesin yürütme commit'ini;
+   - o commit'in main CI'sını;
+   - yürütme yöntemini.
+
+   Aşağıdaki yeniden koşu kuralı o yürütmenin kapsamına aittir.
+
+**Kapsam:** `orb-baseline-2026q3-u11-sip` tanımının indirilmesi ve
+baseline bölümünün **bir kez** ölçülmesi; yürütme kararından sonra.
+
+**Kapsam dışı:**
+
+- işlem ya da emir;
+- canlı dağıtım;
+- holdout'un açılması;
+- parametre terfisi;
+- yeni veri kümesi ya da abonelik.
+
+**Araştırma değerlendirmesi:** dönem ve feed, aynı dönemin kalitesi
+gözlemlendikten sonra seçildi (§11.4). Sonuç bağımsız doğrulama sayılmaz.
+Holdout kapalı kalır.
+
+**Dondurulanlar:** P&L görülmeden; onayın dayandığı main `544c371`. Bu
+değerleri değiştirmek yeni ve kayıtlı bir değerlendirme kararı gerektirir.
+
+| Ne | Değer |
+|---|---|
+| Tanım | `orb-baseline-2026q3-u11-sip`; onaylı kanonik hash `104b4e75a1140f39e1d4a7e763413f1bd784d1a223dfdf149a4b7a43589cbb78`. Taslaktan tek fark `status`. |
+| Config | Ölçüm evrenine normalize semantik hash `14c5141e46e3496ca9cd9cc65e61cd53e4981934ced2cca2aa794fb3436396c8` (`config/base.yaml` + `config/universe.yaml`; semboller tanımdan, yerel yollar hariç). |
+| Strateji | `orb-7b32942a`: `ORBParams()` varsayılanları. Ölçüm parametreyi config'ten okumaz. |
+| Maliyet | Kayma / spread (bps): iyimser 0.5 / 1; **temel 1 / 2 (birincil)**; kötümser 3 / 5; sert 5 / 10. Komisyon 0. |
+| Kanıt kuralı | `assess`: eşik 0 R, en az 100 işlem, %95 güven, bootstrap 2000, tohum 0. Bu kayıtla değişmez. |
+| Özsermaye | Sentetik 100 000; hesap özsermayesi okunmaz. |
+| Rapor | Şema 3. `data_feed` `sip`, `config.data.feed` `iex`; uyuşmazlık uyarısı beklenen durumdur. |
+
+**Denetim:**
+
+- `tests/test_measurement_freeze.py`: kimlikleri somut değerlerle denetler;
+  beklenen değerler üretim sabitlerinden türetilmez. Gerçek ölçüm yolunun
+  (`baseline_job.measure` → `run_baseline`) strateji sürümünü,
+  senaryoları, özsermayeyi, şemayı ve kanıt kuralını değiştirmeden
+  kullandığını sentetik veriyle ölçer. Config hash'i bu yoldan geçmez;
+  `run_baseline` ile aynı biçimde hesaplanır (`tests/test_report_feed.py`
+  bu biçimin rapordakine eşit olduğunu gösterir).
+- `tests/test_dataset_specs.py`: onaylı tanımın hash'ini denetler. Genel
+  draft/pilot ret testleri aynen korunur.
+- **Yaşam döngüsü, genel kilit değil:** dondurma yalnızca bu değerlendirme
+  beklerken geçerlidir; aktif ana tanım bu tanım olmalı ve yürütme kaydı
+  bulunmamalı.
+  - Yürütme kaydedildiğinde (§7) ya da aktif ana tanım değiştiğinde kayıt
+    tarihsel kalır. Başka veri kümesi ya da strateji geliştirmesini
+    kilitlemez.
+  - Geçiş kendiliğinden olmaz; kayıtlı değişiklikle yapılır.
+- **Yürütmeden önce head değişirse** (örneğin bakım PR'ı): kimlikleri bu
+  test yeni head'in CI'ında yeniden doğrular. Eski head'in onayı
+  kendiliğinden taşınmaz.
+
+**Sonucun okunması:** veri görülmeden yazıldı.
+
+- Birincil satır `temel`. Satır seçimi sonuca göre yapılmaz.
+- Yalnızca `iyimser`'de olumlu olan sonuç olumlu sayılmaz.
+- Sonucu geçsin diye aynı dönemde parametre, kalite ya da evren
+  değiştirilmez. Otomatik holdout ya da terfi yoktur.
+
+| `temel` kararı | Anlamı | Sonraki adım |
+|---|---|---|
+| `insufficient_data` | 100'den az işlem; rakamlar ne olursa olsun belirsiz. | Holdout açılmaz. Daha fazla veri gerekirse yeni dönem (aşağıdaki şartlarla, ayrı karar). |
+| `inconclusive` | Veri yeterli, aralık 0'ı kapsıyor; belirsiz. | Aynı. |
+| `worse` | Aralığın üst ucu bile 0'ın altında. | Bu adayın bu değerlendirmede reddi; kayda geçer, olumsuz sonuç saklanmaz. Yeni hipotez yeni veri ister. Holdout açılmaz. |
+| `better` | Aralığın alt ucu bile 0'ın üstünde. | Önce `kotumser`'e bakılır. O da `worse` değilse bu **yalnızca ayrı bir incelemeyi gündeme alma şartıdır**; holdout tartışması da o incelemenin işidir. Otomatik değildir; terfi ya da emir izni değildir. |
+
+Bu tablonun sınırları:
+
+- **Kötümser senaryo:** `kotumser`'in `inconclusive` ya da
+  `insufficient_data` olması dayanıklılık kanıtı değildir. "Kötü olduğu
+  kanıtlanmadı" ile "iyi olduğu kanıtlandı" ayrı ayrı kayda geçer.
+- **Bağımlılık:** güven aralığı işlemleri bağımsız sayar. Aynı gün ve aynı
+  sembol işlemleri bağımlıdır ve gün bloğu yeniden örneklemesi yoktur.
+  Aralıklar bu yüzden iyimser okunur. Bu tablo otomatik bir istatistiksel
+  onay mekanizması değildir.
+- **Az işlem:** gerçekçi bir olasılıktır. O durumda filtreleri gevşetmek
+  bir seçenek değildir.
+- **Yeni dönem**, 18 Eylül'den sonraki herhangi bir pencere demek değildir:
+  - aday ve kurallar o dönemin sonuçları incelenmeden **önce** sabitlenir;
+  - veri kümeleri ve holdout'lar örtüşmez;
+  - geçmişte incelenmiş bir aralığa yeni ad vermek bağımsızlık sağlamaz;
+  - tercihen karar anından sonraki ileri bir dönem, ayrı kararla seçilir.
+
+**Durma kuralı:** §11.1'deki gibi. Kalite ya da seans sınırı hatasında
+ölçüm rapor üretmeden durur. Aynı dönem geçsin diye eşik, parametre,
+pencere ya da tanım değiştirilip yeniden denenmez.
+
+**Yeniden koşu:** §11.1'in istisnası, bütün koşullarıyla bu tanımın
+yürütmesine uygulanır. Bu kural yürütme kararının kapsamındadır; şimdi koşu
+başlatmaz.
+
+- **Kayıt önce gelir.** İlk koşunun run/job kimliği, code commit'i ve
+  başarısız adımı #17'ye yazılır. Adım kanıtıyla şu iki şey gösterilir:
+  B hiç başlamadı ve geçerli bir performans raporu oluşmadı.
+- **Tek istisna:** aynı commit, tanım, config ve workflow ile **en fazla
+  bir** yeniden koşu. Yalnızca şu iki durumda geçerlidir:
+  - A'dan önce checkout ya da kurulumda açıkça geçici bir altyapı hatası;
+  - A'da sınıflandırılmış `FAIL indirme: sunucu hatasi (5xx)`,
+    `FAIL indirme: hiz siniri (429)` ya da
+    `FAIL indirme: ag, TLS veya zaman asimi hatasi`.
+- **Kısıtlar:**
+  - 429'da oran sınırı geçmeden yeniden tetikleme yapılmaz.
+  - `main` ilerlediyse "aynı commit" varsayımı kurulamaz.
+- **İstisna sayılmayanlar:** runner kaybı ya da iş zaman aşımı; hangi
+  aşamada düştüğü kanıtlanamayan koşu; B'nin başlaması; rapor oluşması;
+  yalnızca temizlik ya da upload hatası.
+- **Dur:** yetki, kalite, bütünlük, politika ya da seans sınırı hatasında
+  yeniden koşu yoktur. Tek altyapı tekrarının da başarısız olması aynı
+  sonucu verir.
+- **Otomatik yeniden deneme eklenmez.**
+
+**Kayıt:** gerçek koşunun kaydı §7'ye ayrı bir PR'la yazılır. İçeriği:
+
+- run, job ve attempt;
+- code commit ve o commit'in main CI'sı;
+- artefakt ve digest;
+- koşu log'undan okunan **gerçek Python sürümü** (Codex 6067241410).
+
+**Paper ve canlı çalışmayla ilişki:** §11.4 aynen geçerlidir. SIP sonucu,
+IEX ile karar veren çalışmaya otomatik taşınmaz.
