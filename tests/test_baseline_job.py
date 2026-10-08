@@ -594,23 +594,44 @@ def test_holdout_quality_changes_no_external_output(
     assert full_report == gap_report, "rapor holdout kalitesinden etkileniyor"
 
 
-def test_the_repo_main_spec_is_a_draft_and_cannot_be_downloaded(
-    stub: tuple[str, StubState], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def test_the_repo_main_spec_is_approved_and_only_then_reaches_the_provider(
+    stub: tuple[str, StubState],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Depodaki GERCEK ana tanim (SIP taslagi, §11.4) onaysiz: indirme
-    anahtar okunmadan, ag istegi ve dizin olmadan durur. `approved` ayri
-    inceleme ve kararla gelir."""
+    """Depodaki GERCEK ana tanim (SIP, AGENTS §11.5) onayli: indirme onay
+    kapisini gecer, anahtarlar ANCAK ondan sonra okunur ve istek yalnizca
+    verilen adrese - burada yerel sahte sunucuya - gider. Gercek ag ve
+    gercek anahtar yok.
+
+    Takvim kalici 403 doner. Olculen indirmenin kendisi DEGIL (o, sentetik
+    tanimla ayri testte); gercek tanimin onay kapisini gecmesi ve sonraki
+    ilk istegin nereye gittigi. Taslak/pilot tanimin kapida durdugu ayri
+    testte."""
     url, state = stub
-    market(state)
+    body = {"message": f"{MARKERS['body']} key={MARKERS['api_key']}", "s": MARKERS["secret"]}
+    state.fail("/v2/calendar", 403, times=None, body=body)
     env = keys_env()
-    code = baseline_job.download(
-        env, NOW, workdir=tmp_path / "work", spec_path=REPO / baseline_job.MAIN_SPEC, base_url=url
-    )
+    with caplog.at_level(logging.DEBUG):
+        code = baseline_job.download(
+            env,
+            NOW,
+            workdir=tmp_path / "work",
+            spec_path=REPO / baseline_job.MAIN_SPEC,
+            base_url=url,
+        )
+
+    text = output(capsys, caplog)
     assert code == 1
-    assert "FAIL onay" in capsys.readouterr().out
-    assert env.read == [], f"onaydan once ortam okundu: {env.read}"
-    assert state.requests == []
-    assert not (tmp_path / "work").exists()
+    assert "FAIL onay" not in text, "depodaki ana tanim onay kapisini gecemedi"
+    assert text.startswith("FAIL indirme: kimlik dogrulama veya yetki reddi (403)")
+    assert env.read[: len(baseline_job.KEY_ENV)] == list(baseline_job.KEY_ENV)
+    assert state.requests, "onaydan sonra saglayiciya hic gidilmedi"
+    assert {method for method, _, _ in state.requests} == {"GET"}
+    assert set(state.paths()) == {"/v2/calendar"}
+    assert not leaked(text), f"cikti sizdiriyor: {leaked(text)}\n{text}"
+    assert not (tmp_path / "work").exists(), "hata yolunda veri dizini kaldi"
 
 
 def test_the_entry_point_fixes_the_main_spec(tmp_path: Path) -> None:

@@ -24,6 +24,13 @@ SPEC_DIR = Path(__file__).resolve().parents[1] / "config" / "datasets"
 SPECS = sorted(SPEC_DIR.glob("*.yaml"))
 
 MAIN_SPEC = SPEC_DIR / "orb-baseline-2026q3-u11-sip.yaml"
+APPROVED_MAIN_SHA256 = "104b4e75a1140f39e1d4a7e763413f1bd784d1a223dfdf149a4b7a43589cbb78"
+"""Onaylanan SIP tanimin kanonik hash'i (AGENTS §11.5): onay oncesi
+incelemede bildirilen deger (#17 6067224557). Tanimin herhangi bir
+alani - durum dahil - degisirse bu deger tutmaz. Indirilen veri
+kumesinin manifesti ayni hash'i `spec_sha256` olarak tasir; rapor bu
+hash'i dogrudan degil, manifestin hash'i ve holdout taahhudu (o da bu
+hash'i kapsar) uzerinden tasir."""
 
 CLOSED_IEX_MAIN = (
     Path(__file__).resolve().parent
@@ -226,15 +233,28 @@ def test_every_spec_states_its_quality_policy_explicitly(path: Path) -> None:
 def test_the_main_dataset_is_approved_only_by_its_own_decision() -> None:
     """Ana tanim yalnizca AYRI ve incelenen bir commit ile approved olur (#17).
 
-    SIP taslagi (§11.4) draft: onay ayri inceleme ve kararla gelir ve bu
-    test o commit'te BILINCLI olarak guncellenir. Kapatilan IEX tanimi
-    tarihsel olarak approved'du. Pilotlar pilot kalir: P&L uretemezler.
+    SIP tanimi taslak olarak geldi (§11.4) ve ayri inceleme ve kararla
+    approved oldu (§11.5); bu test o commit'te BILINCLI olarak guncellendi.
+    Kapatilan IEX tanimi tarihsel olarak approved'du. Pilotlar pilot
+    kalir: P&L uretemezler.
     """
     main = DatasetSpec.from_yaml(MAIN_SPEC)
-    assert main.status == "draft"
+    assert main.status == "approved"
     assert DatasetSpec.from_yaml(CLOSED_IEX_MAIN).status == "approved"
     for path in PILOT_SPECS:
         assert DatasetSpec.from_yaml(path).status == "pilot"
+
+
+def test_the_approved_main_is_exactly_the_reviewed_definition() -> None:
+    """Onaylanan tanim, incelemede bildirilen tanimin AYNISI (§11.5).
+
+    Kanonik hash dosyanin yorumlarina degil, ayristirilmis tanima
+    bakar: yorum degisebilir, tek bir alan degisemez. Taslak hash'i
+    farkliydi; durum da hash'e girer.
+    """
+    main = DatasetSpec.from_yaml(MAIN_SPEC)
+    digest = hashlib.sha256(canonical_json(main.model_dump(mode="json"))).hexdigest()
+    assert digest == APPROVED_MAIN_SHA256
 
 
 def test_the_main_spec_passes_the_policy_gate_with_the_repo_config(tmp_path: Path) -> None:
@@ -255,11 +275,12 @@ def test_the_main_spec_passes_the_policy_gate_with_the_repo_config(tmp_path: Pat
     }
     out = tmp_path / "ds"
     build_dataset(
-        # Durum kapisi ayri test edilir: gercek tanim taslak ve indirilemez.
-        # Burada yalnizca POLITIKA ile depo ayarlarinin uyumu olculuyor; bu
-        # yuzden BELLEKTEKI sentetik kopya, olcumun politika kapisina
-        # ulasabilsin diye onayli isaretlenir. Hicbir dosya degismez.
-        main.model_copy(update={"start": days[0], "end": days[-1], "status": "approved"}),
+        # Durum kapisi ayri test edilir (test_baseline_job). Burada yalnizca
+        # POLITIKA ile depo ayarlarinin uyumu olculuyor: BELLEKTEKI sentetik
+        # kopya gercek tanimin politikasini, sembollerini ve durumunu
+        # (approved, §11.5) tasir; yalnizca tarihleri kisa. Hicbir dosya
+        # degismez.
+        main.model_copy(update={"start": days[0], "end": days[-1]}),
         bars_source=FakeBars(bars),
         calendar_source=FakeCalendar(sessions),
         out_dir=out,
