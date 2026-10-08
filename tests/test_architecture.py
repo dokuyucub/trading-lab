@@ -1189,6 +1189,10 @@ def test_the_baseline_job_measures_one_fixed_spec() -> None:
 # --------------------------------------------------------------------------
 
 UPLOAD_ACTION = "actions/upload-artifact@"
+UPLOAD_VERSION = "v7"
+"""Beklenen surum ACIKCA sabit: yukseltme ancak bu satirin bilincli
+degisikligiyle ve gidis-donus dogrulamasinin hosted kosusuyla olur
+(#17, #39). v7 kaynak kaniti: docs/designs/artifact-roundtrip.md."""
 UPLOAD_INPUTS = frozenset({"name", "path", "if-no-files-found", "retention-days"})
 UPLOAD_RETENTION_DAYS = {
     "alpaca-pilot-quality.yml": 30,
@@ -1229,6 +1233,7 @@ def test_every_upload_uses_one_version_and_one_input_contract() -> None:
     assert set(steps) == set(UPLOAD_RETENTION_DAYS), "upload yolu listesi degisti"
     versions = {step["uses"] for items in steps.values() for step in items}
     assert len(versions) == 1, f"upload surumleri karisik: {sorted(versions)}"
+    assert versions == {UPLOAD_ACTION + UPLOAD_VERSION}, f"beklenmeyen surum: {versions}"
     for name, items in steps.items():
         assert len(items) == 1, f"{name}: birden cok upload adimi"
         (step,) = items

@@ -45,7 +45,7 @@ jobs:
       # Yuklenen TEK dosya: teshis ozeti. Kosulsuz adim yalnizca onceki
       # adimlar basariliysa calisir; dosya yoksa hata.
       - name: Teshis ozetini yukle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: baseline-quality-diagnostic
           path: ${{ runner.temp }}/baseline-quality-diagnostic.json

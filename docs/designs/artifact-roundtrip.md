@@ -72,6 +72,31 @@ denetler.
   vekil sunucu da loopback'te olabilir. Güvensiz ilk adres ve ikinci
   yönlendirme bu düzeyde sınanır.
 
+## Sürüm: v7 (bakım PR-2)
+
+Beş upload kullanımı da `actions/upload-artifact@v7`. Beklenen sürüm
+`tests/test_architecture.py` içinde açıkça sabit (`UPLOAD_VERSION`).
+Yükseltme ancak o satırın bilinçli değişikliğiyle ve gidiş-dönüşün hosted
+koşusuyla olur.
+
+Kaynak kanıtı, `actions/upload-artifact` salt okunur klonundan (2026-10-08):
+
+| Etiket | Commit | Sürüm | Çalışma ortamı | `@actions/artifact` | Modül |
+|---|---|---|---|---|---|
+| v4 | `ea165f8d65b6e75b540449e92b4886f43607fa02` | 4.6.2 | node20 | ^2.3.2 | CommonJS |
+| v7 | `cf430e030ddbb5b0abf93d22962f4752f3646cd9` | 7.0.2 | node24 | ^6.3.1 | ESM |
+
+- **v7'de yeni girdi `archive`, `default: 'true'`.** Bizim upload'lar bu
+  girdiyi kullanmıyor; zip davranışı varsayılanla korunuyor. Sözleşme
+  testi `archive` eklenirse kırmızı olur.
+- **Diğer girdiler ve çıktılar v4 ile aynı.** Çıktılar `artifact-id`,
+  `artifact-url` ve `artifact-digest`.
+- **Etiketler kayan.** `v7` bugün 7.0.2'yi gösteriyor. Depo konvansiyonu
+  ana etiket; commit SHA'sıyla sabitleme ayrı bir karar.
+- **Okunamayan:** kesilmemiş sürüm notları. Releases API bu oturumda 403
+  verdi; README releases sayfasına yönlendiriyor. Ara sürümlerin davranış
+  notları kaynaktan çıkarıldı, belgeden değil.
+
 ## Kanıtın sınırı
 
 Hosted koşu yalnızca upload/download yolunu ve dosya biçimini kanıtlar.

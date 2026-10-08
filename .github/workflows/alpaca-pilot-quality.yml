@@ -55,7 +55,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       # Yuklenen TEK dosya: kalite ozeti.
       - name: Kalite ozetini yukle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pilot-quality-summary
           path: ${{ runner.temp }}/pilot-summary.json

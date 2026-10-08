@@ -48,7 +48,7 @@ jobs:
       # onceki adimlar basariliysa calisir; erisim reddinde ozet yoktur ve
       # bu adim calismaz.
       - name: Karsilastirma ozetini yukle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: baseline-feed-comparison
           path: ${{ runner.temp }}/baseline-feed-comparison.json
