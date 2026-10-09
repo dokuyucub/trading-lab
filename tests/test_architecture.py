@@ -961,6 +961,65 @@ def test_every_pull_request_passes_the_same_quality_gate() -> None:
 
 
 # --------------------------------------------------------------------------
+# Workflow token sozlesmesi (#17, Codex 6071471758)
+# --------------------------------------------------------------------------
+
+WORKFLOW_FILES = sorted(path.name for path in (REPO / ".github" / "workflows").glob("*.yml"))
+
+JOB_PERMISSION_EXCEPTIONS: dict[tuple[str, str], dict[str, str]] = {
+    ("artifact-roundtrip.yml", "verify"): {"contents": "read", "actions": "read"},
+}
+"""Ust duzeyden farkli job izinleri: YALNIZCA bunlar, gozden gecirilmis.
+Gidis-donus dogrulamasi artefakt listesini okumak icin `actions: read`
+ister (docs/designs/artifact-roundtrip.md). Job duzeyi izin ust duzeyi
+DEGISTIRIR, birlestirmez; yeni bir istisna bilincli bir kayit ister."""
+
+
+def test_the_workflow_list_is_known() -> None:
+    """Asagidaki parametrik test bos bir listeyle sessizce gecemesin."""
+    assert "ci.yml" in WORKFLOW_FILES
+    assert len(WORKFLOW_FILES) >= 8
+
+
+@pytest.mark.parametrize("name", WORKFLOW_FILES)
+def test_every_workflow_token_is_read_only_and_never_persisted(name: str) -> None:
+    """Her workflow'da token yalnizca okur ve diske yazilmaz.
+
+    - Ust duzey `permissions` tam olarak `contents: read`; izin deponun
+      varsayilanina birakilmaz.
+    - Job duzeyi izin ust duzeyi genisletmez: yalnizca gozden gecirilmis
+      istisna, o da yalnizca `read`.
+    - Her checkout `persist-credentials: false`: sonraki adimlar (bagimlilik
+      kurulumu, testler) token'i okuyamaz.
+
+    ci.yml bu kapsamin disindaydi: izin bloku yoktu ve iki checkout token'i
+    varsayilan davranisla diske birakiyordu; haftalik kanarya kilitsiz en
+    guncel bagimliliklari kurar (#17 6068215456). Deponun varsayilan token
+    yetkisi dogrulanamadi; bu bir sizinti kaniti degil, varsayilana
+    guvenmeme kuralidir. Paper ve SDK kontrolleri de bu kapsamda; bu test
+    hicbir workflow'u calistirmaz.
+    """
+    workflow = _workflow(name)
+    assert workflow.get("permissions") == {"contents": "read"}, f"{name}: ust duzey izin"
+    for job_name, job in workflow["jobs"].items():
+        permissions = job.get("permissions")
+        if permissions is not None:
+            reviewed = JOB_PERMISSION_EXCEPTIONS.get((name, job_name))
+            assert permissions == reviewed, f"{name}/{job_name}: gozden gecirilmemis job izni"
+            assert set(permissions.values()) == {"read"}, f"{name}/{job_name}: yazma izni"
+        for step in job.get("steps", []):
+            if str(step.get("uses", "")).startswith("actions/checkout"):
+                options = step.get("with") or {}
+                assert options.get("persist-credentials") is False, f"{name}/{job_name}"
+
+
+def test_the_reviewed_job_permission_exceptions_still_exist() -> None:
+    """Istisna listesi bayatlamasin: her kayit gercek bir job'a karsilik gelir."""
+    for name, job_name in JOB_PERMISSION_EXCEPTIONS:
+        assert job_name in _workflow(name)["jobs"], f"{name}/{job_name} yok"
+
+
+# --------------------------------------------------------------------------
 # Pilot kalite workflow sozlesmesi (AGENTS §11, #25)
 # --------------------------------------------------------------------------
 

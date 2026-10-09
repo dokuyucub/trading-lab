@@ -19,6 +19,12 @@ on:
     # once bizim sectigimiz bir anda ortaya cikar.
     - cron: "0 6 * * 1"
 
+# Token yalnizca okuma (#17, Codex 6071471758): CI push etmez, yorum
+# yazmaz. Izin deponun varsayilanina birakilmaz; haftalik kanarya kilitsiz
+# en guncel bagimliliklari kurar. tests/test_architecture.py denetler.
+permissions:
+  contents: read
+
 # Ayni dala arka arkaya push gelirse eski kosu iptal edilir:
 # bekleyen kuyruk, geri bildirimi geciktirmenin en sik sebebi.
 concurrency:
@@ -33,6 +39,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Token diske yazilmaz: sonraki adimlar (bagimlilik kurulumu,
+          # testler) onu okuyamaz. CI git push yapmaz.
+          persist-credentials: false
 
       - uses: actions/setup-python@v5
         with:
@@ -77,6 +87,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Kilitsiz kurulum yapilan iste token diske hic yazilmaz.
+          persist-credentials: false
 
       - uses: actions/setup-python@v5
         with:
