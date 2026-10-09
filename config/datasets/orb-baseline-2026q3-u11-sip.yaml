@@ -1,5 +1,5 @@
-# ORB baseline olcumu icin TASLAK veri kumesi: ayni donem, tarihsel SIP.
-# Karar kaydi AGENTS §11.4 (#17, Codex 2026-10-08).
+# ORB baseline olcumu icin ONAYLI veri kumesi: ayni donem, tarihsel SIP.
+# Karar kaydi AGENTS §11.4 (taslak) ve §11.5 (onay) (#17, Codex 2026-10-08).
 #
 # ARASTIRMA DEGERLENDIRMESIDIR, BAGIMSIZ DOGRULAMA DONEMI DEGILDIR. Bu
 # donem ve bu feed, AYNI donemin veri KALITESI gozlemlendikten SONRA
@@ -16,14 +16,17 @@
 # status ile ayrilir; tarihler, semboller, bolme ve kalite politikasi
 # ayni (test denetler).
 #
-# Strateji/config, evren ve kalite kurallari P&L gorulmeden onay
-# commit'inde dondurulur. Sonuc gorulduktan sonra ayni donemde ayar
-# degistirip yeni "bagimsiz" kanit uretmek yasak. Sonuc, IEX ile karar
-# veren paper/canli calismaya otomatik tasinmaz (§11.4).
+# Strateji/config, evren ve kalite kurallari P&L gorulmeden onayda
+# donduruldu; kimlikleri AGENTS §11.5'te. Sonuc gorulduktan sonra ayni
+# donemde ayar degistirip yeni "bagimsiz" kanit uretmek yasak. Sonuc, IEX
+# ile karar veren paper/canli calismaya otomatik tasinmaz (§11.4).
 dataset_id: orb-baseline-2026q3-u11-sip
-# draft: tanim incelemede. `approved` AYRI bir inceleme ve kararla gelir;
-# draft bir tanim indirilemez ve olculemez (baseline_job onay kapisi).
-status: draft
+# approved (#17, karar kaydi AGENTS §11.5): taslak (§11.4) AYRI bir
+# inceleme ve commit ile onaylandi. Onay YALNIZCA bu sabit tanimin
+# indirilip baseline bolumunun BIR KEZ olculmesine yoneliktir; islem,
+# emir, canli dagitim, holdout'un acilmasi ya da parametre terfisi
+# DEGILDIR. Gercek kosu ayrica kayitli bir karar ister.
+status: approved
 symbols: [SPY, QQQ, IWM, AAPL, MSFT, NVDA, AMD, AMZN, GOOGL, META, TSLA]
 timeframe: 1Min
 feed: sip
