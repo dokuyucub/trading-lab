@@ -46,8 +46,9 @@ jobs:
 
       - uses: actions/setup-python@v7
         with:
-          # Tek surum, Docker imajiyla ayni: uretimde calisacak olan
-          # neyse CI'da denetlenen de o.
+          # Ayni minor (3.12): Docker imaji (python:3.12-slim) ve kilitler
+          # de 3.12. Ayni imaj ya da ayni yama GARANTISI DEGIL: yama kayan;
+          # yurutme kaydi gercek yamayi yazar (AGENTS §2, Python sozlesmesi).
           python-version: "3.12"
           cache: pip
 

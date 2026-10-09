@@ -1412,3 +1412,39 @@ def test_fork_code_never_runs_with_privileged_triggers() -> None:
         assert not set(triggers) & {"pull_request_target", "workflow_run"}, name
     for name, step in _action_steps("actions/checkout"):
         assert "allow-unsafe-pr-checkout" not in (step.get("with") or {}), name
+
+
+# --------------------------------------------------------------------------
+# Python surum sozlesmesi (AGENTS §2; Codex 6071471758, secenek A)
+# --------------------------------------------------------------------------
+
+PYTHON_MINOR = "3.12"
+"""Operasyonel hedef: minor sabit, yama kayan. Ayni imaj ya da ayni yama
+GARANTISI DEGIL; yurutme kaydi gercek yamayi yazar (§11.5)."""
+
+
+def test_every_environment_targets_the_same_python_minor() -> None:
+    """CI, Docker, iki kilit, ruff ve mypy AYNI minoru hedefler.
+
+    Yama ya da imaj digest'i sabitlenmez; bu test yalnizca minoru denetler.
+    Yalnizca birini degistirip ortamlari esitmis gibi yazmak burada kirmizi
+    olur. `requires-python >=3.12` kabul edilen araliktir, test edilen
+    surumler degil; bu yuzden burada denetlenmez.
+    """
+    import tomllib
+
+    steps = _action_steps("actions/setup-python")
+    assert steps, "setup-python kullanimi yok"
+    assert {str(step["with"]["python-version"]) for _, step in steps} == {PYTHON_MINOR}
+
+    dockerfile = (REPO / "docker" / "Dockerfile").read_text("utf-8")
+    images = re.findall(r"^FROM\s+(\S+)", dockerfile, re.MULTILINE)
+    assert images == [f"python:{PYTHON_MINOR}-slim"], f"Docker imaji: {images}"
+
+    for lock in ("requirements.lock", "requirements-dev.lock"):
+        header = (REPO / lock).read_text("utf-8").splitlines()[1]
+        assert f"--python-version {PYTHON_MINOR} " in header, f"{lock}: kilit minoru"
+
+    tools = tomllib.loads((REPO / "pyproject.toml").read_text("utf-8"))["tool"]
+    assert tools["ruff"]["target-version"] == "py" + PYTHON_MINOR.replace(".", "")
+    assert tools["mypy"]["python_version"] == PYTHON_MINOR

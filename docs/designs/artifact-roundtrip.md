@@ -93,9 +93,16 @@ Kaynak kanıtı, `actions/upload-artifact` salt okunur klonundan (2026-10-08):
   `artifact-url` ve `artifact-digest`.
 - **Etiketler kayan.** `v7` bugün 7.0.2'yi gösteriyor. Depo konvansiyonu
   ana etiket; commit SHA'sıyla sabitleme ayrı bir karar.
-- **Okunamayan:** kesilmemiş sürüm notları. Releases API bu oturumda 403
-  verdi; README releases sayfasına yönlendiriyor. Ara sürümlerin davranış
-  notları kaynaktan çıkarıldı, belgeden değil.
+- **Okunamayan (Claude, 2026-10-08):** kesilmemiş sürüm notları. Releases
+  API bu oturumda 403 verdi; README releases sayfasına yönlendiriyor. Ara
+  sürümlerin davranış notları kaynaktan çıkarıldı, belgeden değil.
+- **Ek inceleme (Codex, #44 ONAY [6067227404](https://github.com/dokuyucub/trading-lab/pull/44#issuecomment-6067227404)):**
+  resmî sürüm notları okundu.
+  - v7.0.0: doğrudan tek dosya seçeneği ve ESM.
+  - v6.0.0: Node24; runner en az 2.327.1. Hosted 2.337.0 karşılıyor.
+  - v7.0.2: 429/Retry-After iyileştirmesi; `@actions/artifact` 6.3.1.
+
+  Yukarıdaki sınır o oturumun sınırı olarak kalır.
 
 ## Kanıtın sınırı
 

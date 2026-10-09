@@ -138,6 +138,25 @@ Ayrıca ortak paketlerin iki kilitte aynı sürümde olduğu da denetleniyor.
 Kapsama eşiği %80. Amaç oranı yükseltmek değil, gerilemeyi yakalamak: testsiz
 eklenen büyük bir modül burada göze çarpar.
 
+**Python sürüm sözleşmesi** (#17, Codex kararı 6071471758, seçenek A):
+
+- **Operasyonel hedef minör 3.12; yama kayandır.** Şu yerlerde aynı minör
+  kullanılır (test denetler):
+  - CI (`python-version: "3.12"`);
+  - Docker (`python:3.12-slim`);
+  - kilitler (`--python-version 3.12`);
+  - ruff `py312` ve mypy `3.12`.
+- **Garanti edilmeyen:** aynı imaj ya da aynı yama. CI'da koşudan koşuya yama
+  değişebilir; örneğin 3.12.14 ve 3.12.15 görüldü. Güvenlik yamaları böylece
+  kendiliğinden gelir.
+- **Tekrarlanabilirliğin sınırı:** aynı minör ve aynı kilitli bağımlılıklar.
+  Her yürütme kaydı, koşu log'undan okunan **gerçek yamayı** yazar (§11.5).
+- **`requires-python >=3.12`** kurulumun kabul ettiği aralıktır. Test edilen
+  yalnızca 3.12'dir; "bütün 3.12+ sürümleri test edildi" anlamına gelmez.
+- **Yama ya da imaj digest'i sabitlenmez.** Kanıtlı bir ihtiyaç doğarsa ayrı
+  bir kararla, bütün ortamlarda birlikte yapılır. Yalnızca CI'ı sabitleyip
+  ortamlar eşitmiş gibi yazılmaz.
+
 ## 3. Değişmezler
 
 Aşağıdaki kuralların çoğu `tests/test_architecture.py` tarafından **otomatik
