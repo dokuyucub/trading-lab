@@ -1355,3 +1355,60 @@ def test_the_roundtrip_check_is_secret_free_and_least_privileged() -> None:
     prepare = " ".join(step.get("run", "") for step in jobs["upload"]["steps"])
     assert "scripts/artifact_roundtrip/payload.json" in prepare
     assert "tlab" not in dumped, "dogrulama trading koduna dokunmaz"
+
+
+# --------------------------------------------------------------------------
+# checkout ve setup-python surum sozlesmesi (#17, Codex 6071471758)
+# --------------------------------------------------------------------------
+
+ACTION_VERSIONS = {"actions/checkout": "v7", "actions/setup-python": "v7"}
+"""Beklenen surumler ACIKCA sabit: yukseltme ancak bu satirin bilincli
+degisikligiyle, etiket kaynaginin incelenmesiyle ve PR'in kendi quality +
+sentetik roundtrip kosusuyla olur. Kaynak kaniti:
+docs/designs/workflow-actions.md."""
+
+ACTION_INPUTS = {
+    "actions/checkout": frozenset({"persist-credentials"}),
+    "actions/setup-python": frozenset({"python-version", "cache"}),
+}
+"""Kullandigimiz girdiler. Yukseltmenin uyum iddiasi YALNIZCA bunlarla
+sinirli (Codex 6071471758); yeni bir girdi bilincli bir incelemeyle buraya
+eklenir. checkout v7'nin `allow-unsafe-pr-checkout` girdisi bu listede
+YOK."""
+
+
+def _action_steps(action: str) -> list[tuple[str, dict[str, Any]]]:
+    found: list[tuple[str, dict[str, Any]]] = []
+    for name in WORKFLOW_FILES:
+        for job in _workflow(name)["jobs"].values():
+            for step in job.get("steps", []):
+                if str(step.get("uses", "")).startswith(action + "@"):
+                    found.append((name, step))
+    return found
+
+
+@pytest.mark.parametrize("action", sorted(ACTION_VERSIONS))
+def test_every_core_action_uses_one_version_and_known_inputs(action: str) -> None:
+    """Bir yukseltme kullanimlardan birini atlarsa ya da tanimadigimiz bir
+    girdi eklenirse burada kirmizi olur (#39 dersi: Dependabot bazi
+    workflow'lari kapsamiyordu)."""
+    steps = _action_steps(action)
+    assert steps, f"{action} hic kullanilmiyor"
+    versions = {step["uses"] for _, step in steps}
+    assert versions == {f"{action}@{ACTION_VERSIONS[action]}"}, f"beklenmeyen surum: {versions}"
+    for name, step in steps:
+        unknown = set(step.get("with") or {}) - ACTION_INPUTS[action]
+        assert not unknown, f"{name}: incelenmemis girdi {sorted(unknown)}"
+
+
+def test_fork_code_never_runs_with_privileged_triggers() -> None:
+    """checkout v7 fork PR kodunu `pull_request_target` / `workflow_run`
+    altinda varsayilan olarak reddeder; biz bu tetikleyicileri hic
+    kullanmayiz ve reddi gevseten girdiyi hic acmayiz."""
+    for name in WORKFLOW_FILES:
+        workflow = _workflow(name)
+        # PyYAML (YAML 1.1) `on` anahtarini True olarak okur.
+        triggers = workflow["on"] if "on" in workflow else workflow[True]
+        assert not set(triggers) & {"pull_request_target", "workflow_run"}, name
+    for name, step in _action_steps("actions/checkout"):
+        assert "allow-unsafe-pr-checkout" not in (step.get("with") or {}), name

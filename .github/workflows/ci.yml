@@ -38,13 +38,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Token diske yazilmaz: sonraki adimlar (bagimlilik kurulumu,
           # testler) onu okuyamaz. CI git push yapmaz.
           persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           # Tek surum, Docker imajiyla ayni: uretimde calisacak olan
           # neyse CI'da denetlenen de o.
@@ -86,12 +86,12 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Kilitsiz kurulum yapilan iste token diske hic yazilmaz.
           persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
