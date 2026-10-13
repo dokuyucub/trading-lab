@@ -329,7 +329,15 @@ SCENARIO_KEYS = {
     "strategy",
     "evidence",
 }
-EVIDENCE_KEYS = {"verdict", "mean_r", "ci_low", "ci_high", "confidence", "trades_needed"}
+EVIDENCE_KEYS = {
+    "verdict",
+    "mean_r",
+    "ci_status",
+    "ci_low",
+    "ci_high",
+    "confidence",
+    "trades_needed",
+}
 
 
 def test_the_report_has_exactly_the_reviewed_fields(tmp_path: Path) -> None:

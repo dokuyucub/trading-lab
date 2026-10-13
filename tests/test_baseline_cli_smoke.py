@@ -202,9 +202,9 @@ def test_success_publishes_one_report_after_cleanup(
     assert bar_queries, "bar istegi yapilmadi"
     assert all(query["feed"] == ["sip"] for query in bar_queries)
     assert report["starting_equity_basis"] == "synthetic_assumption"
-    # Rapor v3: olcum feed'i manifestten; depo config'i (iex) ayri gorunur ve
-    # uyusmazlik uyarisi raporda kalici (#17 6052081621).
-    assert report["report_schema"] == 3
+    # Rapor v4 (feed alani v3'ten): olcum feed'i manifestten; depo config'i
+    # (iex) ayri gorunur ve uyusmazlik uyarisi raporda kalici (#17 6052081621).
+    assert report["report_schema"] == 4
     assert report["data_feed"] == "sip"
     assert report["config"]["data"]["feed"] == "iex"
     assert FEED_MISMATCH_CAVEAT.format(data_feed="sip", configured="iex") in report["caveats"]

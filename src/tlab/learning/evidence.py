@@ -127,15 +127,58 @@ class Evidence:
     mean_r: float
     """Nokta tahmini. Tek basina asla karar dayanagi degil."""
 
-    ci_low: float
-    ci_high: float
+    ci_low: float | None
+    ci_high: float | None
+    """Guven araliginin uclari - YALNIZCA bootstrap calistiysa sayi.
+
+    `None` "hesaplanmadi" demektir: orneklem `min_trades`'in altinda
+    kaldi ve kapi araligi hic kurmadi. Eskiden bu alanlara ortalama
+    yaziliyordu; sifir genislikli bir aralik gibi gorunup kesin bir
+    sonuc saniliyordu (#17, 2026-10-13 raporu). Durum esitlikten
+    CIKARILMAZ: ozdes degerlerde gercekten hesaplanmis bir aralik da
+    sifir genislikli olabilir. Kaynak, degeri ureten satirdir."""
+
     confidence: float
     threshold_r: float
     verdict: Verdict
     trades_needed: int
     """Bu buyuklukteki bir farki ayirt edebilmek icin gereken kaba
-    islem sayisi. Elimizdekinden buyukse, beklemekten baska yapacak
-    bir sey yok."""
+    islem sayisi, `min_trades` TABANI dahil. Elimizdekinden buyukse,
+    beklemekten baska yapacak bir sey yok.
+
+    Ortalama esigin altinda ya da esitse tahmin YOKTUR (`required_trades`
+    0 doner) ve alan yalnizca tabani gosterir: o ortalamayla olumlu bir
+    fark hicbir orneklemle kanitlanamaz. "Bu kadar islem olunca
+    kanitlanir" diye okunamaz."""
+
+    def __post_init__(self) -> None:
+        if (self.ci_low is None) != (self.ci_high is None):
+            raise ValueError("guven araliginin iki ucu birlikte hesaplanir ya da hic hesaplanmaz")
+
+    @property
+    def interval_computed(self) -> bool:
+        """Guven araligi bootstrap ile gercekten kuruldu mu."""
+        return self.ci_low is not None
+
+    def interval(self) -> tuple[float, float]:
+        """Hesaplanmis aralik. Hesaplanmadiysa sayi uydurmak yerine durur:
+        cagiran yol, araligi olmayan bir kaniti aralik varmis gibi
+        kullanmaya calisiyor demektir."""
+        if self.ci_low is None or self.ci_high is None:
+            raise ValueError(f"guven araligi hesaplanmadi ({self.verdict.value})")
+        return self.ci_low, self.ci_high
+
+    def interval_text(self) -> str:
+        """Insan icin aralik; hesaplanmadiysa bunu acikca soyler."""
+        if self.ci_low is None or self.ci_high is None:
+            return f"aralik hesaplanmadi (yetersiz veri: {self.trades} islem)"
+        return f"%{self.confidence * 100:.0f} aralik [{self.ci_low:+.3f}, {self.ci_high:+.3f}]"
+
+    def needed_text(self) -> str:
+        """`trades_needed`'in insan icin anlami: taban mi, kaba tahmin mi."""
+        if self.mean_r <= self.threshold_r:
+            return f"gereken: taban {self.trades_needed}; bu ortalamayla olumlu fark tahmini yok"
+        return f"gereken: kaba tahmin {self.trades_needed} (taban dahil)"
 
     @property
     def is_proven(self) -> bool:
@@ -150,7 +193,7 @@ class Evidence:
     def report(self) -> str:
         return (
             f"{self.trades} islem | ortalama {self.mean_r:+.3f} R | "
-            f"%{self.confidence * 100:.0f} aralik [{self.ci_low:+.3f}, {self.ci_high:+.3f}] | "
+            f"{self.interval_text()} | "
             f"esik {self.threshold_r:+.3f} R | {self.verdict.value}"
         )
 
@@ -236,8 +279,8 @@ def assess(
         return Evidence(
             trades=0,
             mean_r=0.0,
-            ci_low=0.0,
-            ci_high=0.0,
+            ci_low=None,
+            ci_high=None,
             confidence=confidence,
             threshold_r=threshold_r,
             verdict=Verdict.INSUFFICIENT_DATA,
@@ -249,11 +292,14 @@ def assess(
     needed = max(min_trades, required_trades(mean_r - threshold_r, spread, confidence))
 
     if trades < min_trades:
+        # Bootstrap CALISMAZ: aralik hesaplanmadi (None). Ortalamayi
+        # aralik yerine yazmak sifir genislikli, kesin bir sonuc gibi
+        # okunuyordu (#17, 2026-10-13).
         return Evidence(
             trades=trades,
             mean_r=mean_r,
-            ci_low=mean_r,
-            ci_high=mean_r,
+            ci_low=None,
+            ci_high=None,
             confidence=confidence,
             threshold_r=threshold_r,
             verdict=Verdict.INSUFFICIENT_DATA,
@@ -305,8 +351,8 @@ def compare(
         return Evidence(
             trades=min(len(candidate), len(baseline)),
             mean_r=0.0,
-            ci_low=0.0,
-            ci_high=0.0,
+            ci_low=None,
+            ci_high=None,
             confidence=confidence,
             threshold_r=min_edge_r,
             verdict=Verdict.INSUFFICIENT_DATA,
@@ -326,11 +372,12 @@ def compare(
     needed = max(min_trades, required_trades(difference - min_edge_r, spread, confidence))
 
     if trades < min_trades:
+        # Bootstrap CALISMAZ: aralik hesaplanmadi (bkz. `assess`).
         return Evidence(
             trades=trades,
             mean_r=difference,
-            ci_low=difference,
-            ci_high=difference,
+            ci_low=None,
+            ci_high=None,
             confidence=confidence,
             threshold_r=min_edge_r,
             verdict=Verdict.INSUFFICIENT_DATA,

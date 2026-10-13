@@ -250,20 +250,20 @@ def decide_promotion(
     if difference.verdict is Verdict.INSUFFICIENT_DATA:
         reasons.append(
             f"karsilastirma icin islem sayisi yetersiz: {difference.trades} < "
-            f"{policy.min_trades} (tahmini gereken: {difference.trades_needed})"
+            f"{policy.min_trades}; aralik hesaplanmadi ({difference.needed_text()})"
         )
         blocking = True
     elif difference.verdict is Verdict.INCONCLUSIVE:
+        low, high = difference.interval()
         reasons.append(
-            f"fark gurultuden ayirt edilemiyor: aralik "
-            f"[{difference.ci_low:+.3f}, {difference.ci_high:+.3f}] "
+            f"fark gurultuden ayirt edilemiyor: aralik [{low:+.3f}, {high:+.3f}] "
             f"esigi ({policy.min_edge_r:+.3f} R) kapsiyor"
         )
         blocking = True
     elif difference.verdict is Verdict.WORSE:
         reasons.append(
             f"aday temelden kanitli sekilde kotu: ust sinir "
-            f"{difference.ci_high:+.3f} R < esik {policy.min_edge_r:+.3f} R"
+            f"{difference.interval()[1]:+.3f} R < esik {policy.min_edge_r:+.3f} R"
         )
         rejecting = True
 
@@ -271,13 +271,14 @@ def decide_promotion(
         if candidate.verdict is Verdict.WORSE:
             reasons.append(
                 f"aday kendi basina kanitli sekilde yetersiz: ust sinir "
-                f"{candidate.ci_high:+.3f} R < taban {policy.min_absolute_r:+.3f} R"
+                f"{candidate.interval()[1]:+.3f} R < taban {policy.min_absolute_r:+.3f} R"
             )
             rejecting = True
         elif candidate.verdict is not Verdict.BETTER:
+            # INSUFFICIENT_DATA da buraya duser: aralik yoksa sayi basilmaz.
             reasons.append(
-                f"adayin kendi karliligi kanitlanmadi: aralik "
-                f"[{candidate.ci_low:+.3f}, {candidate.ci_high:+.3f}] ({candidate.verdict.value})"
+                f"adayin kendi karliligi kanitlanmadi: {candidate.interval_text()} "
+                f"({candidate.verdict.value})"
             )
             blocking = True
 
@@ -288,8 +289,8 @@ def decide_promotion(
     else:
         decision = PromotionDecision.PROMOTE
         reasons.append(
-            f"aday {difference.trades} islemde temeli {difference.ci_low:+.3f} R alt siniriyla "
-            f"geciyor ve kendi basina karli"
+            f"aday {difference.trades} islemde temeli {difference.interval()[0]:+.3f} R alt "
+            f"siniriyla geciyor ve kendi basina karli"
         )
 
     return PromotionResult(

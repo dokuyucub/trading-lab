@@ -636,6 +636,10 @@ def cmd_baseline(args: argparse.Namespace) -> int:
             f"{item['name']:<9} {item['trades']:>5} {shown} "
             f"{evidence['verdict']:<18} {evidence['trades_needed']:>7}"
         )
+    print(
+        "  gereken: taban dahil kaba islem sayisi. Ortalama esigin altinda ya da esitse "
+        "yalnizca tabandir; olumlu fark tahmini degildir."
+    )
     print()
     for caveat in report["caveats"]:
         print(f"  - {caveat}")

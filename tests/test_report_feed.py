@@ -128,7 +128,7 @@ def test_the_report_and_journal_carry_the_manifest_feed(
     config = config_with_feed(configured_feed)
     report = run_baseline(verified, config, code_commit="c0ffee")
 
-    assert report["report_schema"] == REPORT_SCHEMA_VERSION == 3
+    assert report["report_schema"] == REPORT_SCHEMA_VERSION == 4
     assert report["data_feed"] == dataset_feed
     # Config sessizce degismez: ayarlanmis feed ayri gorunur, hash ayni anlam.
     assert report["config"]["data"]["feed"] == configured_feed

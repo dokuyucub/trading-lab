@@ -206,6 +206,14 @@ ama manifest dışarı çıkmaz. Rapor bu yüzden ölçüm feed'ini ayrıca taş
   `report_schema` söyler. Üretim kodunda rapor dosyası okuyan bir tüketici
   yok: CLI ve ölçüm adımı o koşuda ürettikleri raporu basar; testler de
   kendi ürettikleri raporu okur.
+- **Şema 4 (2026-10-13, #17).** Her senaryonun `evidence` alanına
+  `ci_status` (`computed` / `not_computed`) eklendi. Aralık hesaplanmadıysa,
+  yani işlem sayısı `min_trades` tabanının altındaysa, `ci_low` ve `ci_high`
+  `null` olur. Şema 3 bu alanlara ortalamayı yazardı; 2026-10-13 SIP raporu
+  şema 3'tür ve değişmez (AGENTS §7). Durum, uçların eşitliğinden
+  çıkarılmaz: aynı değerlerde gerçekten hesaplanmış bir aralık da sıfır
+  genişlikli olabilir. `trades_needed` aynı kalır; taban dahildir ve
+  ortalama eşiğin altındaysa yalnızca tabandır.
 
 ## Süre (PR b)
 
