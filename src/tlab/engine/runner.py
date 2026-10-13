@@ -663,11 +663,21 @@ class SessionRunner:
     def _note_opening_gaps(self, ctx: Context, result: LoopResult) -> None:
         """Acilis penceresinde eksik bar varsa sembol ve gun basina BIR KEZ yazar.
 
-        Strateji eksik pencerede aralik kurmaz ve o gun o sembolde islem
-        acmaz (AGENTS §11.4). Bu not, o sessiz "islem yok"u gorunur
-        kilar; golge gozlemin olcecegi sey de budur. Pencere veride
-        henuz kapanmadiysa (sonraki bar gelmediyse) karar verilmez:
-        gecikmeyi eksiklik saymak yanlis alarm olurdu.
+        ORB, pencere o anda eksikse aralik kurmaz ve o turda islem acmaz
+        (AGENTS §11.4). Eksik bar sonradan gelirse pencere tamamlanir ve
+        normal degerlendirme surer. Bu not o sessiz "islem yok"u gorunur
+        kilar; golge gozlemin olcecegi sey de budur.
+
+        Sinirlari:
+          * Not GOZLEMDIR, kapi degildir: hicbir stratejiyi bloklamaz.
+            Kapi ORB'nin aralik hesabindadir; ikisi ayni yardimciyi
+            (`opening_window_gaps`) kullanir.
+          * Notun gunde bir kez yazilmasi vetonun suresi DEGILDIR.
+          * Anahtar (seans acilisi, sembol): bir sembol ya da gun
+            digerini susturmaz. Kume bellektedir; surec yeniden
+            baslarsa ayni gunun notu yeniden yazilabilir.
+          * Pencere veride henuz kapanmadiysa (sonraki bar gelmediyse)
+            karar verilmez: gecikmeyi eksiklik saymak yanlis alarm olurdu.
         """
         session_open = ctx.session.session_open
         key = (session_open.isoformat(), ctx.symbol)

@@ -1283,13 +1283,21 @@ kararıyla değerlendirilir.
      veri görülmeden sabitlenir.
   2. **Canlı karar yolunda eksik açılış barı kontrolü.**
      *Kodda var (2026-10-13, #17):*
-     - `opening_range` açılış penceresindeki her bar başlangıcını ister.
-       Bar süresi `Context.timeframe`'den gelir; tek dakika eksikse aralık
-       kurulmaz ve o gün o sembolde işlem açılmaz.
-     - Seans döngüsü bunu sembol ve gün başına bir kez tur notuna ve
+     - `opening_range` açılış penceresindeki her bar başlangıcını ister:
+       benzersiz ve hizalı başlangıçlar. Bar süresi `Context.timeframe`'den
+       gelir.
+     - **Kontrol anlıktır.** Pencere o anda eksikse aralık kurulmaz ve
+       işlem açılmaz. Eksik bar sonradan gelip pencereyi tamamlarsa
+       normal değerlendirme sürer; günlük kalıcı blok yok.
+     - Seans döngüsü eksikliği sembol ve gün başına bir kez tur notuna ve
        log'a yazar: `eksik acilis bari: SYM n/m`.
+       - Not gözlemdir, kapı değildir; başka bir stratejiyi bloklamaz.
+       - Notun bir kez yazılması vetonun süresi değildir.
+       - Süreç yeniden başlarsa not tekrar yazılabilir.
      - Backtest aynı döngüyü kullanır.
-     - Tam pencereli veride kararlar değişmedi (eşdeğerlik testi).
+     - Tam pencereli sentetik veride kararlar değişmedi (eşdeğerlik
+       testi, 4 tohum ve 66 işlem). Bu, bütün gerçek veriye genellenmez.
+     - Strateji sürümü `orb-7b32942a` değişmedi (Codex 6152089593).
 
      Bu, sentetik testlerle doğrulandı; **canlı ortamda henüz gözlenmedi.**
 - Salt okunur gölge gözlem (Faz 3) bu kanıtı üretmek için yapılabilir.

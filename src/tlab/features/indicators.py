@@ -116,6 +116,12 @@ def opening_window_gaps(
     Beklenen her bar baslangici `session_open + k * bar_duration`.
     Bos demet, pencerenin TAM oldugu anlamina gelir.
 
+    Denetlenen, BENZERSIZ ve HIZALI baslangiclardir: ayni dakikanin
+    tekrari eksik bir dakikayi kapatmaz; beklenen baslangica denk
+    gelmeyen (ornegin 30 saniye kaymis) bar hicbir dakikayi doldurmaz.
+    Karsilastirma an (instant) uzerinden yapilir; barin saat dilimi
+    sonucu degistirmez.
+
     Pencere bar suresine tam bolunmuyorsa None doner: o bar suresiyle
     bu pencere tanimsizdir, "tam" ya da "eksik" denemez.
     """
@@ -147,6 +153,10 @@ def opening_range(
     kurulan aralik, gercek seviyeden dar olabilir ve olmamis bir
     kirilim uretir. Olcum yolunda kalite kapisi bu seanslari zaten
     disarida birakir; canlida bu kontrol ayni isi yapar.
+
+    Kontrol ANLIKTIR: fonksiyon saftir ve her karar aninda verilen
+    barlara bakar. Eksik bar sonradan gelirse pencere tamamlanir ve
+    aralik kurulur. Gunluk kalici bir blok yoktur.
     """
     if minutes < 1 or not bars:
         return None

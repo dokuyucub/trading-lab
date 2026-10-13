@@ -28,6 +28,7 @@ from tlab.core.types import (
     Bar,
     BracketOrder,
     Fill,
+    Intent,
     OrderRef,
     Position,
     Quote,
@@ -36,9 +37,11 @@ from tlab.core.types import (
 )
 from tlab.engine.runner import LoopResult, SessionRunner
 from tlab.errors import BrokerError, DataError
+from tlab.features.context import Context
 from tlab.journal.db import apply_migrations, connect
 from tlab.journal.writer import JournalWriter
 from tlab.risk.gate import RiskGate
+from tlab.strategies.base import Strategy
 from tlab.strategies.orb import OpeningRangeBreakout, ORBParams
 
 NOW = SESSION_OPEN + timedelta(minutes=30)
@@ -240,6 +243,7 @@ def build_runner(
     dry_run: bool = False,
     now: datetime = NOW,
     timeframe: Timeframe = Timeframe.M1,
+    strategies: list[Strategy] | None = None,
 ) -> SessionRunner:
     clock = SimClock(now)
     writer = JournalWriter(conn, clock)
@@ -253,7 +257,7 @@ def build_runner(
         # mypy tam bu satirda duruyor.
         broker=broker,
         market=market,
-        strategies=[OpeningRangeBreakout(ORBParams())],
+        strategies=strategies or [OpeningRangeBreakout(ORBParams())],
         gate=RiskGate(config.risk),
         writer=writer,
         conn=conn,
@@ -1020,3 +1024,95 @@ def test_the_runner_hands_its_timeframe_to_the_strategy(
     result = runner.run_once()
     assert result.intents == 1
     assert gap_notes(result) == []
+
+
+def gapped_at(start: datetime, symbol: str = "SPY") -> list[Bar]:
+    """Acilisin 7. dakikasi eksik kirilim serisi."""
+    missing = start + timedelta(minutes=7)
+    return [bar for bar in breakout_bars_at(start, symbol) if bar.ts != missing]
+
+
+def test_a_late_bar_completes_the_window_and_evaluation_resumes(
+    config: Config, conn: sqlite3.Connection
+) -> None:
+    """Kontrol anliktir: eksik bar sonradan gelirse pencere tamamlanir ve
+    normal degerlendirme surer. Gunluk kalici blok yoktur; tek seferlik
+    not vetonun suresi degildir."""
+    market = FakeMarket(bars_by_symbol={"SPY": gapped_at(SESSION_OPEN)})
+    runner = build_runner(
+        config=config, conn=conn, broker=FakeBroker(), market=market, dry_run=True
+    )
+    first = runner.run_once()
+    assert first.intents == 0
+    assert gap_notes(first) == ["eksik acilis bari: SPY 14/15"]
+
+    market.bars_by_symbol["SPY"] = breakout_bars()
+    second = runner.run_once()
+    assert second.intents == 1
+    assert gap_notes(second) == []
+
+
+def test_gap_notes_are_kept_per_symbol_and_session(
+    project_root: Path, conn: sqlite3.Connection
+) -> None:
+    """Bir sembolun ya da gunun notu digerini susturmaz."""
+    universe = project_root / "config" / "universe.yaml"
+    universe.write_text("symbols:\n  - SPY\n  - QQQ\n", encoding="utf-8")
+    two = load_config(project_root)
+    day2 = SESSION_OPEN + timedelta(days=1)
+    market = FakeMarket(
+        bars_by_symbol={
+            symbol: gapped_at(SESSION_OPEN, symbol) + gapped_at(day2, symbol)
+            for symbol in ("SPY", "QQQ")
+        }
+    )
+    broker = FakeBroker()
+    runner = build_runner(config=two, conn=conn, broker=broker, market=market, dry_run=True)
+    expected = ["eksik acilis bari: QQQ 14/15", "eksik acilis bari: SPY 14/15"]
+    assert sorted(gap_notes(runner.run_once())) == expected
+    assert gap_notes(runner.run_once()) == []
+
+    broker.clock = FakeClock(next_open=day2, next_close=day2 + timedelta(hours=6, minutes=30))
+    assert isinstance(runner.clock, SimClock)
+    runner.clock.set(NOW + timedelta(days=1))
+    assert sorted(gap_notes(runner.run_once())) == expected
+
+
+@dataclass
+class AlwaysLong:
+    """Acilis araligina bakmayan sahte strateji: her turda alis niyeti."""
+
+    strategy_id: str = "always"
+    params_version: str = "always-1"
+
+    def decide(self, ctx: Context) -> Intent | None:
+        last = ctx.last_bar
+        if last is None:
+            return None
+        return Intent(
+            strategy_id=self.strategy_id,
+            params_version=self.params_version,
+            symbol=ctx.symbol,
+            side=Side.BUY,
+            reference_price=last.close,
+            stop_loss=last.close * 0.99,
+            take_profit=last.close * 1.02,
+            reason="test",
+        )
+
+
+def test_the_gap_note_blocks_no_other_strategy(config: Config, conn: sqlite3.Connection) -> None:
+    """Not gozlemdir, kapi degildir: kapi ORB'nin aralik hesabindadir.
+    Acilis araligina bakmayan bir strateji eksik pencerede de niyet uretir."""
+    market = FakeMarket(bars_by_symbol={"SPY": gapped_at(SESSION_OPEN)})
+    runner = build_runner(
+        config=config,
+        conn=conn,
+        broker=FakeBroker(),
+        market=market,
+        dry_run=True,
+        strategies=[AlwaysLong()],
+    )
+    result = runner.run_once()
+    assert result.intents == 1
+    assert gap_notes(result) == ["eksik acilis bari: SPY 14/15"]

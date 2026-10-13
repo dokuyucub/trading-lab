@@ -9,6 +9,7 @@ ciktisiyla degil.
 from __future__ import annotations
 
 from datetime import timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -233,3 +234,35 @@ def test_a_window_the_bar_size_cannot_tile_is_undefined() -> None:
     assert opening_range(make_bars(20), SESSION_OPEN, 15, bar_duration=four) is None
     assert opening_window_gaps(make_bars(15), SESSION_OPEN, 0) is None
     assert opening_window_gaps(make_bars(15), SESSION_OPEN, 15, timedelta(0)) is None
+
+
+def test_a_repeated_minute_does_not_fill_a_missing_one() -> None:
+    """Sayilan, benzersiz baslangiclardir: 6. dakikanin tekrari 7.yi kapatmaz."""
+    bars = without_minutes(make_bars(16), 7)
+    bars.append(bars[6])
+    inside = [bar for bar in bars if bar.ts < SESSION_OPEN + timedelta(minutes=15)]
+    assert len(inside) == 15
+    assert opening_window_gaps(inside, SESSION_OPEN, 15) == (SESSION_OPEN + timedelta(minutes=7),)
+    assert opening_range(bars, SESSION_OPEN, minutes=15) is None
+
+
+def test_a_misaligned_bar_fills_no_minute() -> None:
+    """Beklenen baslangica denk gelmeyen bar (30 saniye kaymis) sayilmaz."""
+    shifted = make_bars(1, start=SESSION_OPEN + timedelta(minutes=7, seconds=30))
+    bars = without_minutes(make_bars(16), 7) + shifted
+    inside = [bar for bar in bars if bar.ts < SESSION_OPEN + timedelta(minutes=15)]
+    assert opening_window_gaps(inside, SESSION_OPEN, 15) == (SESSION_OPEN + timedelta(minutes=7),)
+    assert opening_range(bars, SESSION_OPEN, minutes=15) is None
+
+
+def test_the_bar_time_zone_does_not_matter() -> None:
+    """Ayni anlar, baska saat diliminde yazilmis olsa da ayni pencereyi verir."""
+    new_york = ZoneInfo("America/New_York")
+    local = [bar.model_copy(update={"ts": bar.ts.astimezone(new_york)}) for bar in make_bars(16)]
+    assert opening_window_gaps(local[:15], SESSION_OPEN, 15) == ()
+    assert opening_range(local, SESSION_OPEN, 15) == opening_range(make_bars(16), SESSION_OPEN, 15)
+
+
+def test_a_bar_at_the_window_end_does_not_fill_the_last_minute() -> None:
+    """Pencere sonundaki bar disaridadir; son dakikanin yerini tutmaz."""
+    assert opening_range(without_minutes(make_bars(17), 14), SESSION_OPEN, minutes=15) is None
