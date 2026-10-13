@@ -396,7 +396,7 @@ def test_the_report_carries_only_version_and_hash(tmp_path: Path) -> None:
     config = load_config(Path(__file__).resolve().parents[1])
     report = run_baseline(verified, config, code_commit="c0ffee")
 
-    assert report["report_schema"] == REPORT_SCHEMA_VERSION == 3
+    assert report["report_schema"] == REPORT_SCHEMA_VERSION == 4
     assert report["holdout"] == {
         "sessions": len(manifest["split"]["holdout"]),
         "opened": False,

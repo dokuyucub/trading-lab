@@ -35,14 +35,41 @@ from tlab.core.types import Timeframe
 from tlab.data.cached import CachedMarketData
 from tlab.data.dataset import VerifiedBaseline, canonical_json, holdout_commitment
 from tlab.journal.db import apply_migrations
-from tlab.learning import assess
+from tlab.learning import Evidence, assess
 from tlab.strategies.orb import OpeningRangeBreakout, ORBParams
 
-REPORT_SCHEMA_VERSION = 3
+REPORT_SCHEMA_VERSION = 4
 """v2: `holdout.commitment` ve `starting_equity_basis` eklendi (#17).
 v3: `data_feed` (dogrulanmis manifestten olcum feed'i) ve feed uyusmazlik
 uyarisi eklendi (#17, AGENTS §11.4). Daha eski bir rapor `data_feed`
-tasimaz; hangisi oldugunu `report_schema` soyler."""
+tasimaz; hangisi oldugunu `report_schema` soyler.
+v4: `evidence.ci_status` eklendi; aralik hesaplanmadiysa `ci_low` ve
+`ci_high` `null` (#17, 2026-10-13). v3 bu alanlara ortalamayi yazardi;
+2026-10-13 SIP raporu v3'tur ve degismez (AGENTS §7)."""
+
+CI_COMPUTED = "computed"
+CI_NOT_COMPUTED = "not_computed"
+
+
+def evidence_payload(evidence: Evidence) -> dict[str, Any]:
+    """Kanitin rapordaki hali. Aralik hesaplanmadiysa sayi YAZILMAZ.
+
+    `ci_status`, `Evidence`'in kendi durumundan turetilir; uclarin esit
+    olup olmamasindan degil (gercek, hesaplanmis bir aralik da sifir
+    genislikli olabilir). `trades_needed` taban dahildir; ortalama
+    esigin altindaysa yalnizca tabandir, olumlu fark tahmini degildir
+    (bkz. `Evidence.trades_needed`)."""
+    low = evidence.ci_low
+    high = evidence.ci_high
+    return {
+        "verdict": evidence.verdict.value,
+        "mean_r": round(evidence.mean_r, 6),
+        "ci_status": CI_COMPUTED if evidence.interval_computed else CI_NOT_COMPUTED,
+        "ci_low": None if low is None else round(low, 6),
+        "ci_high": None if high is None else round(high, 6),
+        "confidence": evidence.confidence,
+        "trades_needed": evidence.trades_needed,
+    }
 
 
 @dataclass(frozen=True)
@@ -168,14 +195,7 @@ def _run_scenario(
             "max_drawdown_pct": round(metrics.max_drawdown_pct, 4) if metrics else None,
             "total_return_pct": round(result.total_return_pct, 4),
             "strategy": strategy.params_version,
-            "evidence": {
-                "verdict": evidence.verdict.value,
-                "mean_r": round(evidence.mean_r, 6),
-                "ci_low": round(evidence.ci_low, 6),
-                "ci_high": round(evidence.ci_high, 6),
-                "confidence": evidence.confidence,
-                "trades_needed": evidence.trades_needed,
-            },
+            "evidence": evidence_payload(evidence),
         }
     finally:
         conn.close()
