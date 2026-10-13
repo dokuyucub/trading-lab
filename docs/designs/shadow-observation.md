@@ -4,7 +4,10 @@ Tarih: 2026-10-13. Koordinasyon: #17. Kayıtlar:
 - Claude ön raporu 6151855559; Codex kararı 6152090021 (yön uygun,
   protokol revizyonu);
 - Claude ön raporu 6153247091; Codex 6154024443 (revizyon doğru yönde;
-  üç açıklık: `t*`, tekillik durumları, sızıntı ve tutarlılık).
+  üç açıklık: `t*`, tekillik durumları, sızıntı ve tutarlılık);
+- Codex BULGU 6155755867 (#50, `2253025`): mutlak bps eşiği, gözlemin
+  başlangıçta yeniden denetimi, gün durumunun kanıtı, izin listesi,
+  normatif SIP son süresi, tam ızgarada niyetsizlik.
 
 Bu belge tasarımdır. Kod, workflow ya da gerçek koşu teslim edildiği
 anlamına gelmez. Yürütme yetkisi de değildir: o, ayrı ve kayıtlı bir
@@ -131,10 +134,12 @@ Gölge gözlemin broker'ı `ShadowBroker`'dır. Hesap ya da emir adaptörüne
   hiçbir şey yapmaz.
 - **Gün durumları.** Her planlı gün şu durumlardan biriyle raporlanır:
   - `tamam`;
-  - `eksik`: geç başladı, kesildi ya da SIP gelmedi;
-  - `başlamadı`.
+  - `eksik`: geç başladı, kesildi, SIP gelmedi ya da gözlem başladı ama
+    özeti yok;
+  - `başlamadı`: hiç gözlem başlamadığı **kanıtlı**;
+  - `bilinmiyor`: koşu geçmişi okunamadı ya da kanıt yetersiz.
 
-  Eksik ve başlamamış günler paydadan sessizce düşmez.
+  Dördü de paydada kalır; hiçbiri sessizce düşmez. Kanıtın kuralı §6'da.
 - **Payda.** Canlı pencere tamlığı için 20 × 11 = 220 planlı sembol-gün.
   Erişilemeyen gözlem `unknown` olarak ayrıca gösterilir.
 - **Planlı ızgara.** Giriş penceresinin her dakikası için bir tur:
@@ -157,7 +162,10 @@ Gölge gözlemin broker'ı `ShadowBroker`'dır. Hesap ya da emir adaptörüne
 - **Niyet:** her tarafın ilk niyeti.
   - İlk niyetten önceki planlı dakikalardan birinin turu yoksa ya da o
     turun verisi alınamadıysa o tarafın ilk niyeti `unknown` olur.
-  - Bu durum "iki tarafta da niyet yok" sayılmaz.
+  - **"Niyet yok"** sonucu yalnızca **bütün planlı dakikaların** turu
+    var ve verisi okunmuşsa verilir. Tek eksik tur bile sonucu `unknown`
+    yapar.
+  - `unknown`, "iki tarafta da niyet yok" sayılmaz.
 - **Koşullu ölçüler** için pay, payda ve `unknown` ayrı yazılır:
   - aralık farkı, iki pencere tamsa;
   - niyet uyumu, en az bir tarafta niyet varsa.
@@ -167,6 +175,11 @@ Gölge gözlemin broker'ı `ShadowBroker`'dır. Hesap ya da emir adaptörüne
   verilir; tek bir sembolün sürekli başarısızlığı toplamda kaybolmaz.
 - **Aralık farkının formülü:**
   `bps = (OR_IEX − OR_SIP) / OR_SIP × 10 000`. Üst ve alt uç ayrı ayrı.
+  - Raporda işaretli fark kalır.
+  - **Kabul mutlak değerle:** `|bps_üst| ≤ eşik` VE `|bps_alt| ≤ eşik`.
+  - Payda (`OR_SIP`) pozitif ve sonlu değilse fark `unknown`.
+  - Sentetik kabul örnekleri (eşik 5): `+5` ve `−5` sınırda geçer;
+    `+5,01`, `−5,01`, `+100` ve `−100` kalır.
 
 **Eşik önerileri (kalibre edilmiş kapı DEĞİL; yürütme kararında
 sabitlenir):**
@@ -174,7 +187,7 @@ sabitlenir):**
 | Ölçü | Öneri | Asgari destek |
 |---|---|---|
 | IEX başlangıç tamlığı (`t*`) | ≥ %95 | 220 planlı sembol-gün; `unknown` ayrı |
-| Aralık farkı | iki uç ≤ 5 bps, ≥ %90 | iki pencere de tam ≥ 100 sembol-gün |
+| Aralık farkı | iki uç `\|bps\| ≤ 5`, ≥ %90 | iki pencere de tam ≥ 100 sembol-gün |
 | Niyet uyumu (aynı yön, ±1 dk) | ≥ %80 | niyetli ≥ 30 sembol-gün, ≥ 10 farklı gün |
 
 Asgari destek sağlanmazsa sonuç `belirsiz` olur; geçti de kaldı da
@@ -206,6 +219,16 @@ Tercih: **sınırlı schedule**. Kullanıcıya 20 günlük tıklama yüklenmez
     satır günü `eksik` diye yazar.
   - Geç başlangıç gözlem sayılmaz. Geçmiş barla doldurulup canlı
     gözlenmiş de sayılmaz.
+- **Gözlem işi pencereyi kendisi yeniden denetler.** Kapı açılıştan
+  ~40 dk önce geçebilir. Kayıt işi ise runner kuyruğunda, takvim
+  çağrısında ya da kurulumda açılıştan sonraya kalabilir.
+  - Denetim iki kez yapılır: iş başladığında ve takvim ile kurulum
+    bitip gözleme hazır olduğunda.
+  - Saat `açılış − 1 dk`'yı geçmişse canlı gözlem başlamaz. Gün
+    `eksik (geç başlangıç)` yazılır.
+  - Geçmiş barla doldurularak açılış gözlenmiş sayılmaz.
+  - Sentetik protokol testleri: iki iş arasındaki kuyruk gecikmesi ve
+    zaman alan takvim çağrısı.
 - **Seans kimliği.** Seans tarihi; planlı günler listesinde olmalı.
 - **Günlük tekillik.**
   - `concurrency` aynı anda iki koşuyu önler, ama aynı gün ikinci
@@ -219,8 +242,10 @@ Tercih: **sınırlı schedule**. Kullanıcıya 20 günlük tıklama yüklenmez
     olup olmadığını Actions API'sinden okur; varsa durur. Boş geçen koşu
     sayılmaz; böylece diğer cron satırı gerçek koşuyu engellemez.
   - **Durumlar.** Yalnızca bu koşudan önce oluşturulmuş koşular (kimliği
-    küçük olanlar) sayılır. Eşzamanlılık grubu workflow düzeyindedir;
-    sonraki bir koşu bu koşu bitmeden başlayamaz, iki kapı yarışamaz.
+    küçük olanlar) sayılır. Eşzamanlılık grubu workflow düzeyindedir ve
+    `cancel-in-progress: false` açıkça yazılır: ikinci cron etkin
+    gözlemi iptal etmez, bekler. Sonraki bir koşu bu koşu bitmeden
+    başlayamaz; iki kapı yarışamaz.
     Önceki koşunun kayıt işi:
 
     | Durum | Sayılır mı |
@@ -241,8 +266,12 @@ Tercih: **sınırlı schedule**. Kullanıcıya 20 günlük tıklama yüklenmez
     - mevsim dışı cron'un gözlemi başlatmadan günü tüketmemesi;
     - yukarıdaki dört durum.
   - Yeniden deneme koşusu (aynı koşunun ikinci denemesi) hiç koşmaz.
-  - **İzin maliyeti:** yalnızca kapı işinde `actions: read`. Alpaca
-    secret'ları yalnızca gözlem adımında bulunur.
+  - **İzin maliyeti:** `actions: read` yalnızca iki secret'sız işte:
+    - kapı işi (bu workflow);
+    - toplam işi (§6; ayrı, secret'sız).
+
+    Gözlem ve kayıt işleri bu izni almaz. Alpaca secret'ları yalnızca
+    gözlem adımında bulunur.
   - `workflow_dispatch` yok. Elle yeniden başlatma zaten geç başlangıç
     olur.
   - Planlı gün listesi boşken her koşu kapıda "plan dışı gün" der ve
@@ -258,23 +287,48 @@ Tercih: **sınırlı schedule**. Kullanıcıya 20 günlük tıklama yüklenmez
   penceresi kapandıktan sonra SIP barları istenir ve iki koşul aranır:
   - açılış penceresi ile son karar anına kadar olan aralık sağlayıcıdan
     tam döndü;
-  - belirlenmiş son süre (giriş penceresi sonu + 45 dk) aşılmadı.
-
-  Aşılırsa gün `eksik` (SIP gelmedi) olarak kaydedilir.
-  - İlk SIP isteği son karar anından en az 15 dk sonra yapılır: ücretsiz
-    plan SIP'in son 15 dakikasını vermez.
+  - son süre aşılmadı.
+- **Son süre (normatif):** `açılış + giriş penceresi (120 dk) + 45 dk`.
+  - Seans saatine bağlı tek bir sabittir (kodda `SIP_DEADLINE`).
+  - İstek anına bağlı değildir. Yavaş ya da tekrarlanan istek son süreyi
+    kaydırmaz.
+  - Her istekten önce denetlenir; son süreden sonra istek yapılmaz.
+  - Aşılırsa gün `eksik` (SIP gelmedi) olarak kaydedilir.
+- **İlk SIP isteği** son karar anından en az 15 dk sonra yapılır: ücretsiz
+  plan SIP'in son 15 dakikasını vermez. Bu bir bekleme kuralıdır; son
+  süre değildir.
 - **Günlük ve toplam özet.**
   - Her gün yalnızca o günün özetini yükler: gün durumu ve sembol-gün
     karşılaştırmaları, fiyatsız.
   - 20 günlük toplam, son planlı günden sonra secret'sız ayrı bir işte
-    kurulur. İş, günlük özet artefaktlarını Actions API'sinden okur
-    (`actions: read`).
-  - Özeti bulunmayan gün `başlamadı (kayıt yok)` sayılır.
-  - Artefakt saklama süresi 20 planlı günü kapsamalıdır.
+    kurulur (`actions: read`). İki kaynağı birlikte okur:
+    - günlük özet artefaktları;
+    - planlı günlerin sınırlı koşu ve iş üst verisi: her koşunun
+      kimliği, oluşturulma anı, kayıt işinin durumu ve sonucu.
+  - **Özet yokluğu "başlamadı" kanıtı değildir.** Gözlem başladıktan
+    sonra runner kaybı, zaman aşımı ya da yükleme hatası da özet
+    bırakmaz. Gün durumu kanıtla belirlenir:
+
+    | Kanıt | Gün durumu |
+    |---|---|
+    | gün özeti var | özetteki durum (`tamam` / `eksik`) |
+    | özet yok; o günün kayıt işi atlanmamış bir koşusu var | `eksik (başladı, özet yok)` |
+    | özet yok; koşu geçmişi okundu, o günün kayıt işi atlanmamış koşusu yok | `başlamadı` |
+    | özet yok; koşu geçmişi okunamadı ya da eksik | `bilinmiyor` |
+
+  - Dördü de 220'lik paydada kalır; özeti olmayan günün sembol-günleri
+    `unknown`dur.
+  - Daha önce bilinen bir koşunun silinmesi ya da artefaktın kaybolması
+    günü `başlamadı`ya çevirmez: kanıt yetersizse durum `bilinmiyor`
+    olur.
+  - Artefakt saklama süresi 20 planlı günü ve toplam adımını kapsamalıdır.
 - **Hata yolları sentetik protokol testleriyle sınanır:**
   - yarım gün (erken kapanış) ve tatil;
   - yaz/kış saati geçişi;
   - geç tetikleme; aynı gün iki cron ya da ikinci koşu;
+  - kapı ile gözlem işi arasında kuyruk gecikmesi; zaman alan takvim
+    çağrısı;
+  - gözlem başladı ama özet yok; koşu geçmişi okunamadı;
   - 401/403, 429 ve 5xx;
   - eksik IEX ya da eksik SIP barı;
   - sıfır niyet.
