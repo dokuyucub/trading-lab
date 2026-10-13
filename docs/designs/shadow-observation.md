@@ -8,6 +8,9 @@ Tarih: 2026-10-13. Koordinasyon: #17. Kayıtlar:
 - Codex BULGU 6155755867 (#50, `2253025`): mutlak bps eşiği, gözlemin
   başlangıçta yeniden denetimi, gün durumunun kanıtı, izin listesi,
   normatif SIP son süresi, tam ızgarada niyetsizlik;
+- Codex ONAY 6156219094 (#50, `d557ef0`) kod PR'ı ölçütleri: özeti
+  olmayan günde "başladı" yalnızca gerçek adım kanıtıyla; son süreden
+  sonra dönen SIP yanıtı kabul edilmez;
 - Codex BULGU 6158917217 (#51, `a9c7c80`): aralık ölçüsünde bilinmeyen
   sembol-gün paydada, pencere uçları saatle kapanmış pencereden, aralık
   ilk tam turda.
@@ -137,8 +140,8 @@ Gölge gözlemin broker'ı `ShadowBroker`'dır. Hesap ya da emir adaptörüne
   hiçbir şey yapmaz.
 - **Gün durumları.** Her planlı gün şu durumlardan biriyle raporlanır:
   - `tamam`;
-  - `eksik`: geç başladı, kesildi, SIP gelmedi ya da gözlem başladı ama
-    özeti yok;
+  - `eksik`: geç başladı, kesildi, SIP gelmedi ya da kayıt koşusu var
+    ama özeti yok;
   - `başlamadı`: hiç gözlem başlamadığı **kanıtlı**;
   - `bilinmiyor`: koşu geçmişi okunamadı ya da kanıt yetersiz.
 
@@ -310,6 +313,9 @@ Tercih: **sınırlı schedule**. Kullanıcıya 20 günlük tıklama yüklenmez
   - İstek anına bağlı değildir. Yavaş ya da tekrarlanan istek son süreyi
     kaydırmaz.
   - Her istekten önce denetlenir; son süreden sonra istek yapılmaz.
+  - Yanıt döndükten sonra yeniden denetlenir. Son süreden önce başlayıp
+    sonra dönen yanıt, tam olsa da kabul edilmez; sebep
+    `son süre doldu (yanıt geç)`.
   - Aşılırsa gün `eksik` (SIP gelmedi) olarak kaydedilir.
 - **İlk SIP isteği** son karar anından en az 15 dk sonra yapılır: ücretsiz
   plan SIP'in son 15 dakikasını vermez. Bu bir bekleme kuralıdır; son
@@ -321,7 +327,8 @@ Tercih: **sınırlı schedule**. Kullanıcıya 20 günlük tıklama yüklenmez
     kurulur (`actions: read`). İki kaynağı birlikte okur:
     - günlük özet artefaktları;
     - planlı günlerin sınırlı koşu ve iş üst verisi: her koşunun
-      kimliği, oluşturulma anı, kayıt işinin durumu ve sonucu.
+      kimliği, oluşturulma anı, kayıt işinin durumu ve sonucu, kayıt
+      adımlarının (`Gozle`, `Gec kaydi yaz`) sonucu.
   - **Özet yokluğu "başlamadı" kanıtı değildir.** Gözlem başladıktan
     sonra runner kaybı, zaman aşımı ya da yükleme hatası da özet
     bırakmaz. Gün durumu kanıtla belirlenir:
@@ -329,9 +336,16 @@ Tercih: **sınırlı schedule**. Kullanıcıya 20 günlük tıklama yüklenmez
     | Kanıt | Gün durumu |
     |---|---|
     | gün özeti var | özetteki durum (`tamam` / `eksik`) |
-    | özet yok; o günün kayıt işi atlanmamış bir koşusu var | `eksik (başladı, özet yok)` |
+    | özet yok; bir kayıt adımı gerçekten koştu (adım sonucu `success` ya da `failure`) | `eksik (kayıt adımı koştu, özet yok)` |
+    | özet yok; kayıt işi atlanmamış bir koşu var, adım kanıtı yok (kuyruk, kurulum, iptal) | `eksik (koşu var, özet yok)` |
     | özet yok; koşu geçmişi okundu, o günün kayıt işi atlanmamış koşusu yok | `başlamadı` |
-    | özet yok; koşu geçmişi okunamadı ya da eksik | `bilinmiyor` |
+    | özet yok; koşu geçmişi okunamadı, eksik ya da kayıt işi sürüyor | `bilinmiyor` |
+
+  - Kayıt işinin atlanmamış olması günü tekillik için rezerve eder;
+    gözlemin başladığına tek başına kanıt değildir. Bu yüzden "başladı"
+    denmez. İptal edilmiş adım, hiç başlamamış adımı da işaretleyebildiği
+    için koşma kanıtı sayılmaz. Bir günün birden çok koşusu varsa en
+    güçlü kanıt geçerlidir.
 
   - Dördü de 220'lik paydada kalır; özeti olmayan günün sembol-günleri
     `unknown`dur.
@@ -345,7 +359,9 @@ Tercih: **sınırlı schedule**. Kullanıcıya 20 günlük tıklama yüklenmez
   - geç tetikleme; aynı gün iki cron ya da ikinci koşu;
   - kapı ile gözlem işi arasında kuyruk gecikmesi; zaman alan takvim
     çağrısı;
-  - gözlem başladı ama özet yok; koşu geçmişi okunamadı;
+  - kayıt adımı koştu ama özet yok; koşu var, adım kanıtı yok; kayıt
+    işi sürüyor; koşu geçmişi okunamadı;
+  - son süreden önce başlayıp sonra dönen SIP yanıtı;
   - 401/403, 429 ve 5xx;
   - eksik IEX ya da eksik SIP barı;
   - sıfır niyet.
