@@ -12,20 +12,26 @@ kayitli bir degerlendirme karari gerektirir (Codex, #17 6067588608).
 
 Genel bir gelistirme kilidi DEGILDIR. Dondurma yalnizca BU degerlendirme
 beklerken gecerlidir: aktif ana tanim bu kayittaki tanim ve yurutme
-kaydi henuz yok (`freeze_applies`). Yurutme kaydedildiginde (§7) ya da
-aktif ana tanim degistiginde kayit tarihsel kalir; baska veri kumesi ya
-da strateji gelistirmesini kilitlemez. Bu gecis kendiliginden olmaz:
-`executed` alani ve asagidaki "bugun bekliyor" iddiasi ayni kayitli
-degisiklikte guncellenir.
+kaydi yok (`freeze_applies`). Yurutme kaydedildiginde (§7) ya da aktif
+ana tanim degistiginde kayit tarihsel kalir; baska veri kumesi ya da
+strateji gelistirmesini kilitlemez. Bu gecis kendiliginden olmaz:
+`executed` alani ve yasam dongusu iddiasi ayni kayitli degisiklikte
+guncellenir.
+
+YURUTULDU (2026-10-13, AGENTS §7): run 38418157122, main `01f0d8a`.
+Gecis bu kayitla yapildi (Codex, #17 6148882637): `executed` dolu,
+asagidaki canli denetimler gerekcesiyle ATLANIR, yurutme kaydi somut
+degerlerle denetlenir.
 
 KAYIT (testle dogrulanmaz): onayin dayandigi main `544c371` (#44
 birlesmesi). Onay commit'i kendi kimligini tasimaz; PR head ve merge
 kimligi inceleme ve devir kaydindan baglanir (Codex, #17 6067241410).
 
-TESTLE DOGRULANAN: olculecek tanimin onayli hash'i; olcum evrenine
-normalize config'in semantik hash'i; strateji parametreleri ve surumu;
-dort maliyet senaryosu ve birincil senaryo; kanit kuralinin varsayilanlari;
-sentetik baslangic ozsermayesi; rapor semasi.
+YURUTMEYE KADAR TESTLE DOGRULANAN: olculecek tanimin onayli hash'i;
+olcum evrenine normalize config'in semantik hash'i; strateji
+parametreleri ve surumu; dort maliyet senaryosu ve birincil senaryo;
+kanit kuralinin varsayilanlari; sentetik baslangic ozsermayesi; rapor
+semasi.
 
 GERCEK olcum yolunda (`baseline_job.measure` -> `run_baseline`) sentetik
 veriyle ayrica olculenler: strateji surumu, dort senaryo, birincil
@@ -66,12 +72,26 @@ FREEZE: dict[str, Any] = {
     "primary_scenario": "temel",
     "starting_equity": 100_000.0,
     "report_schema": 3,
-    "executed": None,
+    "executed": {
+        "decision": "6148263635",
+        "run": "38418157122",
+        "job": "115368035316",
+        "attempt": 1,
+        "code_commit": "01f0d8a817a61cd93c08d7c23a30f9ee761e57eb",
+        "main_ci": "38413824265",
+        "python": "3.12.15",
+        "runner": ("ubuntu-24.04", "20261004.327.1"),
+        "artifact": "11826305321",
+        "artifact_sha256": "85b2267d5fcbdbb929aef56ed65d87cbc00825eeec5152af21d3d14bd889a169",
+        "verified": "6148882637",
+    },
 }
 """Onay incelemesinde bildirilen kimlikler (#17 6067224557, Codex
-6067588608). `source_main` KAYITTIR; `executed` yurutme kaydidir (henuz
-yok: gercek kosu ayri ve kayitli bir karar). Geri kalani asagidaki
-testlerle dogrulanir."""
+6067588608). `source_main` KAYITTIR. `executed` yurutme kaydidir (§11.5
+"Kayit"): karar (Codex 6148263635), kosu, job ve attempt, code commit ve
+main CI'si, log'dan gercek Python ile runner imaji ve surumu, artefakt ve
+digest'i (Claude 6148772681), ZIP/JSON dogrulamasi (Codex 6148882637).
+Geri kalani yurutmeye kadar asagidaki testlerle dogrulandi."""
 
 STRATEGY_PARAMS: dict[str, Any] = {
     "opening_range_minutes": 15,
@@ -117,20 +137,45 @@ PENDING = freeze_applies(FREEZE, baseline_job.MAIN_SPEC)
 pending = pytest.mark.skipif(
     not PENDING, reason="degerlendirme yurutuldu ya da aktif degil; kayit tarihsel"
 )
-"""Canli esitlik denetimleri. Bugun hepsi KOSAR: bkz.
+"""Canli esitlik denetimleri. Degerlendirme yurutuldu (2026-10-13) ve
+kaydedildi: hepsi gerekcesiyle ATLANIR; bkz.
 `test_the_freeze_binds_only_the_pending_evaluation`."""
 
 
 def test_the_freeze_binds_only_the_pending_evaluation() -> None:
     """Dondurma bir yasam dongusudur, genel bir kilit degil (Codex
-    6067588608). BUGUN degerlendirme bekliyor: asagidaki canli denetimler
-    sessizce atlanamaz. Yurutme kaydedilince bu iddia ayni kayitli
-    degisiklikte guncellenir."""
+    6067588608). Degerlendirme 2026-10-13'te yurutuldu (§7): canli
+    denetimler artik atlanir ve bunun TEK sebebi yurutme kaydidir; aktif
+    ana tanim hala bu kayittaki tanim. Gecis bu kayitli degisiklikle
+    yapildi (Codex 6148882637)."""
     main_spec = baseline_job.MAIN_SPEC
-    assert PENDING, "canli dondurma denetimleri atlaniyor; yurutme kaydi yok"
-    assert freeze_applies(FREEZE, main_spec)
-    assert not freeze_applies({**FREEZE, "executed": {"run_id": "1"}}, main_spec)
-    assert not freeze_applies(FREEZE, main_spec.with_name("baska-tanim.yaml"))
+    assert not PENDING, "yurutme kaydedildi; canli dondurma denetimleri tarihsel"
+    assert FREEZE["executed"] is not None
+    before = {**FREEZE, "executed": None}
+    assert freeze_applies(before, main_spec)
+    assert not freeze_applies(FREEZE, main_spec)
+    assert not freeze_applies(before, main_spec.with_name("baska-tanim.yaml"))
+
+
+def test_the_execution_record_is_the_verified_run() -> None:
+    """Yurutme kaydi SOMUT ve tarihseldir: degerler #17'de dogrulananlardir
+    (Claude 6148772681, Codex 6148882637); uretimden ya da guncel runner ve
+    Python sozlesmesinden turetilmez, cunku sozlesme degisse de bu kosu bu
+    ortamda yapildi. Kayit iki yerde, `FREEZE` ve burada: biri tek basina
+    degisirse test durur. Attempt 1: yeniden kosu istisnasi kullanilmadi."""
+    assert FREEZE["executed"] == {
+        "decision": "6148263635",
+        "run": "38418157122",
+        "job": "115368035316",
+        "attempt": 1,
+        "code_commit": "01f0d8a817a61cd93c08d7c23a30f9ee761e57eb",
+        "main_ci": "38413824265",
+        "python": "3.12.15",
+        "runner": ("ubuntu-24.04", "20261004.327.1"),
+        "artifact": "11826305321",
+        "artifact_sha256": "85b2267d5fcbdbb929aef56ed65d87cbc00825eeec5152af21d3d14bd889a169",
+        "verified": "6148882637",
+    }
 
 
 def scenario_rows(report: dict[str, Any]) -> list[tuple[str, float, float, float]]:

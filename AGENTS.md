@@ -815,6 +815,106 @@ sonuc: all_eligible
 - Bu karar yeni veri indirme, P&L koşusu ya da holdout açma onayı değildir.
 - Bu karşılaştırma tekrar koşulmaz.
 
+### Doğrulanan — 2026-10-13: SIP baseline ölçümü (tek koşu)
+
+| Ne | Kanıt | Kapsam |
+|---|---|---|
+| SIP ana ölçümü gerçek ortamda bir kez koştu ve rapor üretti | Koşu `38418157122`, iş `115368035316`, `run_attempt` 1, `workflow_dispatch`; main `01f0d8a`, o commit'in main CI'sı `38413824265` (quality `115352824583` success). 2026-10-13 14:59:32 UTC'de `dokuyucub` hesabından, kullanıcının GitHub arayüzünden tek tıklamasıyla (yürütme kararı Codex 6148263635) | `orb-baseline-2026q3-u11-sip` (§11.5). Yalnızca baseline; holdout açılmadı; emir yok. Log'dan gerçek Python `3.12.15`; runner `Image: ubuntu-24.04`, `Version: 20261004.327.1`. Claude run, job, log ve artefakt API'sini doğruladı (#17 6148772681). |
+| Rapor artefaktı | Artefakt `11826305321`, 1798 bayt. Upload log'undaki ZIP SHA256 ile API `digest` aynı: `85b2267d5fcbdbb929aef56ed65d87cbc00825eeec5152af21d3d14bd889a169`. Son geçerlilik 2027-01-11. | **ZIP/JSON bağımsız doğrulandı (Codex, 6148882637; JSON'un tamamı 6148882938).** Yerel SHA256 API ve upload digest'iyle aynı; tek üye `baseline-report.json`, CRC temiz; config hash JSON'daki config'ten yeniden hesaplandı. Claude ZIP'i indiremedi (oturum ağ politikası, 403); paylaşılan JSON'u depodaki kodla karşılaştırdı: alan kümeleri, config ve hash'i, kalite politikası, uyarılar, senaryolar ve strateji sürümü kodla aynı; satır içi aritmetik tutarlı. Bu karşılaştırma ZIP'le bayt eşitliğini kanıtlamaz; o, Codex'in digest denetimidir. |
+
+Adımlar: kurulum success; A: indirme success (38 sn; secret yalnızca bu
+adımda, maskeli); B: anahtarsız ölçüm success (4 dk 39 sn); temizlik
+success (`always()`, `rm -rf` + `test ! -e`); rapor yükleme success
+(`upload-artifact@v7`).
+
+Aracın bütün çıktısı, olduğu gibi (#17):
+
+```
+OK indirme orb-baseline-2026q3-u11-sip (manifest 2ba89e5e7a26)
+seans: takvim 63, tamamlanmis 63, baseline 50, holdout 13
+kaliteye uymayan baseline seansi: 0
+OK olcum orb-baseline-2026q3-u11-sip (manifest 2ba89e5e7a26)
+rapor: sema 3, feed sip (ayar iex), senaryo 4, baseline 50 seans, holdout 13 seans (acilmadi)
+```
+
+**Sonuç.** 50 baseline seansı (2026-06-22 – 2026-08-31), sentetik 100 000
+başlangıç, birincil satır `temel`. Değerler JSON'daki gibidir:
+
+| Senaryo (kayma / spread bps) | İşlem | Net P&L (sentetik USD) | Getiri % | Expectancy R | Profit factor | Max DD % | Karar |
+|---|---:|---:|---:|---:|---:|---:|---|
+| iyimser (0.5 / 1) | 67 | -1029.8 | -1.0298 | -0.038965 | 0.902678 | 3.3763 | `insufficient_data` |
+| **temel (1 / 2)** | **67** | **-1292.25** | **-1.2922** | **-0.050699** | **0.879359** | **3.4862** | **`insufficient_data`** |
+| kotumser (3 / 5) | 67 | -2333.29 | -2.3333 | -0.095569 | 0.792513 | 3.9811 | `insufficient_data` |
+| sert (5 / 10) | 67 | -3385.64 | -3.3856 | -0.13746 | 0.712527 | 4.5999 | `insufficient_data` |
+
+- Dört satırda da 50 işlem günü ve komisyon 0.
+- Toplam R: iyimser -2.610635, temel -3.396851, kotumser -6.403111, sert
+  -9.209847.
+- İsabet: iyimser %47.7612 (32/67), diğer üçü %46.2687 (31/67).
+- **%95 güven aralığı: hesaplanmadı (67 < 100).** Aşağıdaki okuma notuna
+  bakın.
+
+**Okuma (§11.5 tablosu; kural veri görülmeden yazıldı):**
+
+- **`temel`: `insufficient_data`.** 67 işlem, taban 100; rakamlar ne olursa
+  olsun belirsiz. Holdout açılmaz.
+- **Gözlem olumsuz, kanıt değil.** Dört satırın hepsinde gözlenen net sonuç
+  negatif; en iyimser maliyette de. "`worse` kanıtlandı" denmez; kârlılık ya
+  da terfi kanıtı da yoktur.
+- **Aralık alanları hesaplanmış aralık değildir.**
+  - Dört satırda da `ci_low` = `ci_high` = `mean_r`.
+  - Nedeni `assess`'tir (`learning/evidence.py`): işlem sayısı `min_trades`'in
+    altındayken bootstrap'i çalıştırmaz ve iki alana ortalamayı yazar.
+  - Bu yüzden sıfır genişlikli bir aralık, yani kesin zarar kanıtı gibi
+    okunamaz.
+  - Rapor geriye dönük değiştirilmez. Alanların sunumu ayrı bir küçük
+    düzeltmenin işidir (aşağıda).
+- **`trades_needed` 100, tabandır.** Ortalama sıfırın altındayken
+  `required_trades` 0 döner ve taban kalır. "100 işlemle kanıtlanır"
+  demek değildir; 100'e ulaşmak olumlu sonuç garantisi değildir.
+
+**Bu koşunun söylediği ve söylemediği:**
+
+- Söylediği:
+  - **Uçtan uca başarı yolu.** Onay kapısı, iki adımlı secret sınırı,
+    anahtarsız ölçüm, P&L öncesi kalite kapısı, temizlik ve yalnızca rapor
+    yükleme gerçek ortamda tasarlandığı gibi çalıştı. Durma yolunu
+    2026-09-28'deki IEX denemesi göstermişti.
+  - **Kalite.** SIP verisiyle 50 baseline seansının hepsi kalite kapısını
+    geçti (uygunsuz 0); 2026-10-03 karşılaştırmasıyla tutarlı.
+  - **Kimlikler onayla aynı.** Raporda `code_commit` `01f0d8a…`, config
+    hash `14c5141e…`, strateji `orb-7b32942a`, dört senaryo, birincil
+    `temel`, sentetik özsermaye ve şema 3 var. Codex ve Claude ayrı ayrı
+    denetledi.
+  - **Gözlem.** Bu dönemde ve bu maliyet varsayımlarıyla ORB, baseline'da 67
+    işlem açtı ve dört senaryonun hepsinde net negatif kapattı.
+- Söylemediği:
+  - **Stratejinin kötü olduğu kanıtlanmadı; iyi olduğu da.** 67 < 100.
+  - **Bağımsız doğrulama.** Dönem ve feed, aynı dönemin kalitesi
+    gözlemlendikten sonra seçildi (§11.4). Holdout kapalı.
+  - **Gerçek dolum.** Dolumlar simüle; kayma, kısmi dolum ve emir yaşam
+    döngüsü hiç gözlenmedi.
+  - **IEX ile karar veren çalışma.** Ölçüm `sip` feed'iyle;
+    `config.data.feed` `iex`. Sonuç o feed'e otomatik taşınmaz (§11.4).
+  - **Hesap.** Başlangıç özsermayesi sentetik; hesap okunmadı. Rakamlar
+    hesap zararı değildir.
+
+**Karar (Codex, #17, 6148882637):**
+
+- Bu tek ölçüm tamamlandı. Tekrar ölçüm, holdout açma, filtre ya da eşik
+  değiştirip aynı dönemi yeniden deneme, paper/canlı emir ya da terfi yok.
+- Kayıtta aralık "hesaplanmadı (67 < 100)" yazılır. Rapor geriye dönük
+  değiştirilmez; `assess` karar mantığı bu kayıtta değişmez.
+- Sıradaki işler, bu sırayla:
+  1. bu kayıt;
+  2. rapor sözleşmesinde aralık alanlarının hesaplanmadığını açıkça
+     gösteren küçük düzeltme (`not_computed`/null ve sunum testi);
+  3. yeni veri dönemi ya da gölge gözlem için, veri görülmeden tasarım.
+- Yeni tarih aralığı, işlem sayısını 100'e tamamlamak için keyfî seçilmez.
+  Sonraki çalışmalar bu 67 işleme aşırı uyarlanmaz.
+- main kilidi kaldırıldı: geliştirme olağan PR, çift göz ve CI kurallarıyla
+  sürer. Bu, yeni bir ölçüm yetkisi değildir.
+
 ### Hâlâ doğrulanmayan
 
 - **Emir yaşam döngüsü.** Hiç emir gönderilmedi. Dolum, kayma, kısmi dolum,
@@ -824,14 +924,14 @@ sonuc: all_eligible
   sınanmadı. Gözetimsiz paper kabulünden önce ayrıca iki gereksinim var:
   karar feed'i ile ölçüm feed'inin uyumu ve canlı karar yolunda eksik
   açılış barı kontrolü (§11.4).
-- **Stratejinin kârlılığı.** ORB gerçek piyasa verisiyle bir kez bile
-  backtest edilmedi: ilk ana ölçüm kalite kapısında, P&L'den önce durdu ve
-  IEX üzerindeki bu tanım kalite nedeniyle kapatıldı (yukarıda). Aynı
-  dönemin baseline'ında tarihsel SIP verisi kalite kapısını geçti
-  (2026-10-03, yukarıda); SIP üzerinde P&L ölçümü ayrı tasarım ve karar
-  ister. Sistemin
-  sağlam olması, stratejinin kazandırdığı anlamına gelmez; bunlar ayrı iki
-  sorudur ve ikincisine henüz dokunulmadı.
+- **Stratejinin kârlılığı.** ORB gerçek piyasa verisiyle bir kez ölçüldü:
+  2026-10-13 SIP baseline'ı (yukarıda), 50 seansta 67 işlem. Dört maliyet
+  senaryosunun hepsinde gözlenen net sonuç negatif; karar her satırda
+  `insufficient_data` (67 < 100). Kârlılık kanıtı yok; zarar ettiği de
+  istatistiksel olarak kanıtlanmadı. Ölçüm bağımsız doğrulama değil;
+  holdout kapalı. Sistemin sağlam olması, stratejinin kazandırdığı anlamına
+  gelmez; bunlar ayrı iki sorudur. İkincisinin bugünkü cevabı: bilinmiyor,
+  tek gözlem olumsuz.
 
 Bu üçü tamamlanmadan hiçbir yerde "sistem hazır" yazılmamalı.
 
@@ -1204,7 +1304,9 @@ kaynağı da doğrulanmamış kalıyor.
 - taslak: §11.4 (Codex 6050448152, 6051089595);
 - sıra ve teslim şartları: Codex 6066165935 ve 6067241410;
 - ön rapor: Claude 6067224557 (çapraz not 6067284363);
-- ön rapora dört karar: Codex 6067588608.
+- ön rapora dört karar: Codex 6067588608;
+- yürütme kararı: Codex 6148263635;
+- sonuç ve kayıt kararı: Codex 6148882637.
 
 **İki ayrı olay:**
 
@@ -1212,14 +1314,22 @@ kaynağı da doğrulanmamış kalıyor.
    değerlendirme sözleşmesini onaylar. Bu kaydı taşıyan PR'ın bağımsız
    incelemesi ve birleşmesiyle verilir. Onay commit'i kendi kimliğini
    taşımaz; PR head ve merge kimliği inceleme ve devir kaydından bağlanır.
-2. **Yürütme (henüz yok):** gerçek workflow'u çalıştırma yetkisi bu kayıtla
-   **verilmiş değildir**. Sonraki ayrı ve kayıtlı bir yürütme kararı şunları
-   bağlar:
+2. **Yürütme (2026-10-13, §7):** gerçek workflow'u çalıştırma yetkisi bu
+   kayıtla **verilmiş değildir**. Sonraki ayrı ve kayıtlı bir yürütme kararı
+   şunları bağlar:
    - kesin yürütme commit'ini;
    - o commit'in main CI'sını;
    - yürütme yöntemini.
 
    Aşağıdaki yeniden koşu kuralı o yürütmenin kapsamına aittir.
+
+   Bu karar Codex 6148263635'tir:
+   - commit `01f0d8a`;
+   - main CI `38413824265` (quality `115352824583` success);
+   - yöntem: sahibi GitHub arayüzünden Run workflow'u bir kez kullanır.
+
+   Koşu `38418157122` başarıyla bitti; yeniden koşu istisnası kullanılmadı.
+   Kayıt §7'de.
 
 **Kapsam:** `orb-baseline-2026q3-u11-sip` tanımının indirilmesi ve
 baseline bölümünün **bir kez** ölçülmesi; yürütme kararından sonra.
@@ -1267,6 +1377,12 @@ değerleri değiştirmek yeni ve kayıtlı bir değerlendirme kararı gerektirir
     tarihsel kalır. Başka veri kümesi ya da strateji geliştirmesini
     kilitlemez.
   - Geçiş kendiliğinden olmaz; kayıtlı değişiklikle yapılır.
+  - **Geçiş, yürütme kaydıyla yapıldı** (yürütme 2026-10-13; karar Codex
+    6148882637).
+    - `FREEZE["executed"]` yürütme kaydını taşır.
+    - Altı canlı eşitlik denetimi gerekçesiyle atlanır.
+    - Yaşam döngüsü testi ve yürütme kaydını somut değerlerle denetleyen
+      test koşar.
 - **Yürütmeden önce head değişirse** (örneğin bakım PR'ı): kimlikleri bu
   test yeni head'in CI'ında yeniden doğrular. Eski head'in onayı
   kendiliğinden taşınmaz.
@@ -1330,7 +1446,8 @@ başlatmaz.
   sonucu verir.
 - **Otomatik yeniden deneme eklenmez.**
 
-**Kayıt:** gerçek koşunun kaydı §7'ye ayrı bir PR'la yazılır. İçeriği:
+**Kayıt:** gerçek koşunun kaydı §7'ye ayrı bir PR'la yazılır; 2026-10-13
+koşusununki §7'de. İçeriği:
 
 - run, job ve attempt;
 - code commit ve o commit'in main CI'sı;
