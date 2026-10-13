@@ -11,7 +11,7 @@ Tasarim kurallari:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from tlab.core.types import Bar
 
@@ -104,8 +104,40 @@ def relative_volume(bars: list[Bar], lookback: int = 20) -> float | None:
     return bars[-1].volume / baseline
 
 
+ONE_MINUTE = timedelta(minutes=1)
+
+
+def opening_window_gaps(
+    bars: list[Bar], session_open: datetime, minutes: int, bar_duration: timedelta = ONE_MINUTE
+) -> tuple[datetime, ...] | None:
+    """Acilis penceresinde beklenen ama gelmemis bar baslangiclari.
+
+    Pencere `minutes` dakika, her bar `bar_duration` uzunlugunda.
+    Beklenen her bar baslangici `session_open + k * bar_duration`.
+    Bos demet, pencerenin TAM oldugu anlamina gelir.
+
+    Denetlenen, BENZERSIZ ve HIZALI baslangiclardir: ayni dakikanin
+    tekrari eksik bir dakikayi kapatmaz; beklenen baslangica denk
+    gelmeyen (ornegin 30 saniye kaymis) bar hicbir dakikayi doldurmaz.
+    Karsilastirma an (instant) uzerinden yapilir; barin saat dilimi
+    sonucu degistirmez.
+
+    Pencere bar suresine tam bolunmuyorsa None doner: o bar suresiyle
+    bu pencere tanimsizdir, "tam" ya da "eksik" denemez.
+    """
+    window = timedelta(minutes=minutes)
+    if minutes < 1 or bar_duration <= timedelta(0) or window % bar_duration:
+        return None
+    present = {bar.ts.timestamp() for bar in bars}
+    expected = (session_open + k * bar_duration for k in range(window // bar_duration))
+    return tuple(start for start in expected if start.timestamp() not in present)
+
+
 def opening_range(
-    bars: list[Bar], session_open: datetime, minutes: int
+    bars: list[Bar],
+    session_open: datetime,
+    minutes: int,
+    bar_duration: timedelta = ONE_MINUTE,
 ) -> tuple[float, float] | None:
     """Seansin ilk `minutes` dakikasinin yuksek/dusuk araligi.
 
@@ -114,6 +146,17 @@ def opening_range(
 
     Aralik henuz TAMAMLANMADIYSA None doner. Yarim aralikla islem
     acmak, olusmamis bir seviyeyi kirmis gibi davranmaktir.
+
+    Pencere kapanmis olsa bile ICINDEKI bir bar eksikse de None doner
+    (AGENTS §11.4, canli karar yolunda eksik acilis bari kontrolu).
+    Eksik dakikanin yuksegi ya da dusugu bilinmez; eldeki barlardan
+    kurulan aralik, gercek seviyeden dar olabilir ve olmamis bir
+    kirilim uretir. Olcum yolunda kalite kapisi bu seanslari zaten
+    disarida birakir; canlida bu kontrol ayni isi yapar.
+
+    Kontrol ANLIKTIR: fonksiyon saftir ve her karar aninda verilen
+    barlara bakar. Eksik bar sonradan gelirse pencere tamamlanir ve
+    aralik kurulur. Gunluk kalici bir blok yoktur.
     """
     if minutes < 1 or not bars:
         return None
@@ -126,6 +169,10 @@ def opening_range(
     # Aralik ancak penceresi kapanmis barlarla tamamlanmis sayilir.
     last_ts = max(bar.ts.timestamp() for bar in bars)
     if last_ts < window_end:
+        return None
+
+    gaps = opening_window_gaps(inside, session_open, minutes, bar_duration)
+    if gaps is None or gaps:
         return None
 
     return max(bar.high for bar in inside), min(bar.low for bar in inside)

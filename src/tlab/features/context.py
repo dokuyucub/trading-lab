@@ -15,7 +15,7 @@ from enum import StrEnum
 from zoneinfo import ZoneInfo
 
 from tlab.core.research import ResearchSnapshot
-from tlab.core.types import Account, Bar, Position, Quote
+from tlab.core.types import Account, Bar, Position, Quote, Timeframe
 
 
 class SessionPhase(StrEnum):
@@ -170,6 +170,14 @@ class Context:
     unknown_order_risk: bool = False
     research: ResearchSnapshot | None = None
     """None means research was not supplied, never verified absence of events."""
+
+    timeframe: Timeframe = Timeframe.M1
+    """`bars`'in periyodu. Seans dongusu kendi periyodunu ACIKCA verir.
+
+    Acilis penceresinin tam olup olmadigi bar suresine gore olculur:
+    15 dakikalik pencere 1 dakikalik barla 15, 5 dakikalik barla 3 bar
+    ister. Periyodu bilmeyen bir strateji 5 dakikalik veride pencereyi
+    hep eksik sanardi."""
 
     def __post_init__(self) -> None:
         if self.research is not None and (

@@ -11,6 +11,7 @@ edge olmayan veride edge uretiyor mu.
 
 from __future__ import annotations
 
+import hashlib
 import random
 import sqlite3
 from collections.abc import Iterator
@@ -466,3 +467,57 @@ def test_without_a_calendar_a_carried_position_is_counted_and_reported(
     )
     assert result.carried_overnight == 1
     assert "gece boslugunu" in result.report()
+
+
+def test_a_missing_opening_minute_blocks_that_day_in_backtest_too(
+    bt_config: Config, cache: BarCache, bt_conn: sqlite3.Connection, tmp_path: Path
+) -> None:
+    """Backtest canliyla ayni donguyu kullanir: eksik acilis dakikali gun
+    islem acmaz (AGENTS §11.4). Kontrol kosusu, ayni gunun tam haliyle
+    islem actigini gosterir; engel baska bir sey (gecmis yetersizligi,
+    hacim) degil, eksik dakikadir."""
+    days = [breakout_day(0), breakout_day(1), breakout_day(2)]
+    window = (session_open(0) - timedelta(days=1), session_open(3))
+
+    control = BarCache(tmp_path / "control")
+    control.save("SPY", Timeframe.M1, [bar for day in days for bar in day])
+    control_conn = connect(tmp_path / "control.db")
+    apply_migrations(control_conn)
+    full = make_backtest(bt_config, control, control_conn).run(*window)
+    full_days = [ts[:10] for _, ts, _, _ in trade_fingerprints(control_conn, full.run_id)]
+    control_conn.close()
+    assert full_days == [session_open(day).date().isoformat() for day in range(3)]
+
+    missing = session_open(1) + timedelta(minutes=5)
+    days[1] = [bar for bar in days[1] if bar.ts != missing]
+    cache.save("SPY", Timeframe.M1, [bar for day in days for bar in day])
+    result = make_backtest(bt_config, cache, bt_conn).run(*window)
+    gapped_days = [ts[:10] for _, ts, _, _ in trade_fingerprints(bt_conn, result.run_id)]
+    assert gapped_days == [session_open(0).date().isoformat(), session_open(2).date().isoformat()]
+
+
+COMPLETE_WINDOW_TRADES = {
+    3: (13, "923b2f8b9dc305a2f864b6c8daf8a22a99a2f9d6eeaae9dc341fe359bf609694"),
+    7: (17, "9a4ac0fe52d2164f8485a35dd87bd5323a1528a52e3f2367de6cf00f87de68a4"),
+    11: (16, "d2040aeb4d640bc3ae59f79f980513a493e6ba8b021fad65cf694b608530c42f"),
+    19: (20, "2cb81d9bb73e2d511775f3acb6fa7a5a97fb5d95064344d5c934a04f78c8a568"),
+}
+"""Eksik bar kontrolunden ONCE (main `01cff5f`) alinan islem listeleri:
+tohum -> (islem sayisi, `repr(trade_fingerprints)`'in SHA256'si)."""
+
+
+@pytest.mark.parametrize("seed", sorted(COMPLETE_WINDOW_TRADES))
+def test_complete_windows_keep_every_decision(bt_config: Config, tmp_path: Path, seed: int) -> None:
+    """Acilis penceresi tam olan veride eksik bar kontrolu hicbir karari
+    degistirmez: her islem (giris zamani ve fiyati, cikis fiyati) kontrolden
+    onceki kodla birebir ayni. Olcum verisi kalite kapisindan gectigi icin
+    pencereleri tamdir; bu test o esdegerligin kanitidir."""
+    conn = connect(tmp_path / "eq.db")
+    apply_migrations(conn)
+    run_random_walk(bt_config, BarCache(tmp_path / "bars"), conn, seed=seed)
+    run_id = conn.execute("SELECT run_id FROM runs").fetchone()["run_id"]
+    trades = trade_fingerprints(conn, run_id)
+    conn.close()
+    count, digest = COMPLETE_WINDOW_TRADES[seed]
+    assert len(trades) == count
+    assert hashlib.sha256(repr(trades).encode()).hexdigest() == digest

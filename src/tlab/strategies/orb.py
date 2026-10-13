@@ -123,7 +123,14 @@ class OpeningRangeBreakout:
             return None
 
         session_bars = list(ctx.session_bars)
-        levels = opening_range(session_bars, ctx.session.session_open, params.opening_range_minutes)
+        # Pencere ICINDE eksik bar varsa aralik yok: eksik dakikanin
+        # yuksegi/dusugu bilinmez (AGENTS §11.4).
+        levels = opening_range(
+            session_bars,
+            ctx.session.session_open,
+            params.opening_range_minutes,
+            bar_duration=ctx.timeframe.duration,
+        )
         if levels is None:
             return None
         or_high, or_low = levels
