@@ -8,12 +8,13 @@ ediliyor.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import timedelta
 
 import pytest
 
 from conftest import SESSION_OPEN, make_bars, make_context, make_session
-from tlab.core.types import Bar, Position, Side
+from tlab.core.types import Bar, Position, Side, Timeframe
 from tlab.strategies.orb import OpeningRangeBreakout, ORBParams
 
 # Acilis araligi: 99,50 - 100,50 (15 bar, spread 0,5)
@@ -264,3 +265,40 @@ def test_confidence_rises_with_volume(strategy: OpeningRangeBreakout) -> None:
     assert quiet is not None and loud is not None
     assert loud.confidence > quiet.confidence
     assert 0.0 <= quiet.confidence <= 1.0
+
+
+# --------------------------------------------------------------------------
+# Eksik acilis bari (AGENTS §11.4)
+# --------------------------------------------------------------------------
+
+
+def test_a_missing_opening_minute_blocks_the_breakout(strategy: OpeningRangeBreakout) -> None:
+    """Ayni kirilim, acilis penceresinde tek dakika eksikken islem uretmez.
+    Pencere disindaki bir eksik ise karari degistirmez: engel aralik."""
+    full = scenario_bars(breakout_close=100.8)
+    assert strategy.decide(make_context(bars=full)) is not None
+
+    inside_gap = [bar for bar in full if bar.ts != SESSION_OPEN + timedelta(minutes=7)]
+    assert strategy.decide(make_context(bars=inside_gap)) is None
+
+    outside_gap = [bar for bar in full if bar.ts != SESSION_OPEN + timedelta(minutes=20)]
+    assert strategy.decide(make_context(bars=outside_gap)) is not None
+
+
+def test_the_strategy_measures_the_window_in_the_context_timeframe(
+    strategy: OpeningRangeBreakout,
+) -> None:
+    """5 dakikalik barla 15 dakikalik pencere 3 bardir; strateji bunu
+    baglamdaki periyottan bilir, 1 dakika varsaymaz."""
+    history = make_bars(40, start=SESSION_OPEN - timedelta(days=1), base=100.0, spread=0.5)
+    today = [
+        bar.model_copy(update={"ts": SESSION_OPEN + timedelta(minutes=5 * index)})
+        for index, bar in enumerate(make_bars(7, base=100.0, spread=0.5, volume=10_000))
+    ]
+    today[-1] = today[-1].model_copy(
+        update={"open": 100.0, "close": 100.8, "high": 100.8, "low": 99.5, "volume": 30_000}
+    )
+    bars = history + today
+    five = replace(make_context(bars=bars), timeframe=Timeframe.M5)
+    assert strategy.decide(five) is not None
+    assert strategy.decide(make_context(bars=bars)) is None

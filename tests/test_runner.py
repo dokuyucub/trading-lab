@@ -34,7 +34,7 @@ from tlab.core.types import (
     Side,
     Timeframe,
 )
-from tlab.engine.runner import SessionRunner
+from tlab.engine.runner import LoopResult, SessionRunner
 from tlab.errors import BrokerError, DataError
 from tlab.journal.db import apply_migrations, connect
 from tlab.journal.writer import JournalWriter
@@ -239,6 +239,7 @@ def build_runner(
     market: FakeMarket,
     dry_run: bool = False,
     now: datetime = NOW,
+    timeframe: Timeframe = Timeframe.M1,
 ) -> SessionRunner:
     clock = SimClock(now)
     writer = JournalWriter(conn, clock)
@@ -260,6 +261,7 @@ def build_runner(
         clock=clock,
         run_id=run_id,
         dry_run=dry_run,
+        timeframe=timeframe,
     )
 
 
@@ -941,3 +943,80 @@ def test_stale_broker_close_is_visible_and_still_flattens(
     assert not broker.submitted
     assert "broker kapanis saati gecmiste" in result.summary()
     assert "broker kapanis saati gecmiste" in caplog.text
+
+
+# --------------------------------------------------------------------------
+# Eksik acilis bari gorunur (AGENTS §11.4)
+# --------------------------------------------------------------------------
+
+
+def gap_notes(result: LoopResult) -> list[str]:
+    return [note for note in result.notes if note.startswith("eksik acilis bari")]
+
+
+def test_a_missing_opening_minute_is_noted_once_and_blocks_entry(
+    config: Config, conn: sqlite3.Connection
+) -> None:
+    """Strateji eksik pencerede sessizce islem acmaz; tur notu bunu bir kez
+    soyler. Ayni gunun sonraki turlari notu tekrarlamaz."""
+    gapped = [bar for bar in breakout_bars() if bar.ts != SESSION_OPEN + timedelta(minutes=7)]
+    market = FakeMarket(bars_by_symbol={"SPY": gapped})
+    runner = build_runner(
+        config=config, conn=conn, broker=FakeBroker(), market=market, dry_run=True
+    )
+
+    first = runner.run_once()
+    assert first.intents == 0
+    assert gap_notes(first) == ["eksik acilis bari: SPY 14/15"]
+    assert gap_notes(runner.run_once()) == []
+
+
+def test_a_complete_opening_window_adds_no_note(config: Config, conn: sqlite3.Connection) -> None:
+    market = FakeMarket(bars_by_symbol={"SPY": breakout_bars()})
+    runner = build_runner(
+        config=config, conn=conn, broker=FakeBroker(), market=market, dry_run=True
+    )
+    result = runner.run_once()
+    assert result.intents == 1
+    assert gap_notes(result) == []
+
+
+def test_an_open_window_is_not_called_incomplete_yet(
+    config: Config, conn: sqlite3.Connection
+) -> None:
+    """Pencereyi kapatan bar henuz gelmediyse eksik denmez: gecikme
+    eksiklik degildir."""
+    early = [bar for bar in make_bars(12) if bar.ts != SESSION_OPEN + timedelta(minutes=3)]
+    market = FakeMarket(bars_by_symbol={"SPY": early})
+    runner = build_runner(
+        config=config, conn=conn, broker=FakeBroker(), market=market, dry_run=True
+    )
+    assert gap_notes(runner.run_once()) == []
+
+
+def test_the_runner_hands_its_timeframe_to_the_strategy(
+    config: Config, conn: sqlite3.Connection
+) -> None:
+    """5 dakikalik barla calisan dongu, periyodunu baglama koyar: 15
+    dakikalik pencere 3 bardir ve tamdir. Periyot iletilmeseydi strateji 1
+    dakika varsayar, pencereyi eksik sanar ve hic islem acmazdi."""
+    history = make_bars(40, start=SESSION_OPEN - timedelta(days=1), base=100.0, spread=0.5)
+    today = [
+        bar.model_copy(update={"ts": SESSION_OPEN + timedelta(minutes=5 * index)})
+        for index, bar in enumerate(make_bars(6, base=100.0, spread=0.5, volume=10_000))
+    ]
+    today[-1] = today[-1].model_copy(
+        update={"open": 100.0, "close": 100.8, "high": 100.8, "low": 99.5, "volume": 30_000.0}
+    )
+    market = FakeMarket(bars_by_symbol={"SPY": history + today})
+    runner = build_runner(
+        config=config,
+        conn=conn,
+        broker=FakeBroker(),
+        market=market,
+        dry_run=True,
+        timeframe=Timeframe.M5,
+    )
+    result = runner.run_once()
+    assert result.intents == 1
+    assert gap_notes(result) == []

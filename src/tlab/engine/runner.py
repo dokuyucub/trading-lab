@@ -43,6 +43,7 @@ from tlab.engine.reconciler import build_trade, pair_fills
 from tlab.errors import BrokerError, DataError, JournalError, TradingLabError
 from tlab.execution.broker import Broker
 from tlab.features.context import Context, SessionPhase, SessionState, build_session_state
+from tlab.features.indicators import opening_window_gaps
 from tlab.journal.queries import halt_reason, open_entry_orders, unconfirmed_orders
 from tlab.journal.writer import JournalWriter
 from tlab.risk.gate import RiskGate, daily_loss_breached
@@ -129,6 +130,8 @@ class SessionRunner:
         self.entry_order_ttl_minutes = entry_order_ttl_minutes
         self.unconfirmed_grace_minutes = unconfirmed_grace_minutes
         self.dry_run = dry_run
+        self._gap_noted: set[tuple[str, str]] = set()
+        """(seans acilisi, sembol): eksik acilis bari notu yazilmis olanlar."""
 
     # ------------------------------------------------------------------
     # Ana dongu
@@ -504,6 +507,7 @@ class SessionRunner:
                 unknown_order_risk=unknown,
             )
             result.evaluated += 1
+            self._note_opening_gaps(ctx, result)
 
             for strategy in self.strategies:
                 intent = strategy.decide(ctx)
@@ -653,7 +657,36 @@ class SessionRunner:
             positions=positions,
             quote=quote,
             pending_orders=pending,
+            timeframe=self.timeframe,
         )
+
+    def _note_opening_gaps(self, ctx: Context, result: LoopResult) -> None:
+        """Acilis penceresinde eksik bar varsa sembol ve gun basina BIR KEZ yazar.
+
+        Strateji eksik pencerede aralik kurmaz ve o gun o sembolde islem
+        acmaz (AGENTS §11.4). Bu not, o sessiz "islem yok"u gorunur
+        kilar; golge gozlemin olcecegi sey de budur. Pencere veride
+        henuz kapanmadiysa (sonraki bar gelmediyse) karar verilmez:
+        gecikmeyi eksiklik saymak yanlis alarm olurdu.
+        """
+        session_open = ctx.session.session_open
+        key = (session_open.isoformat(), ctx.symbol)
+        if key in self._gap_noted:
+            return
+        window_end = session_open + timedelta(minutes=self.opening_range_minutes)
+        bars = list(ctx.session_bars)
+        if not bars or max(bar.ts for bar in bars) < window_end:
+            return
+        inside = [bar for bar in bars if bar.ts < window_end]
+        duration = ctx.timeframe.duration
+        gaps = opening_window_gaps(inside, session_open, self.opening_range_minutes, duration)
+        if not gaps:
+            return
+        self._gap_noted.add(key)
+        expected = timedelta(minutes=self.opening_range_minutes) // duration
+        note = f"eksik acilis bari: {ctx.symbol} {expected - len(gaps)}/{expected}"
+        log.warning("%s (ilk eksik %s)", note, gaps[0].isoformat())
+        result.notes.append(note)
 
     def _closed_bars(self, bars: list[Bar], now: datetime) -> list[Bar]:
         """Olusmakta olan bari ayiklar.

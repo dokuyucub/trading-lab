@@ -19,6 +19,7 @@ from tlab.features.indicators import (
     average_volume,
     ema,
     opening_range,
+    opening_window_gaps,
     relative_volume,
     session_vwap,
     true_range,
@@ -166,3 +167,69 @@ def test_opening_range_ignores_previous_session() -> None:
 
 def test_opening_range_without_bars() -> None:
     assert opening_range([], SESSION_OPEN, minutes=15) is None
+
+
+# --------------------------------------------------------------------------
+# Acilis penceresinde eksik bar (AGENTS §11.4)
+# --------------------------------------------------------------------------
+
+
+def without_minutes(bars: list[Bar], *minutes: int) -> list[Bar]:
+    """Acilistan `minutes` dakika sonra baslayan barlari cikarir."""
+    drop = {SESSION_OPEN + timedelta(minutes=minute) for minute in minutes}
+    return [bar for bar in bars if bar.ts not in drop]
+
+
+def five_minute_bars(count: int) -> list[Bar]:
+    return [
+        bar.model_copy(update={"ts": SESSION_OPEN + timedelta(minutes=5 * index)})
+        for index, bar in enumerate(make_bars(count))
+    ]
+
+
+FIVE = timedelta(minutes=5)
+
+
+def test_a_full_opening_window_has_no_gaps() -> None:
+    assert opening_window_gaps(make_bars(15), SESSION_OPEN, 15) == ()
+
+
+@pytest.mark.parametrize("missing", [0, 7, 14])
+def test_each_missing_opening_minute_is_named(missing: int) -> None:
+    gaps = opening_window_gaps(without_minutes(make_bars(15), missing), SESSION_OPEN, 15)
+    assert gaps == (SESSION_OPEN + timedelta(minutes=missing),)
+
+
+@pytest.mark.parametrize("missing", [0, 7, 14])
+def test_opening_range_refuses_a_window_with_a_missing_minute(missing: int) -> None:
+    """Eksik dakikanin yuksegi ve dusugu bilinmez; eldeki barlardan kurulan
+    aralik gercekten dar olabilir ve olmamis bir kirilim uretir. Pencere
+    kapanmis olsa bile aralik yok."""
+    assert opening_range(make_bars(16), SESSION_OPEN, minutes=15) is not None
+    gapped = without_minutes(make_bars(16), missing)
+    assert opening_range(gapped, SESSION_OPEN, minutes=15) is None
+
+
+def test_a_missing_bar_after_the_window_does_not_matter() -> None:
+    later = without_minutes(make_bars(20), 17)
+    assert opening_range(later, SESSION_OPEN, minutes=15) is not None
+
+
+def test_five_minute_bars_fill_a_fifteen_minute_window() -> None:
+    """Pencere bar suresiyle olculur: 15 dakika = 3 tane 5 dakikalik bar."""
+    bars = five_minute_bars(4)
+    assert opening_window_gaps(bars[:3], SESSION_OPEN, 15, FIVE) == ()
+    assert opening_range(bars, SESSION_OPEN, 15, bar_duration=FIVE) is not None
+    # Periyodu bilmeyen (1 dakika varsayan) hesap ayni veriyi eksik sanardi.
+    assert opening_range(bars, SESSION_OPEN, 15) is None
+    gapped = [bars[0], bars[2], bars[3]]
+    assert opening_window_gaps(gapped[:2], SESSION_OPEN, 15, FIVE) == (SESSION_OPEN + FIVE,)
+    assert opening_range(gapped, SESSION_OPEN, 15, bar_duration=FIVE) is None
+
+
+def test_a_window_the_bar_size_cannot_tile_is_undefined() -> None:
+    four = timedelta(minutes=4)
+    assert opening_window_gaps(make_bars(15), SESSION_OPEN, 15, four) is None
+    assert opening_range(make_bars(20), SESSION_OPEN, 15, bar_duration=four) is None
+    assert opening_window_gaps(make_bars(15), SESSION_OPEN, 0) is None
+    assert opening_window_gaps(make_bars(15), SESSION_OPEN, 15, timedelta(0)) is None
