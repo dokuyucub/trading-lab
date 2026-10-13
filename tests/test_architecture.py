@@ -961,6 +961,72 @@ def test_every_pull_request_passes_the_same_quality_gate() -> None:
 
 
 # --------------------------------------------------------------------------
+# Workflow token sozlesmesi (#17, Codex 6071471758)
+# --------------------------------------------------------------------------
+
+WORKFLOW_FILES = sorted(path.name for path in (REPO / ".github" / "workflows").glob("*.yml"))
+
+JOB_PERMISSION_EXCEPTIONS: dict[tuple[str, str], dict[str, str]] = {
+    ("artifact-roundtrip.yml", "verify"): {"contents": "read", "actions": "read"},
+}
+"""Ust duzeyden farkli job izinleri: YALNIZCA bunlar, gozden gecirilmis.
+Gidis-donus dogrulamasi artefakt listesini okumak icin `actions: read`
+ister (docs/designs/artifact-roundtrip.md). Job duzeyi izin ust duzeyi
+DEGISTIRIR, birlestirmez; yeni bir istisna bilincli bir kayit ister."""
+
+
+def test_the_workflow_list_is_known() -> None:
+    """Asagidaki parametrik test bos bir listeyle sessizce gecemesin."""
+    assert "ci.yml" in WORKFLOW_FILES
+    assert len(WORKFLOW_FILES) >= 8
+
+
+@pytest.mark.parametrize("name", WORKFLOW_FILES)
+def test_every_workflow_token_is_read_only_and_never_persisted(name: str) -> None:
+    """Her workflow'da token yalnizca okur ve checkout kalici kimlik
+    yapilandirmasi birakmaz.
+
+    - Ust duzey `permissions` tam olarak `contents: read`; izin deponun
+      varsayilanina birakilmaz.
+    - Job duzeyi izin ust duzeyi genisletmez: yalnizca gozden gecirilmis
+      istisna, o da yalnizca `read`.
+    - Her checkout `persist-credentials: false`. Bu YALNIZCA checkout'un
+      kalici kimlik yapilandirmasini kapatir: adim bitince token git
+      config'te kalmaz (adim icinde gecici dosyaya yazilip silinir; hosted
+      log, #46). Bir action'in token'i acikca girdi almasini dislamaz
+      (setup-python'un varsayilan `token`'i gibi); `run` adimlari onu
+      git'ten alamaz (Codex P3, 6139296022).
+
+    ci.yml bu kapsamin disindaydi: izin bloku yoktu ve iki checkout token'i
+    varsayilan davranisla is sonuna kadar `.git/config`'te birakiyordu;
+    haftalik kanarya kilitsiz en guncel bagimliliklari kurar (#17
+    6068215456). Tarihli gozlem: deponun varsayilan izni main 2ae8a8d
+    quality job'unda (2026-10-09) ve kanaryada (2026-10-12) contents,
+    metadata ve packages read idi; kural yine de varsayilana
+    guvenmemektir. Paper ve SDK kontrolleri de bu kapsamda; bu test hicbir
+    workflow'u calistirmaz.
+    """
+    workflow = _workflow(name)
+    assert workflow.get("permissions") == {"contents": "read"}, f"{name}: ust duzey izin"
+    for job_name, job in workflow["jobs"].items():
+        permissions = job.get("permissions")
+        if permissions is not None:
+            reviewed = JOB_PERMISSION_EXCEPTIONS.get((name, job_name))
+            assert permissions == reviewed, f"{name}/{job_name}: gozden gecirilmemis job izni"
+            assert set(permissions.values()) == {"read"}, f"{name}/{job_name}: yazma izni"
+        for step in job.get("steps", []):
+            if str(step.get("uses", "")).startswith("actions/checkout"):
+                options = step.get("with") or {}
+                assert options.get("persist-credentials") is False, f"{name}/{job_name}"
+
+
+def test_the_reviewed_job_permission_exceptions_still_exist() -> None:
+    """Istisna listesi bayatlamasin: her kayit gercek bir job'a karsilik gelir."""
+    for name, job_name in JOB_PERMISSION_EXCEPTIONS:
+        assert job_name in _workflow(name)["jobs"], f"{name}/{job_name} yok"
+
+
+# --------------------------------------------------------------------------
 # Pilot kalite workflow sozlesmesi (AGENTS §11, #25)
 # --------------------------------------------------------------------------
 
@@ -1296,3 +1362,176 @@ def test_the_roundtrip_check_is_secret_free_and_least_privileged() -> None:
     prepare = " ".join(step.get("run", "") for step in jobs["upload"]["steps"])
     assert "scripts/artifact_roundtrip/payload.json" in prepare
     assert "tlab" not in dumped, "dogrulama trading koduna dokunmaz"
+
+
+# --------------------------------------------------------------------------
+# checkout ve setup-python surum sozlesmesi (#17, Codex 6071471758)
+# --------------------------------------------------------------------------
+
+ACTION_VERSIONS = {"actions/checkout": "v7", "actions/setup-python": "v7"}
+"""Beklenen surumler ACIKCA sabit: yukseltme ancak bu satirin bilincli
+degisikligiyle, etiket kaynaginin incelenmesiyle ve PR'in kendi quality +
+sentetik roundtrip kosusuyla olur. Kaynak kaniti:
+docs/designs/workflow-actions.md."""
+
+ACTION_INPUTS = {
+    "actions/checkout": frozenset({"persist-credentials"}),
+    "actions/setup-python": frozenset({"python-version", "cache"}),
+}
+"""Kullandigimiz girdiler. Yukseltmenin uyum iddiasi YALNIZCA bunlarla
+sinirli (Codex 6071471758); yeni bir girdi bilincli bir incelemeyle buraya
+eklenir. checkout v7'nin `allow-unsafe-pr-checkout` girdisi bu listede
+YOK."""
+
+
+def _action_steps(action: str) -> list[tuple[str, dict[str, Any]]]:
+    found: list[tuple[str, dict[str, Any]]] = []
+    for name in WORKFLOW_FILES:
+        for job in _workflow(name)["jobs"].values():
+            for step in job.get("steps", []):
+                if str(step.get("uses", "")).startswith(action + "@"):
+                    found.append((name, step))
+    return found
+
+
+@pytest.mark.parametrize("action", sorted(ACTION_VERSIONS))
+def test_every_core_action_uses_one_version_and_known_inputs(action: str) -> None:
+    """Bir yukseltme kullanimlardan birini atlarsa ya da tanimadigimiz bir
+    girdi eklenirse burada kirmizi olur (#39 dersi: Dependabot bazi
+    workflow'lari kapsamiyordu)."""
+    steps = _action_steps(action)
+    assert steps, f"{action} hic kullanilmiyor"
+    versions = {step["uses"] for _, step in steps}
+    assert versions == {f"{action}@{ACTION_VERSIONS[action]}"}, f"beklenmeyen surum: {versions}"
+    for name, step in steps:
+        unknown = set(step.get("with") or {}) - ACTION_INPUTS[action]
+        assert not unknown, f"{name}: incelenmemis girdi {sorted(unknown)}"
+
+
+def test_fork_code_never_runs_with_privileged_triggers() -> None:
+    """checkout v7 fork PR kodunu `pull_request_target` / `workflow_run`
+    altinda varsayilan olarak reddeder; biz bu tetikleyicileri hic
+    kullanmayiz ve reddi gevseten girdiyi hic acmayiz."""
+    for name in WORKFLOW_FILES:
+        workflow = _workflow(name)
+        # PyYAML (YAML 1.1) `on` anahtarini True olarak okur.
+        triggers = workflow["on"] if "on" in workflow else workflow[True]
+        assert not set(triggers) & {"pull_request_target", "workflow_run"}, name
+    for name, step in _action_steps("actions/checkout"):
+        assert "allow-unsafe-pr-checkout" not in (step.get("with") or {}), name
+
+
+# --------------------------------------------------------------------------
+# Python surum sozlesmesi (AGENTS §2; Codex 6071471758, secenek A)
+# --------------------------------------------------------------------------
+
+PYTHON_MINOR = "3.12"
+"""Operasyonel hedef: minor sabit, yama kayan. Ayni imaj ya da ayni yama
+GARANTISI DEGIL; yurutme kaydi gercek yamayi yazar (§11.5)."""
+
+
+def test_every_environment_targets_the_same_python_minor() -> None:
+    """CI, Docker, iki kilit, ruff ve mypy AYNI minoru hedefler.
+
+    Yama ya da imaj digest'i sabitlenmez; bu test yalnizca minoru denetler.
+    Yalnizca birini degistirip ortamlari esitmis gibi yazmak burada kirmizi
+    olur. `requires-python >=3.12` kabul edilen araliktir, test edilen
+    surumler degil; bu yuzden burada denetlenmez.
+    """
+    import tomllib
+
+    steps = _action_steps("actions/setup-python")
+    assert steps, "setup-python kullanimi yok"
+    assert {str(step["with"]["python-version"]) for _, step in steps} == {PYTHON_MINOR}
+
+    dockerfile = (REPO / "docker" / "Dockerfile").read_text("utf-8")
+    images = re.findall(r"^FROM\s+(\S+)", dockerfile, re.MULTILINE)
+    assert images == [f"python:{PYTHON_MINOR}-slim"], f"Docker imaji: {images}"
+
+    for lock in ("requirements.lock", "requirements-dev.lock"):
+        header = (REPO / lock).read_text("utf-8").splitlines()[1]
+        assert f"--python-version {PYTHON_MINOR} " in header, f"{lock}: kilit minoru"
+
+    tools = tomllib.loads((REPO / "pyproject.toml").read_text("utf-8"))["tool"]
+    assert tools["ruff"]["target-version"] == "py" + PYTHON_MINOR.replace(".", "")
+    assert tools["mypy"]["python_version"] == PYTHON_MINOR
+
+
+# --------------------------------------------------------------------------
+# Runner sozlesmesi (AGENTS §2; #17 6083963913)
+# --------------------------------------------------------------------------
+
+RUNNER_LABEL = "ubuntu-24.04"
+"""Isletim sistemi surumu sabit, imaj surumu kayan: Python sozlesmesi A'nin
+runner karsiligi. `ubuntu-latest` yeni bir isletim sistemine sessizce gecer
+(runner-images#14748: 19 Ekim 2026'da baslar, 19 Kasim 2026'da tamamlanmasi
+planlaniyor); ayni workflow dosyasi baska bir sistemde kosar. Yurutme kaydi
+log'daki gercek imaji yazar."""
+
+SYSTEM_PYTHON_JOBS = frozenset({("artifact-roundtrip.yml", "verify")})
+"""setup-python'dan ONCE Python calistiran job'lar: YALNIZCA bunlar, gozden
+gecirilmis. verify, `actions: read` tasiyan tek job; token'i girdi olarak
+alan action sayisi artmasin diye isletim sisteminin python3'unu kullanir ve
+minoru ilk Python adiminda dogrular."""
+
+_PYTHON_TOOL = re.compile(r"(?:^|[\s;&|({])(?:python3?|pip3?|pytest|mypy|ruff)(?=\s|$)", re.M)
+
+
+def _runs_python(command: str) -> bool:
+    """Mevcut workflow sozlesmesinin denetimi: `run` metninde bilinen Python
+    araclarindan biri komut olarak geciyor mu. Genel bir kabuk analizi
+    DEGIL: betik dosyalari, `$(...)` ya da takma adlar taranmaz. Yeni bir
+    arac ya da cagirma bicimi listeye bilincli eklenir."""
+    return _PYTHON_TOOL.search(command) is not None
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ('python3 -I scripts/artifact_roundtrip/verify.py --artifact-id "$ID"', True),
+        ("PYTHONPATH=src python -m tlab.paper_probe", True),
+        ("pip install -r requirements-dev.lock", True),
+        ("ruff check --output-format=github .", True),
+        ('cp scripts/artifact_roundtrip/payload.json "$RUNNER_TEMP/a.json"', False),
+        ("echo --python-version 3.12", False),
+    ],
+)
+def test_the_python_command_gate(command: str, expected: bool) -> None:
+    """Asagidaki istisna testi bu tanimaya dayaniyor; sessizce kor olmasin."""
+    assert _runs_python(command) is expected
+
+
+@pytest.mark.parametrize("name", WORKFLOW_FILES)
+def test_every_job_runs_on_the_pinned_runner(name: str) -> None:
+    """Her job ayni sabit etikette kosar. `-latest` isletim sistemini
+    sessizce degistirir; o zaman §11.5'in "ayni workflow" sarti ayni ortami
+    garanti etmez. Yukseltme bu satirin bilincli degisikligiyle ve PR'in
+    kendi hosted kanitiyla olur."""
+    for job_name, job in _workflow(name)["jobs"].items():
+        assert job.get("runs-on") == RUNNER_LABEL, f"{name}/{job_name}: runner etiketi"
+
+
+def test_only_reviewed_jobs_run_the_system_python() -> None:
+    """setup-python'dan once Python calistiran job yalnizca gozden gecirilmis
+    istisnadir ve ilk Python adimi minoru dogrular. Dogrulama basarisizsa
+    job orada durmali: adimda `if` ya da `continue-on-error` olamaz. Yeni
+    bir job sozlesme A'nin disina sessizce cikamaz; istisna da
+    bayatlayamaz."""
+    major, minor = PYTHON_MINOR.split(".")
+    guard = f"sys.version_info[:2] != ({major}, {minor})"
+    found: set[tuple[str, str]] = set()
+    for name in WORKFLOW_FILES:
+        for job_name, job in _workflow(name)["jobs"].items():
+            for step in job.get("steps", []):
+                if str(step.get("uses", "")).startswith("actions/setup-python@"):
+                    break
+                if _runs_python(str(step.get("run", ""))):
+                    found.add((name, job_name))
+                    assert guard in step["run"], (
+                        f"{name}/{job_name}: ilk Python adimi minoru dogrulamiyor"
+                    )
+                    assert "if" not in step and "continue-on-error" not in step, (
+                        f"{name}/{job_name}: dogrulama basarisizsa job durmali"
+                    )
+                    break
+    assert found == SYSTEM_PYTHON_JOBS

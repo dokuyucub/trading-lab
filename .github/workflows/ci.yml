@@ -19,6 +19,12 @@ on:
     # once bizim sectigimiz bir anda ortaya cikar.
     - cron: "0 6 * * 1"
 
+# Token yalnizca okuma (#17, Codex 6071471758): CI push etmez, yorum
+# yazmaz. Izin deponun varsayilanina birakilmaz; haftalik kanarya kilitsiz
+# en guncel bagimliliklari kurar. tests/test_architecture.py denetler.
+permissions:
+  contents: read
+
 # Ayni dala arka arkaya push gelirse eski kosu iptal edilir:
 # bekleyen kuyruk, geri bildirimi geciktirmenin en sik sebebi.
 concurrency:
@@ -29,15 +35,23 @@ jobs:
   quality:
     name: quality
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
         with:
-          # Tek surum, Docker imajiyla ayni: uretimde calisacak olan
-          # neyse CI'da denetlenen de o.
+          # YALNIZCA checkout'un kalici kimlik yapilandirmasini kapatir:
+          # adim bitince token git config'te kalmaz (adim icinde gecici
+          # dosyaya yazilip silinir). Token'i sonra yalnizca onu acikca
+          # girdi alan action gorur (setup-python, varsayilan `token`);
+          # kurulum, lint ve test adimlari gormez. CI git push yapmaz.
+          persist-credentials: false
+
+      - uses: actions/setup-python@v7
+        with:
+          # Ayni minor (3.12): Docker imaji (python:3.12-slim) ve kilitler
+          # de 3.12. Ayni imaj ya da ayni yama GARANTISI DEGIL: yama kayan;
+          # yurutme kaydi gercek yamayi yazar (AGENTS §2, Python sozlesmesi).
           python-version: "3.12"
           cache: pip
 
@@ -73,12 +87,16 @@ jobs:
   canary:
     name: canary (guncel bagimliliklar)
     if: github.event_name == 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          # Kilitsiz kurulum yapilan iste checkout kalici kimlik
+          # yapilandirmasi birakmaz; kurulum adimi token'i git'ten alamaz.
+          persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip

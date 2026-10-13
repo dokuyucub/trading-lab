@@ -18,15 +18,15 @@ jobs:
     # Yalnizca main: baska bir dalda degistirilmis kod anahtarlara
     # erisemesin.
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 12 sembol x 5 seans dakikalik veri + kilitli kurulum. Olagan butce
     # tahmini, mutlak ust sinir degil (bkz. alpaca-sdk-check.yml).
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Kilitli calisma zamani bagimliliklarini kur

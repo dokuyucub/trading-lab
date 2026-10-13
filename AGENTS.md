@@ -138,6 +138,46 @@ Ayrıca ortak paketlerin iki kilitte aynı sürümde olduğu da denetleniyor.
 Kapsama eşiği %80. Amaç oranı yükseltmek değil, gerilemeyi yakalamak: testsiz
 eklenen büyük bir modül burada göze çarpar.
 
+**Python sürüm sözleşmesi** (#17, Codex kararı 6071471758, seçenek A):
+
+- **Operasyonel hedef minör 3.12; yama kayandır.** Şu yerlerde aynı minör
+  kullanılır (test denetler):
+  - CI (`python-version: "3.12"`);
+  - Docker (`python:3.12-slim`);
+  - kilitler (`--python-version 3.12`);
+  - ruff `py312` ve mypy `3.12`;
+  - roundtrip `verify` job'u: setup-python yok, işletim sisteminin
+    `python3`'ü; minörü ilk Python adımında doğrulanır (aşağıda runner
+    sözleşmesi).
+- **Garanti edilmeyen:** aynı imaj ya da aynı yama. CI'da koşudan koşuya yama
+  değişebilir; örneğin 3.12.14 ve 3.12.15 görüldü. Güvenlik yamaları böylece
+  kendiliğinden gelir.
+- **Tekrarlanabilirliğin sınırı:** aynı minör ve aynı kilitli bağımlılıklar.
+  Her yürütme kaydı, koşu log'undan okunan **gerçek yamayı** yazar (§11.5).
+- **`requires-python >=3.12`** kurulumun kabul ettiği aralıktır. Test edilen
+  yalnızca 3.12'dir; "bütün 3.12+ sürümleri test edildi" anlamına gelmez.
+- **Yama ya da imaj digest'i sabitlenmez.** Kanıtlı bir ihtiyaç doğarsa ayrı
+  bir kararla, bütün ortamlarda birlikte yapılır. Yalnızca CI'ı sabitleyip
+  ortamlar eşitmiş gibi yazılmaz.
+
+**Runner sözleşmesi** (#17, Claude ön raporu 6083963913):
+
+- **Bütün job'lar `runs-on: ubuntu-24.04`** (test denetler). `ubuntu-latest`
+  yeni bir işletim sistemine sessizce geçer: resmî takvime göre
+  (runner-images#14748, Codex 6139287740) geçiş 19 Ekim 2026'da başlar,
+  19 Kasım 2026'da tamamlanması planlanıyor. Ubuntu 26.04 imajında sistem
+  `python3` 3.14'tür (`docs/designs/workflow-actions.md`, "Runner").
+- **İşletim sistemi sürümü sabit, imaj sürümü kayandır.** Güvenlik
+  güncellemeleri böylece gelir. Yürütme kaydı log'daki gerçek imajı yazar
+  (§11.5).
+- **setup-python'dan önce Python çalıştıran tek job roundtrip `verify`'dır**
+  (gözden geçirilmiş istisna, test denetler). Token'ı girdi olarak alan
+  action sayısı o job'da artmasın diye işletim sisteminin `python3`'ünü
+  kullanır ve minörü ilk Python adımında doğrular; doğrulama başarısızsa
+  token'lı adım çalışmaz.
+- **Yükseltme** action sürümlerindeki gibi olur: testteki satırın bilinçli
+  değişikliği ve PR'ın kendi hosted kanıtı.
+
 ## 3. Değişmezler
 
 Aşağıdaki kuralların çoğu `tests/test_architecture.py` tarafından **otomatik
@@ -1295,7 +1335,9 @@ başlatmaz.
 - run, job ve attempt;
 - code commit ve o commit'in main CI'sı;
 - artefakt ve digest;
-- koşu log'undan okunan **gerçek Python sürümü** (Codex 6067241410).
+- koşu log'undan okunan **gerçek Python sürümü** (Codex 6067241410);
+- koşu log'undan okunan **runner imajı ve sürümü** (`Image`, `Version`;
+  §2 runner sözleşmesi).
 
 **Paper ve canlı çalışmayla ilişki:** §11.4 aynen geçerlidir. SIP sonucu,
 IEX ile karar veren çalışmaya otomatik taşınmaz.
