@@ -1335,7 +1335,9 @@ başlatmaz.
 - run, job ve attempt;
 - code commit ve o commit'in main CI'sı;
 - artefakt ve digest;
-- koşu log'undan okunan **gerçek Python sürümü** (Codex 6067241410).
+- koşu log'undan okunan **gerçek Python sürümü** (Codex 6067241410);
+- koşu log'undan okunan **runner imajı ve sürümü** (`Image`, `Version`;
+  §2 runner sözleşmesi).
 
 **Paper ve canlı çalışmayla ilişki:** §11.4 aynen geçerlidir. SIP sonucu,
 IEX ile karar veren çalışmaya otomatik taşınmaz.
