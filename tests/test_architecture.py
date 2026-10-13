@@ -983,21 +983,28 @@ def test_the_workflow_list_is_known() -> None:
 
 @pytest.mark.parametrize("name", WORKFLOW_FILES)
 def test_every_workflow_token_is_read_only_and_never_persisted(name: str) -> None:
-    """Her workflow'da token yalnizca okur ve diske yazilmaz.
+    """Her workflow'da token yalnizca okur ve checkout kalici kimlik
+    yapilandirmasi birakmaz.
 
     - Ust duzey `permissions` tam olarak `contents: read`; izin deponun
       varsayilanina birakilmaz.
     - Job duzeyi izin ust duzeyi genisletmez: yalnizca gozden gecirilmis
       istisna, o da yalnizca `read`.
-    - Her checkout `persist-credentials: false`: sonraki adimlar (bagimlilik
-      kurulumu, testler) token'i okuyamaz.
+    - Her checkout `persist-credentials: false`. Bu YALNIZCA checkout'un
+      kalici kimlik yapilandirmasini kapatir: adim bitince token git
+      config'te kalmaz (adim icinde gecici dosyaya yazilip silinir; hosted
+      log, #46). Bir action'in token'i acikca girdi almasini dislamaz
+      (setup-python'un varsayilan `token`'i gibi); `run` adimlari onu
+      git'ten alamaz (Codex P3, 6139296022).
 
     ci.yml bu kapsamin disindaydi: izin bloku yoktu ve iki checkout token'i
-    varsayilan davranisla diske birakiyordu; haftalik kanarya kilitsiz en
-    guncel bagimliliklari kurar (#17 6068215456). Deponun varsayilan token
-    yetkisi dogrulanamadi; bu bir sizinti kaniti degil, varsayilana
-    guvenmeme kuralidir. Paper ve SDK kontrolleri de bu kapsamda; bu test
-    hicbir workflow'u calistirmaz.
+    varsayilan davranisla is sonuna kadar `.git/config`'te birakiyordu;
+    haftalik kanarya kilitsiz en guncel bagimliliklari kurar (#17
+    6068215456). Tarihli gozlem: deponun varsayilan izni main 2ae8a8d
+    quality job'unda (2026-10-09) ve kanaryada (2026-10-12) contents,
+    metadata ve packages read idi; kural yine de varsayilana
+    guvenmemektir. Paper ve SDK kontrolleri de bu kapsamda; bu test hicbir
+    workflow'u calistirmaz.
     """
     workflow = _workflow(name)
     assert workflow.get("permissions") == {"contents": "read"}, f"{name}: ust duzey izin"

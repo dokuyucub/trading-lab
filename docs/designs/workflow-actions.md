@@ -81,6 +81,24 @@ genişletmez. Tek gözden geçirilmiş istisna gidiş-dönüşün `verify`
 job'undaki `actions: read`; o da yalnızca okuma. Hepsi testle sabit
 (`test_every_workflow_token_is_read_only_and_never_persisted`).
 
+Hosted log'un gösterdiği (#46, 2026-10-09; kapsam Codex P3 6139296022 ile
+daraltıldı):
+
+- **`persist-credentials: false` yalnızca checkout'un kalıcı kimlik
+  yapılandırmasıyla ilgilidir.** Adım bitince token git config'te kalmaz;
+  adım içinde geçici bir dosyaya yazılıp silinir ("Removing credentials
+  config"). Bir action'ın token'ı açıkça girdi almasını dışlamaz:
+  setup-python varsayılan `token` girdisiyle alır (log: `token: ***`).
+  Kurulum, lint ve test `run` adımları onu ne ortamdan ne git'ten alır.
+- **Eski durum.** v4 ve varsayılan `persist-credentials: true` ile token
+  iş sonuna kadar `.git/config`'te kalıyordu; kilitsiz kurulum yapan
+  kanaryada da (2026-10-12, run 38266898479).
+- **Depo varsayılanı, tarihli gözlem.** main `2ae8a8d` quality job'u
+  (2026-10-09, run 37862751688) ve kanarya (2026-10-12): `Contents`,
+  `Metadata`, `Packages` read. Değişiklik bir sızıntı düzeltmesi değil,
+  sertleştirmedir: izin artık depo ayarına bağlı değil ve `Packages`
+  düştü.
+
 ## upload-artifact
 
 Sürüm ve kaynak kanıtı: `docs/designs/artifact-roundtrip.md` ("Sürüm: v7").

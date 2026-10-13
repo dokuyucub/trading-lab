@@ -40,8 +40,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # Token diske yazilmaz: sonraki adimlar (bagimlilik kurulumu,
-          # testler) onu okuyamaz. CI git push yapmaz.
+          # YALNIZCA checkout'un kalici kimlik yapilandirmasini kapatir:
+          # adim bitince token git config'te kalmaz (adim icinde gecici
+          # dosyaya yazilip silinir). Token'i sonra yalnizca onu acikca
+          # girdi alan action gorur (setup-python, varsayilan `token`);
+          # kurulum, lint ve test adimlari gormez. CI git push yapmaz.
           persist-credentials: false
 
       - uses: actions/setup-python@v7
@@ -89,7 +92,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # Kilitsiz kurulum yapilan iste token diske hic yazilmaz.
+          # Kilitsiz kurulum yapilan iste checkout kalici kimlik
+          # yapilandirmasi birakmaz; kurulum adimi token'i git'ten alamaz.
           persist-credentials: false
 
       - uses: actions/setup-python@v7
