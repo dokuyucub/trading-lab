@@ -35,7 +35,7 @@ jobs:
   quality:
     name: quality
     if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v7
@@ -87,7 +87,7 @@ jobs:
   canary:
     name: canary (guncel bagimliliklar)
     if: github.event_name == 'schedule'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v7

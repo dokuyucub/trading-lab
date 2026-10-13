@@ -1455,3 +1455,83 @@ def test_every_environment_targets_the_same_python_minor() -> None:
     tools = tomllib.loads((REPO / "pyproject.toml").read_text("utf-8"))["tool"]
     assert tools["ruff"]["target-version"] == "py" + PYTHON_MINOR.replace(".", "")
     assert tools["mypy"]["python_version"] == PYTHON_MINOR
+
+
+# --------------------------------------------------------------------------
+# Runner sozlesmesi (AGENTS §2; #17 6083963913)
+# --------------------------------------------------------------------------
+
+RUNNER_LABEL = "ubuntu-24.04"
+"""Isletim sistemi surumu sabit, imaj surumu kayan: Python sozlesmesi A'nin
+runner karsiligi. `ubuntu-latest` yeni bir isletim sistemine sessizce gecer
+(runner-images#14748: 19 Ekim 2026'da baslar, 19 Kasim 2026'da tamamlanmasi
+planlaniyor); ayni workflow dosyasi baska bir sistemde kosar. Yurutme kaydi
+log'daki gercek imaji yazar."""
+
+SYSTEM_PYTHON_JOBS = frozenset({("artifact-roundtrip.yml", "verify")})
+"""setup-python'dan ONCE Python calistiran job'lar: YALNIZCA bunlar, gozden
+gecirilmis. verify, `actions: read` tasiyan tek job; token'i girdi olarak
+alan action sayisi artmasin diye isletim sisteminin python3'unu kullanir ve
+minoru ilk Python adiminda dogrular."""
+
+_PYTHON_TOOL = re.compile(r"(?:^|[\s;&|({])(?:python3?|pip3?|pytest|mypy|ruff)(?=\s|$)", re.M)
+
+
+def _runs_python(command: str) -> bool:
+    """Mevcut workflow sozlesmesinin denetimi: `run` metninde bilinen Python
+    araclarindan biri komut olarak geciyor mu. Genel bir kabuk analizi
+    DEGIL: betik dosyalari, `$(...)` ya da takma adlar taranmaz. Yeni bir
+    arac ya da cagirma bicimi listeye bilincli eklenir."""
+    return _PYTHON_TOOL.search(command) is not None
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ('python3 -I scripts/artifact_roundtrip/verify.py --artifact-id "$ID"', True),
+        ("PYTHONPATH=src python -m tlab.paper_probe", True),
+        ("pip install -r requirements-dev.lock", True),
+        ("ruff check --output-format=github .", True),
+        ('cp scripts/artifact_roundtrip/payload.json "$RUNNER_TEMP/a.json"', False),
+        ("echo --python-version 3.12", False),
+    ],
+)
+def test_the_python_command_gate(command: str, expected: bool) -> None:
+    """Asagidaki istisna testi bu tanimaya dayaniyor; sessizce kor olmasin."""
+    assert _runs_python(command) is expected
+
+
+@pytest.mark.parametrize("name", WORKFLOW_FILES)
+def test_every_job_runs_on_the_pinned_runner(name: str) -> None:
+    """Her job ayni sabit etikette kosar. `-latest` isletim sistemini
+    sessizce degistirir; o zaman §11.5'in "ayni workflow" sarti ayni ortami
+    garanti etmez. Yukseltme bu satirin bilincli degisikligiyle ve PR'in
+    kendi hosted kanitiyla olur."""
+    for job_name, job in _workflow(name)["jobs"].items():
+        assert job.get("runs-on") == RUNNER_LABEL, f"{name}/{job_name}: runner etiketi"
+
+
+def test_only_reviewed_jobs_run_the_system_python() -> None:
+    """setup-python'dan once Python calistiran job yalnizca gozden gecirilmis
+    istisnadir ve ilk Python adimi minoru dogrular. Dogrulama basarisizsa
+    job orada durmali: adimda `if` ya da `continue-on-error` olamaz. Yeni
+    bir job sozlesme A'nin disina sessizce cikamaz; istisna da
+    bayatlayamaz."""
+    major, minor = PYTHON_MINOR.split(".")
+    guard = f"sys.version_info[:2] != ({major}, {minor})"
+    found: set[tuple[str, str]] = set()
+    for name in WORKFLOW_FILES:
+        for job_name, job in _workflow(name)["jobs"].items():
+            for step in job.get("steps", []):
+                if str(step.get("uses", "")).startswith("actions/setup-python@"):
+                    break
+                if _runs_python(str(step.get("run", ""))):
+                    found.add((name, job_name))
+                    assert guard in step["run"], (
+                        f"{name}/{job_name}: ilk Python adimi minoru dogrulamiyor"
+                    )
+                    assert "if" not in step and "continue-on-error" not in step, (
+                        f"{name}/{job_name}: dogrulama basarisizsa job durmali"
+                    )
+                    break
+    assert found == SYSTEM_PYTHON_JOBS

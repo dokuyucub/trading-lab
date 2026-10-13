@@ -145,7 +145,10 @@ eklenen büyük bir modül burada göze çarpar.
   - CI (`python-version: "3.12"`);
   - Docker (`python:3.12-slim`);
   - kilitler (`--python-version 3.12`);
-  - ruff `py312` ve mypy `3.12`.
+  - ruff `py312` ve mypy `3.12`;
+  - roundtrip `verify` job'u: setup-python yok, işletim sisteminin
+    `python3`'ü; minörü ilk Python adımında doğrulanır (aşağıda runner
+    sözleşmesi).
 - **Garanti edilmeyen:** aynı imaj ya da aynı yama. CI'da koşudan koşuya yama
   değişebilir; örneğin 3.12.14 ve 3.12.15 görüldü. Güvenlik yamaları böylece
   kendiliğinden gelir.
@@ -156,6 +159,24 @@ eklenen büyük bir modül burada göze çarpar.
 - **Yama ya da imaj digest'i sabitlenmez.** Kanıtlı bir ihtiyaç doğarsa ayrı
   bir kararla, bütün ortamlarda birlikte yapılır. Yalnızca CI'ı sabitleyip
   ortamlar eşitmiş gibi yazılmaz.
+
+**Runner sözleşmesi** (#17, Claude ön raporu 6083963913):
+
+- **Bütün job'lar `runs-on: ubuntu-24.04`** (test denetler). `ubuntu-latest`
+  yeni bir işletim sistemine sessizce geçer: resmî takvime göre
+  (runner-images#14748, Codex 6139287740) geçiş 19 Ekim 2026'da başlar,
+  19 Kasım 2026'da tamamlanması planlanıyor. Ubuntu 26.04 imajında sistem
+  `python3` 3.14'tür (`docs/designs/workflow-actions.md`, "Runner").
+- **İşletim sistemi sürümü sabit, imaj sürümü kayandır.** Güvenlik
+  güncellemeleri böylece gelir. Yürütme kaydı log'daki gerçek imajı yazar
+  (§11.5).
+- **setup-python'dan önce Python çalıştıran tek job roundtrip `verify`'dır**
+  (gözden geçirilmiş istisna, test denetler). Token'ı girdi olarak alan
+  action sayısı o job'da artmasın diye işletim sisteminin `python3`'ünü
+  kullanır ve minörü ilk Python adımında doğrular; doğrulama başarısızsa
+  token'lı adım çalışmaz.
+- **Yükseltme** action sürümlerindeki gibi olur: testteki satırın bilinçli
+  değişikliği ve PR'ın kendi hosted kanıtı.
 
 ## 3. Değişmezler
 

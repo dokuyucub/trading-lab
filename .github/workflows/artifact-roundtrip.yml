@@ -32,7 +32,7 @@ concurrency:
 
 jobs:
   upload:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       artifact-id: ${{ steps.upload.outputs.artifact-id }}
@@ -56,7 +56,7 @@ jobs:
 
   verify:
     needs: upload
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     # Artefakt listesi ve ZIP indirme icin yalnizca okuma izni.
     permissions:
@@ -66,6 +66,14 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+      # Isletim sisteminin python3'u: setup-python yok, cunku token'i girdi
+      # olarak alan action sayisi bu job'da artmasin. ubuntu-24.04'te 3.12
+      # (Python surum sozlesmesi A, AGENTS §2); ubuntu-26.04'te 3.14 olur ve
+      # bu adim kirmizi doner. tests/test_architecture.py denetler.
+      - name: Python minorunu dogrula
+        run: >-
+          python3 -I -c "import sys; print(sys.version.split()[0]);
+          sys.exit(sys.version_info[:2] != (3, 12))"
       # Token YALNIZCA bu adimda. Betik onu yalnizca GitHub API isteklerine
       # ekler; ZIP yonlendirmesini elle izler ve o istege eklemez.
       # Yonlendirme adresi ve token basilmaz.

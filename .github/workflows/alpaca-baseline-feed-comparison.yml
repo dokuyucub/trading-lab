@@ -21,7 +21,7 @@ jobs:
     # Yalnizca main: baska bir dalda degistirilmis kod anahtarlara
     # erisemesin.
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # 11 sembol x 50 baseline seansi 1Min SIP indirme (sayfali) + bellekte
     # kalite olcumu (P&L yok). Olagan butce tahmini, mutlak ust sinir degil.
     timeout-minutes: 15

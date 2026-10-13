@@ -19,7 +19,7 @@ jobs:
     # Yalnizca main: baska bir dalda degistirilmis kod anahtarlara
     # erisemesin.
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Butce: kurulum + indirme + olcum + temizlik. Dayanak (#17 PR b,
     # scripts/benchmark_baseline.py): 11 sembol x 63 seans 1Min sentetik
     # veride yerelde (4 cpu) kurma 2.4 sn, dogrulama 5.9 sn, dort senaryo

@@ -17,7 +17,10 @@ koşusu olamaz. Kanıt, secret'sız ve sentetik bir gidiş-dönüş olmalıdır.
    workflow'larıyla **aynı sürüm** ve **aynı girdi anahtarlarıyla**
    (`name`, `path`, `if-no-files-found`, `retention-days`) yüklenir. Tek
    fark saklama süresi: 1 gün.
-2. **Doğrulama işi:** `verify.py` aşağıdaki zinciri doğrular.
+2. **Doğrulama işi:** önce işletim sisteminin `python3` minörünü doğrular
+   ve sürümü log'a basar; setup-python yok (AGENTS §2, runner sözleşmesi).
+   Doğrulama başarısızsa job orada durur, token'lı adım çalışmaz. Sonra
+   `verify.py` aşağıdaki zinciri doğrular.
 
 | Halka | Denetim |
 |---|---|

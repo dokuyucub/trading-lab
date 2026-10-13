@@ -99,6 +99,48 @@ daraltıldı):
   sertleştirmedir: izin artık depo ayarına bağlı değil ve `Packages`
   düştü.
 
+## Runner: `ubuntu-24.04` (2026-10-09)
+
+Koordinasyon: #17 (Claude ön raporu 6083963913).
+
+- **Kanıt:** #46'nın ve main'in koşan bütün job'larında GitHub notu: "The
+  ubuntu-latest label will migrate to Ubuntu 26 beginning October 19,
+  2026" (runner-images#14748). O gün bütün job'lar `ubuntu-latest`
+  kullanıyordu; imaj `ubuntu-24.04` 20261004.327.1.
+- **Kural:** bütün job'lar `ubuntu-24.04` (`RUNNER_LABEL`, test). İşletim
+  sistemi sabit, imaj sürümü kayan. Yürütme kaydı log'daki `Image` ve
+  `Version` satırlarını yazar.
+- **Neden:**
+  - §11.5'in yeniden koşu kuralı "aynı workflow" diyor. Etiket kayarsa aynı
+    dosya başka bir sistemde koşar.
+  - Roundtrip `verify` işletim sisteminin `python3`'ünü kullanır. Ubuntu
+    24.04'te bunun 3.12 olması gerekir; ilk adım minörü doğrular ve sürümü
+    log'a basar. Doğrulama başarısızsa job orada durur: token'lı adım
+    çalışmaz (`if` ve `continue-on-error` yok; test).
+  - Komut tanıma (`_runs_python`) mevcut workflow sözleşmesinin denetimidir;
+    genel bir kabuk analizi değildir. Betik dosyaları, `$(...)` ya da takma
+    adlar taranmaz; yeni bir araç ya da çağırma biçimi listeye bilinçli
+    eklenir.
+- **Kaynak** (`actions/runner-images` salt okunur klonu, `2c42120`,
+  2026-10-12; imaj README'leri):
+
+  | İmaj | Sistem `python3` | Önbellekteki 3.12 | README duyurusu |
+  |---|---|---|---|
+  | `ubuntu-24.04` 20261004.327.1 | 3.12.3 | 3.12.15 | "`ubuntu-latest` label will use Ubuntu 26.04 in November 2026" (#14748) |
+  | `ubuntu-26.04` 20260927.149.1 | **3.14.4** | 3.12.14 | aynı |
+
+  - **Resmî takvim** (runner-images#14748; Codex okudu, 6139287740): geçiş
+    **19 Ekim 2026'da başlar, 19 Kasım 2026'da tamamlanması planlanıyor.**
+    Job notu başlangıcı, README duyurusu bitiş ayını söylüyor; ikisi bu
+    takvimle uyumlu. Issue metni bu oturumdan okunamadı (API kapsam dışı).
+  - setup-python kullanan job'lar Ubuntu 26'da da 3.12 bulur (önbellek).
+    Kırılan tek yer `verify`'ın sistem `python3`'ü: 3.14, sözleşme A'nın
+    dışı. Sabitleme ve ilk adımdaki minör doğrulaması bunun için.
+  - İki imajın 3.12 yaması farklı (3.12.15 / 3.12.14): "yama kayan"
+    sözleşmesinin imaj düzeyindeki karşılığı.
+- **Bedel:** `ubuntu-24.04` etiketi bir gün emekliye ayrılır. Yükseltme o
+  zaman bilinçli ve testli olur.
+
 ## upload-artifact
 
 Sürüm ve kaynak kanıtı: `docs/designs/artifact-roundtrip.md` ("Sürüm: v7").

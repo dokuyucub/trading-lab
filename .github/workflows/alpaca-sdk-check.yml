@@ -19,7 +19,7 @@ jobs:
     # Yalnizca main: baska bir dalda degistirilmis kod anahtarlara
     # erisemesin.
     if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # OLAGAN butce tahmini - MUTLAK UST SINIR DEGIL:
     #   istek basina  = 5 sn baglanti + 15 sn okuma araligi
     #   asama basina  = ~43 sn (1 tekrar + 3 sn bekleme dahil)
