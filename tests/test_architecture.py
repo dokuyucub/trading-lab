@@ -982,6 +982,8 @@ WORKFLOW_FILES = sorted(path.name for path in (REPO / ".github" / "workflows").g
 
 JOB_PERMISSION_EXCEPTIONS: dict[tuple[str, str], dict[str, str]] = {
     ("artifact-roundtrip.yml", "verify"): {"contents": "read", "actions": "read"},
+    # Golge gozlem kapisi ayni gunun kosu gecmisini okur (teklik); secret'siz.
+    ("shadow-observation.yml", "gate"): {"contents": "read", "actions": "read"},
 }
 """Ust duzeyden farkli job izinleri: YALNIZCA bunlar, gozden gecirilmis.
 Gidis-donus dogrulamasi artefakt listesini okumak icin `actions: read`
@@ -1175,6 +1177,111 @@ def test_the_baseline_workflow_separates_secrets_from_measurement() -> None:
     assert "GITHUB_STEP_SUMMARY" not in yaml.safe_dump(workflow), "log'a rapor yazilmaz"
 
 
+SHADOW = "shadow-observation.yml"
+
+
+def test_the_shadow_workflow_contains_secrets_and_runs_only_on_schedule() -> None:
+    """Golge gozlem: sinirli schedule, secret'siz kapi, secret tek adimda.
+
+    Her madde docs/designs/shadow-observation.md §5-§6'daki bir sarta
+    karsilik geliyor; biri gevserse bu test kirilir.
+    """
+    from tlab import shadow_job
+
+    assert shadow_job.WORKFLOW_FILE == SHADOW
+    workflow = _workflow(SHADOW)
+    dumped = yaml.safe_dump(workflow)
+    # PyYAML (YAML 1.1) `on` anahtarini True olarak okur.
+    triggers: dict[str, Any] = workflow["on"] if "on" in workflow else workflow[True]
+    assert set(triggers) == {"schedule"}, "elle tetik ve PR tetigi yok"
+    assert [item["cron"] for item in triggers["schedule"]] == ["50 12 * * 1-5", "50 13 * * 1-5"]
+    assert workflow["permissions"] == {"contents": "read"}
+    assert workflow["concurrency"] == {"group": "shadow-observation", "cancel-in-progress": False}
+    assert "env" not in workflow
+    assert set(workflow["jobs"]) == {"gate", shadow_job.RECORD_JOB}
+
+    # Kapi: secret yok; token yalnizca kapi adiminda; karar ciktisi.
+    gate = workflow["jobs"]["gate"]
+    assert gate["if"] == "github.ref == 'refs/heads/main'"
+    assert "secrets." not in yaml.safe_dump(gate)
+    with_token = [step for step in gate["steps"] if "github.token" in yaml.safe_dump(step)]
+    assert len(with_token) == 1
+    (gate_step,) = with_token
+    assert gate_step["env"] == {"GH_TOKEN": "${{ github.token }}"}
+    assert "tlab.shadow_job gate" in gate_step["run"]
+    assert '--output "$GITHUB_OUTPUT"' in gate_step["run"]
+    assert gate["outputs"] == {"action": "${{ steps.gate.outputs.action }}"}
+
+    # Kayit: kapiya bagli; secret YALNIZCA gozlem adiminda.
+    record = workflow["jobs"][shadow_job.RECORD_JOB]
+    assert record["needs"] == "gate"
+    assert "gozle" in record["if"] and "gec-kayit" in record["if"]
+    assert "env" not in record and "continue-on-error" not in record
+    steps = record["steps"]
+    names = [step.get("name") for step in steps]
+    # Toplam isi "kayit adimi kostu" kanitini bu adlardan okur (tasarim §6):
+    # kapi kararina bagli adimlar tam olarak RECORD_STEPS.
+    gated = [step["name"] for step in steps if "needs.gate.outputs" in str(step.get("if", ""))]
+    assert tuple(gated) == shadow_job.RECORD_STEPS
+    assert "secrets." not in yaml.safe_dump({k: v for k, v in record.items() if k != "steps"})
+    with_secrets = [step for step in steps if "secrets." in yaml.safe_dump(step)]
+    assert [step["name"] for step in with_secrets] == ["Gozle"]
+    (observe,) = with_secrets
+    assert set(observe["env"]) == set(shadow_job.KEY_ENV)
+    assert observe["if"] == "needs.gate.outputs.action == 'gozle'"
+    assert "tlab.shadow_job observe" in observe["run"]
+    late = next(step for step in steps if step.get("name") == "Gec kaydi yaz")
+    assert late["if"] == "needs.gate.outputs.action == 'gec-kayit'"
+    assert "env" not in late
+    assert "tlab.shadow_job late" in late["run"]
+    assert "github.token" not in yaml.safe_dump(record)
+
+    # Temizlik kosulsuz; upload temizlikten SONRA ve kosulsuz; tek dosya.
+    assert not [
+        name for name, step in zip(names, steps, strict=True) if "continue-on-error" in step
+    ]
+    cleanup = next(step for step in steps if step.get("name") == "Gecici kaydi temizle")
+    assert cleanup["if"] == "always()"
+    assert 'rm -rf "$RUNNER_TEMP/shadow-data"' in cleanup["run"]
+    assert 'test ! -e "$RUNNER_TEMP/shadow-data"' in cleanup["run"]
+    assert '--workdir "$RUNNER_TEMP/shadow-data"' in observe["run"]
+    uploads = [step for step in steps if str(step.get("uses", "")).startswith("actions/upload")]
+    assert len(uploads) == 1
+    (upload,) = uploads
+    assert "if" not in upload
+    assert names.index(upload["name"]) > names.index(cleanup["name"])
+    assert upload["with"]["path"] == "${{ runner.temp }}/shadow-day.json"
+    for step in (observe, late):
+        assert '--out "$RUNNER_TEMP/shadow-day.json"' in step["run"]
+    assert not any(str(step.get("uses", "")).startswith("actions/cache") for step in steps)
+    assert "GITHUB_STEP_SUMMARY" not in dumped, "log'a ozet yazilmaz"
+    assert "set -x" not in dumped
+
+
+def test_the_two_shadow_crons_cover_both_seasons_exactly_once() -> None:
+    """Her mevsimde satirlardan tam biri baslangic penceresine duser."""
+    from datetime import UTC, date, datetime
+
+    from tlab.shadow.schedule import GATE_OBSERVE, decide
+
+    workflow = _workflow(SHADOW)
+    triggers: dict[str, Any] = workflow["on"] if "on" in workflow else workflow[True]
+    times = []
+    for item in triggers["schedule"]:
+        minute, hour, *_ = item["cron"].split()
+        times.append((int(hour), int(minute)))
+    for day in (date(2026, 1, 5), date(2026, 3, 9), date(2026, 7, 6), date(2026, 11, 2)):
+        observing = [
+            (hour, minute)
+            for hour, minute in times
+            if decide(
+                datetime(day.year, day.month, day.day, hour, minute, tzinfo=UTC), (day,), []
+            ).action
+            == GATE_OBSERVE
+        ]
+        assert len(observing) == 1, f"{day}: pencereye dusen satir {observing}"
+
+
 @pytest.mark.parametrize(
     "relative",
     ["baseline_diagnostic.py", "feed_comparison.py", "job_io.py", "data/quality_summary.py"],
@@ -1280,6 +1387,8 @@ UPLOAD_RETENTION_DAYS = {
     "alpaca-baseline-quality-diagnostic.yml": 90,
     "alpaca-baseline-feed-comparison.yml": 90,
     "artifact-roundtrip.yml": 1,
+    # Golge gozlem gun ozeti: 20 planli gunu ve toplam adimini kapsar.
+    "shadow-observation.yml": 60,
 }
 """Upload adimi olan BUTUN workflow'lar ve saklama sureleri, MEVCUT
 degerleriyle: pilot ozeti 30 gun, uc gercek rapor 90 gun. Yalnizca sentetik

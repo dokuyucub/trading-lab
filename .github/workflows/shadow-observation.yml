@@ -1,0 +1,110 @@
+# Salt okunur golge gozlem v1 (#17, docs/designs/shadow-observation.md).
+#
+# Iki is: kapi (secret'siz, yalnizca `actions: read`) ve kayit (gozlem ya
+# da gec kayit). Planli gunler kodda (tlab.shadow_job.PLANNED_DAYS) ve
+# yurutme kararinda sabitlenir; liste bos oldugu surece kapi her gun
+# "plan disi" der ve kayit isi atlanir. Emir yok, hesap okunmaz; disari
+# cikan tek sey gunun fiyatsiz ozeti. Gorulen kayit ve journal gecici
+# dizindedir ve her durumda silinir. Bu sozlesme tests/test_architecture.py
+# tarafindan denetlenir.
+name: Shadow observation
+
+on:
+  schedule:
+    # Iki satir, acilistan yaklasik 40 dk once: biri yaz (EDT, acilis
+    # 13:30Z), biri kis (EST, acilis 14:30Z) saatine denk gelir. Mevsim
+    # disi satir kapida ya erken kalir ya da gercek kosudan sonra bos
+    # gecer (tlab.shadow.schedule).
+    - cron: '50 12 * * 1-5'
+    - cron: '50 13 * * 1-5'
+
+permissions:
+  contents: read
+
+# Ayni anda tek kosu. Ayni gun ikinci kosuyu bu tek basina ONLEMEZ;
+# teklik kapinin kosu gecmisi denetimidir.
+concurrency:
+  group: shadow-observation
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      action: ${{ steps.gate.outputs.action }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Kilitli calisma zamani bagimliliklarini kur
+        run: |
+          python -m pip install -r requirements.lock
+          python -m pip check
+      # Alpaca secret'i YOK. Token yalnizca kosu gecmisini okur.
+      - name: Kapi
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          PYTHONPATH=src python -m tlab.shadow_job gate
+          --output "$GITHUB_OUTPUT"
+
+  record:
+    needs: gate
+    if: >-
+      needs.gate.outputs.action == 'gozle'
+      || needs.gate.outputs.action == 'gec-kayit'
+    runs-on: ubuntu-24.04
+    # Butce: acilistan ~40 dk once baslar; giris penceresi (120 dk) ve SIP
+    # icin son sure (45 dk) dahil yaklasik 4 saat. Mutlak ust sinir DEGIL.
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Kilitli calisma zamani bagimliliklarini kur
+        run: |
+          python -m pip install -r requirements.lock
+          python -m pip check
+      # Secret'lar YALNIZCA bu adimda.
+      - name: Gozle
+        if: needs.gate.outputs.action == 'gozle'
+        env:
+          ALPACA_PAPER_API_KEY: ${{ secrets.ALPACA_PAPER_API_KEY }}
+          ALPACA_PAPER_SECRET_KEY: ${{ secrets.ALPACA_PAPER_SECRET_KEY }}
+        run: >-
+          PYTHONPATH=src python -m tlab.shadow_job observe
+          --workdir "$RUNNER_TEMP/shadow-data"
+          --out "$RUNNER_TEMP/shadow-day.json"
+      # Secret YOK; ortamda Alpaca anahtari bulunursa adim baslamaz.
+      - name: Gec kaydi yaz
+        if: needs.gate.outputs.action == 'gec-kayit'
+        run: >-
+          PYTHONPATH=src python -m tlab.shadow_job late
+          --out "$RUNNER_TEMP/shadow-day.json"
+      # Basari ya da hata: gecici dizin kaldirilir ve yoklugu dogrulanir.
+      - name: Gecici kaydi temizle
+        if: always()
+        run: |
+          rm -rf "$RUNNER_TEMP/shadow-data"
+          test ! -e "$RUNNER_TEMP/shadow-data"
+      # Yuklenen TEK dosya: gunun fiyatsiz ozeti. Saklama suresi 20 planli
+      # gunu ve toplam adimini kapsar.
+      - name: Gun ozetini yukle
+        uses: actions/upload-artifact@v7
+        with:
+          name: shadow-day
+          path: ${{ runner.temp }}/shadow-day.json
+          if-no-files-found: error
+          retention-days: 60
