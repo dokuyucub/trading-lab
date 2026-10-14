@@ -13,7 +13,10 @@ Tarih: 2026-10-13. Koordinasyon: #17. Kayıtlar:
   sonra dönen SIP yanıtı kabul edilmez;
 - Codex BULGU 6158917217 (#51, `a9c7c80`): aralık ölçüsünde bilinmeyen
   sembol-gün paydada, pencere uçları saatle kapanmış pencereden, aralık
-  ilk tam turda.
+  ilk tam turda;
+- Codex BULGU 6161518682 (#52, `0a2e198`): veri alınamayan sembol-tur
+  gün durumunda, dakikası geçen tur koşmaz, SIP bütünlüğü her dakika
+  barıyla.
 
 Bu belge tasarımdır. Kod, workflow ya da gerçek koşu teslim edildiği
 anlamına gelmez. Yürütme yetkisi de değildir: o, ayrı ve kayıtlı bir
@@ -139,9 +142,10 @@ Gölge gözlemin broker'ı `ShadowBroker`'dır. Hesap ya da emir adaptörüne
   geleceğe sabitlenir ve kodda listelenir. Liste dışındaki günde iş
   hiçbir şey yapmaz.
 - **Gün durumları.** Her planlı gün şu durumlardan biriyle raporlanır:
-  - `tamam`;
-  - `eksik`: geç başladı, kesildi, SIP gelmedi ya da kayıt koşusu var
-    ama özeti yok;
+  - `tamam`: bütün planlı sembol-turlar gözlendi ve SIP tam geldi;
+  - `eksik`: geç başladı, kesildi, tur kaçtı ya da hata attı, planlı bir
+    sembol-turun verisi alınamadı, SIP gelmedi ya da kayıt koşusu var ama
+    özeti yok;
   - `başlamadı`: hiç gözlem başlamadığı **kanıtlı**;
   - `bilinmiyor`: koşu geçmişi okunamadı ya da kanıt yetersiz.
 
@@ -151,6 +155,16 @@ Gölge gözlemin broker'ı `ShadowBroker`'dır. Hesap ya da emir adaptörüne
 - **Planlı ızgara.** Giriş penceresinin her dakikası için bir tur:
   `açılış + m dk + 7 sn`, `m = 15 … 120`. Dakikanın turu, o dakika içinde
   koşan gerçek turdur. Turlar kayda geçer; kaçan dakika telafi edilmez.
+  - Uykudan sonra gerçek saat denetlenir. Uyku ya da önceki tur bir
+    dakikayı taşırsa o dakikanın turu **koşmaz**. Döngü şimdiki dakikadan
+    devam eder; son planlı dakika geçtiyse biter. Pencere dışında canlı
+    istek yapılmaz.
+  - Çağrının dönmesi veri alındığı demek değildir; döngü sembol hatasını
+    kendi içinde yakalar. Gün özeti iki sayımı ayrı taşır:
+    - döngü çağrıları (`turns`): döndü / hata attı / dakikasında hiç
+      yapılmadı;
+    - veri gözlemi (`symbol_turns`): planlı dakikada kayıttan okunabilen
+      sembol-tur.
 - **`t*` saatle tanımlıdır, veriye göre değil.**
   - Pencerenin saatle bitişi `açılış + 15 dk`. İzin verilen sabit
     gecikme `D = 60 sn`: son pencere barının kapanıp gelmesi için.
@@ -308,6 +322,18 @@ Tercih: **sınırlı schedule**. Kullanıcıya 20 günlük tıklama yüklenmez
   - açılış penceresi ile son karar anına kadar olan aralık sağlayıcıdan
     tam döndü;
   - son süre aşılmadı.
+- **Tam yanıt:** açılıştan son turun anına kadar kapanmış olması gereken
+  **her dakika barı** yanıtta var (`ts + 1 dk ≤ son tur`). Son barın
+  varlığı yetmez.
+  - Eksik yanıt `yanıt eksik (n dakika)` olarak son süreye kadar yeniden
+    istenir.
+  - Son sürede hâlâ eksikse o sembolün SIP'i yoktur. Gün `eksik` (SIP
+    gelmedi) olur; aralık ve niyet o sembol-gün için `unknown`dur.
+  - Gerçek veri boşluğu ile henüz tamamlanmamış yanıt tek yanıttan
+    ayrılamaz. İkisi de tam sayılmaz; eksik SIP feed farkı gibi
+    değerlendirilmez.
+  - Önceki günlerin geçmiş barları bu şartın dışındadır. Şart, seans
+    gününün aralığıdır.
 - **Son süre (normatif):** `açılış + giriş penceresi (120 dk) + 45 dk`.
   - Seans saatine bağlı tek bir sabittir (kodda `SIP_DEADLINE`).
   - İstek anına bağlı değildir. Yavaş ya da tekrarlanan istek son süreyi
