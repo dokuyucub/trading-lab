@@ -7,7 +7,10 @@ Tarih: 2026-10-13. Koordinasyon: #17. Kayıtlar:
   üç açıklık: `t*`, tekillik durumları, sızıntı ve tutarlılık);
 - Codex BULGU 6155755867 (#50, `2253025`): mutlak bps eşiği, gözlemin
   başlangıçta yeniden denetimi, gün durumunun kanıtı, izin listesi,
-  normatif SIP son süresi, tam ızgarada niyetsizlik.
+  normatif SIP son süresi, tam ızgarada niyetsizlik;
+- Codex BULGU 6158917217 (#51, `a9c7c80`): aralık ölçüsünde bilinmeyen
+  sembol-gün paydada, pencere uçları saatle kapanmış pencereden, aralık
+  ilk tam turda.
 
 Bu belge tasarımdır. Kod, workflow ya da gerçek koşu teslim edildiği
 anlamına gelmez. Yürütme yetkisi de değildir: o, ayrı ve kayıtlı bir
@@ -157,8 +160,17 @@ Gölge gözlemin broker'ı `ShadowBroker`'dır. Hesap ya da emir adaptörüne
 - **İki tamlık ölçüsü ayrı etiketlenir:**
   - **başlangıç tamlığı:** `t*`'da pencere tam;
   - **gecikmeli tamlık:** `t*`'da eksik, giriş penceresi bitmeden tamamlandı.
-- **Aralık farkı:** IEX görünümünde pencerenin ilk tam olduğu tur
-  (gecikmeli olabilir). SIP aynı tura kesilir.
+- **Aralık farkı:** planlı dakikalarda IEX görünümünde pencerenin ilk
+  tam olduğu tur. `t*`'dan önce de olabilir, gecikmeli de olabilir;
+  `t*` yalnızca başlangıç tamlığına aittir. SIP aynı tura kesilir.
+  - Pencere uçları, o turda boşluksuz pencere barlarından hesaplanır.
+    Planlı turlar pencere bitiminden sonradır; pencere barlarının
+    kapandığı saatle bilinir, sonraki barın gelmesi gerekmez.
+    Stratejinin açılış aralığı (sonraki barı bekler) değişmez.
+  - İlk tam turdan önce planlı bir dakikanın turu yoksa ya da verisi
+    alınamadıysa ilk tam tur bilinemez: aralık `unknown`.
+  - "IEX penceresi tamamlanmadı" yalnızca **bütün** planlı dakikalar
+    gözlenip pencere hiç tam olmadıysa verilir.
 - **Niyet:** her tarafın ilk niyeti.
   - İlk niyetten önceki planlı dakikalardan birinin turu yoksa ya da o
     turun verisi alınamadıysa o tarafın ilk niyeti `unknown` olur.
@@ -169,6 +181,11 @@ Gölge gözlemin broker'ı `ShadowBroker`'dır. Hesap ya da emir adaptörüne
 - **Koşullu ölçüler** için pay, payda ve `unknown` ayrı yazılır:
   - aralık farkı, iki pencere tamsa;
   - niyet uyumu, en az bir tarafta niyet varsa.
+
+  Koşulun sağlanıp sağlanmadığı **bilinmeyen** sembol-gün paydada
+  `unknown`dur: özeti ya da sonucu yok, ilk tam tur bilinmiyor, SIP yok.
+  Yalnızca koşulun sağlanmadığı **gözlenen** sembol-gün dışarıda kalır
+  ve ayrı sayaçla gösterilir (IEX ve SIP için ayrı).
 - **Niyetsizlik ayrı sayılır.** İki tarafta da niyet yoksa bu "uyum
   geçti" değildir; ayrı sayaçtır.
 - **Sembol bazında rapor.** Toplamın yanında sembol bazında rapor

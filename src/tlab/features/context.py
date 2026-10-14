@@ -9,7 +9,7 @@ kim doldurursa doldursun, strateji ayni karari verir.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from zoneinfo import ZoneInfo
@@ -127,6 +127,25 @@ def build_session_state(
         flatten_at=flatten_at,
         opening_range_end=opening_range_end,
         phase=phase,
+    )
+
+
+def apply_market_close(
+    session: SessionState, market_close: datetime, *, flatten_before_close_minutes: int
+) -> SessionState:
+    """Seansi takvimin kapanisina uyarlar: yarim gunde kapanis erkene alinir.
+
+    Duzenli saatler yarim gunu bilmez; takvim (canlida broker saati,
+    golge gozlemde resmi takvim) bilir. Kapanis yalnizca ONE alinir,
+    kapanis tamponu ona gore yeniden kurulur.
+    """
+    close = min(session.session_close, market_close)
+    flatten_at = close - timedelta(minutes=flatten_before_close_minutes)
+    return replace(
+        session,
+        session_close=close,
+        flatten_at=flatten_at,
+        phase=SessionPhase.FLATTEN if session.now >= flatten_at else session.phase,
     )
 
 

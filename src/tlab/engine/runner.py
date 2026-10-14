@@ -42,7 +42,13 @@ from tlab.data.market import MarketData
 from tlab.engine.reconciler import build_trade, pair_fills
 from tlab.errors import BrokerError, DataError, JournalError, TradingLabError
 from tlab.execution.broker import Broker
-from tlab.features.context import Context, SessionPhase, SessionState, build_session_state
+from tlab.features.context import (
+    Context,
+    SessionPhase,
+    SessionState,
+    apply_market_close,
+    build_session_state,
+)
 from tlab.features.indicators import opening_window_gaps
 from tlab.journal.queries import halt_reason, open_entry_orders, unconfirmed_orders
 from tlab.journal.writer import JournalWriter
@@ -178,13 +184,10 @@ class SessionRunner:
         session = self._session_state(now)
         if market_clock.is_open:
             # Broker calendar is authoritative on shortened trading days.
-            close = min(session.session_close, market_clock.next_close)
-            flatten_at = close - timedelta(minutes=self.config.session.flatten_before_close_minutes)
-            session = replace(
+            session = apply_market_close(
                 session,
-                session_close=close,
-                flatten_at=flatten_at,
-                phase=SessionPhase.FLATTEN if now >= flatten_at else session.phase,
+                market_clock.next_close,
+                flatten_before_close_minutes=self.config.session.flatten_before_close_minutes,
             )
         result = LoopResult(now=now, phase=session.phase, market_open=market_clock.is_open)
         if market_clock.is_open and market_clock.next_close <= now:

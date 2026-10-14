@@ -153,6 +153,20 @@ LAYER_RULES: dict[str, set[str]] = {
     # Stratejileri veya broker'i ice aktarmasi, olculen seyin olcen
     # seye bagli hale gelmesi demek olurdu.
     "learning": {"tlab.core", "tlab.errors"},
+    # Golge gozlem (docs/designs/shadow-observation.md) karar yolunu
+    # emirsiz calistirir. Broker adaptorunu, motoru, backtest'i ve
+    # journal'i TANIMAZ: hesap ve emir uclarina giden bir yol buradan
+    # kurulamaz; SimBroker ve dolum modeli karsilastirmaya giremez.
+    "shadow": {
+        "tlab.core",
+        "tlab.features",
+        "tlab.strategies",
+        "tlab.config",
+        "tlab.data",
+        "tlab.errors",
+        # Erisim hatalarini SABIT metne ceviren ortak siniflandirici.
+        "tlab.sdk_probe",
+    },
 }
 
 
@@ -183,7 +197,7 @@ def test_layer_only_depends_on_lower_layers(layer: str) -> None:
     )
 
 
-@pytest.mark.parametrize("layer", ["core", "features", "strategies", "risk", "engine"])
+@pytest.mark.parametrize("layer", ["core", "features", "strategies", "risk", "engine", "shadow"])
 def test_business_layers_never_import_the_vendor_sdk(layer: str) -> None:
     """Alpaca SDK'si yalnizca kenar katmanlarda gorunmeli.
 
