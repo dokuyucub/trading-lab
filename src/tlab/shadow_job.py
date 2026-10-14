@@ -13,6 +13,10 @@ Sozlesme: docs/designs/shadow-observation.md. Adimlar:
     gunun ozetini yazar.
   * `late` (gec kayit isi) - secret'siz. Gunu `eksik (gec baslangic)`
     diye yazar.
+  * `collect` (toplam isi, indirme) - secret'siz, `actions: read`. Son
+    planli gunden sonra BIR kez: gozlem kosularinin gun ozeti
+    artefaktlarini indirir ve denetler (tek elle izlenen yonlendirme,
+    Authorization tasinmaz, tek uyeli ZIP).
   * `aggregate` (toplam) - secret'siz. Gunluk ozetlerden 20 gunluk
     ozeti kurar.
 
@@ -29,6 +33,7 @@ listeyle her gun plan disidir ve is hicbir sey yapmaz.
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import shutil
@@ -37,6 +42,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict
 from datetime import date, datetime, timedelta
@@ -202,7 +208,7 @@ def _single_page(payload: dict[str, Any], key: str, what: str) -> list[dict[str,
     return items
 
 
-def _api_json(url: str, token: str) -> dict[str, Any]:
+def _api_json(url: str, token: str, what: str = "kosu gecmisi") -> dict[str, Any]:
     parts = urllib.parse.urlsplit(url)
     if not (
         parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in LOOPBACK_HOSTS)
@@ -222,9 +228,9 @@ def _api_json(url: str, token: str) -> dict[str, Any]:
             body: bytes = response.read(MAX_API_BYTES + 1)
     except urllib.error.HTTPError as exc:
         exc.close()
-        raise GateError(f"kosu gecmisi okunamadi (HTTP {exc.code})") from None
+        raise GateError(f"{what} okunamadi (HTTP {exc.code})") from None
     except (urllib.error.URLError, OSError) as exc:
-        raise GateError(f"kosu gecmisi okunamadi ({type(exc).__name__})") from None
+        raise GateError(f"{what} okunamadi ({type(exc).__name__})") from None
     if len(body) > MAX_API_BYTES:
         raise GateError("API yaniti boyut sinirini asti")
     try:
@@ -887,6 +893,242 @@ def _run_evidence(record: list[dict[str, Any]]) -> str:
     return EVIDENCE_RECORDED
 
 
+# --------------------------------------------------------------------------
+# Toplam isi: gun ozetlerini indirme
+# --------------------------------------------------------------------------
+
+AGGREGATE_WORKFLOW_FILE = "shadow-aggregate.yml"
+DAY_ARTIFACT = "shadow-day"
+DAY_FILE = "shadow-day.json"
+"""Kayit isinin yukledigi TEK dosya (workflow `Gun ozetini yukle`)."""
+MAX_ZIP_BYTES = 1_000_000
+MAX_DAY_BYTES = 1_000_000
+REDIRECT_CODES = frozenset({301, 302, 303, 307, 308})
+COLLECT_ENV = ("GITHUB_API_URL", "GITHUB_REPOSITORY", "GITHUB_RUN_ID", "GH_TOKEN")
+
+
+def collect(
+    env: Mapping[str, str],
+    *,
+    clock: Clock,
+    days_dir: Path,
+    planned: Sequence[date] = PLANNED_DAYS,
+) -> int:
+    """Gozlem kosularinin gun ozetlerini `days_dir`e indirir; basariliysa 0.
+
+    Toplam BIR kez uretilir: son planli gun bitmeden, yeniden deneme
+    kosusunda ya da daha once basariyla bitmis bir toplam kosusu varsa
+    hicbir artefakt indirilmez ve is kirmizi biter. Okunamayan liste, tek
+    sayfayi asan liste, beklenmeyen ZIP ya da sema KISMI toplam
+    yazdirmaz: is kirmizi biter. Suresi dolmus artefakt atlanir; o gunun
+    durumu toplamda kosu kanitiyla belirlenir (tasarim §6).
+    """
+    with silenced():
+        if any(name.startswith(SECRET_ENV_PREFIXES) for name in env):
+            print("FAIL yapilandirma: toplam isi secret'siz calisir")
+            return 1
+        if not planned:
+            print("FAIL toplam: planli gun yok")
+            return 1
+        if session_day_of(clock.now()) <= max(planned):
+            print("FAIL toplam: son planli gun henuz bitmedi")
+            return 1
+        api, repo, run_id, token = (env.get(name, "").strip() for name in COLLECT_ENV)
+        if not (api and repo and run_id and token):
+            print("FAIL yapilandirma: Actions API ortami eksik")
+            return 1
+        if env.get("GITHUB_RUN_ATTEMPT", "1") != "1":
+            print("FAIL toplam: yeniden deneme kosusu (ayri karar gerekir)")
+            return 1
+        try:
+            if _aggregated_before(api, repo, run_id, token):
+                print("FAIL toplam: toplam daha once uretildi")
+                return 1
+            written = _download_days(api, repo, token, planned, days_dir)
+        except GateError as exc:
+            print(f"FAIL toplam: {exc}")
+            return 1
+        print(f"OK toplam: {written} gun ozeti indirildi")
+        return 0
+
+
+def _aggregated_before(api: str, repo: str, run_id: str, token: str) -> bool:
+    """Bu kosudan ONCE basariyla bitmis bir toplam kosusu var mi."""
+    try:
+        current = int(run_id)
+    except ValueError:
+        raise GateError("kosu kimligi bicimsiz") from None
+    query = urllib.parse.urlencode({"status": "success", "per_page": str(PAGE_SIZE)})
+    runs = _single_page(
+        _api_json(
+            f"{api}/repos/{repo}/actions/workflows/{AGGREGATE_WORKFLOW_FILE}/runs?{query}",
+            token,
+            "toplam kosu listesi",
+        ),
+        "workflow_runs",
+        "toplam kosu listesi",
+    )
+    for run in runs:
+        try:
+            identifier = int(run["id"])
+        except (KeyError, TypeError, ValueError):
+            raise GateError("kosu kaydi beklenen bicimde degil") from None
+        if identifier < current and run.get("conclusion") == "success":
+            return True
+    return False
+
+
+def _download_days(api: str, repo: str, token: str, planned: Sequence[date], days_dir: Path) -> int:
+    first, last = min(planned), max(planned)
+    query = urllib.parse.urlencode(
+        {
+            "created": f"{(first - timedelta(days=1)).isoformat()}"
+            f"..{(last + timedelta(days=1)).isoformat()}",
+            "per_page": str(PAGE_SIZE),
+        }
+    )
+    runs = _single_page(
+        _api_json(f"{api}/repos/{repo}/actions/workflows/{WORKFLOW_FILE}/runs?{query}", token),
+        "workflow_runs",
+        "kosu listesi",
+    )
+    days_dir.mkdir(parents=True, exist_ok=True)
+    written = 0
+    for run in runs:
+        try:
+            identifier = int(run["id"])
+            created = datetime.fromisoformat(str(run["created_at"]).replace("Z", "+00:00"))
+        except (KeyError, TypeError, ValueError):
+            raise GateError("kosu kaydi beklenen bicimde degil") from None
+        query = urllib.parse.urlencode({"name": DAY_ARTIFACT, "per_page": str(PAGE_SIZE)})
+        artifacts = [
+            item
+            for item in _single_page(
+                _api_json(
+                    f"{api}/repos/{repo}/actions/runs/{identifier}/artifacts?{query}",
+                    token,
+                    "artefakt listesi",
+                ),
+                "artifacts",
+                "artefakt listesi",
+            )
+            if item.get("name") == DAY_ARTIFACT
+        ]
+        if not artifacts:
+            continue
+        if len(artifacts) > 1:
+            raise GateError("bir kosuda birden cok gun ozeti artefakti")
+        (artifact,) = artifacts
+        expired = artifact.get("expired")
+        if not isinstance(expired, bool):
+            raise GateError("artefakt kaydi beklenen bicimde degil")
+        if expired:
+            print(f"UYARI toplam: {session_day_of(created).isoformat()} artefakti suresi dolmus")
+            continue
+        try:
+            artifact_id = int(artifact["id"])
+        except (KeyError, TypeError, ValueError):
+            raise GateError("artefakt kaydi beklenen bicimde degil") from None
+        content = _day_from_zip(_download_zip(api, repo, artifact_id, token))
+        _check_day(content, session_day_of(created), planned)
+        try:
+            write_new(days_dir / f"{identifier}.json", content)
+        except OSError as exc:
+            raise GateError(f"gun ozeti yazilamadi ({type(exc).__name__})") from None
+        written += 1
+    return written
+
+
+def _download_zip(api: str, repo: str, artifact_id: int, token: str) -> bytes:
+    """API ZIP adresi -> TEK, elle izlenen yonlendirme -> baytlar.
+
+    Ikinci istek YENI bir istektir: Authorization basligi YOKTUR ve o da
+    yonlendirme izlemez. Ikinci yonlendirme okunmaz ve istenmez. Adres,
+    token ve yanit govdesi basilmaz.
+    """
+    url = f"{api}/repos/{repo}/actions/artifacts/{artifact_id}/zip"
+    opener = urllib.request.build_opener(_NoRedirect)
+    request = urllib.request.Request(  # noqa: S310 - sema _checked_url ile denetlendi
+        _checked_url(url),
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    try:
+        with opener.open(request, timeout=API_TIMEOUT_SECONDS) as response:
+            return _read_limited(response, MAX_ZIP_BYTES)
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        if exc.code not in REDIRECT_CODES:
+            raise GateError(f"ZIP adresi okunamadi (HTTP {exc.code})") from None
+        location = exc.headers.get("Location") if exc.headers is not None else None
+    except (urllib.error.URLError, OSError) as exc:
+        raise GateError(f"ZIP adresi okunamadi ({type(exc).__name__})") from None
+    if not location:
+        raise GateError("yonlendirme adresi yok")
+    plain = urllib.request.Request(_checked_url(location))  # noqa: S310 - sema denetlendi
+    try:
+        with opener.open(plain, timeout=API_TIMEOUT_SECONDS) as response:
+            return _read_limited(response, MAX_ZIP_BYTES)
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        if exc.code in REDIRECT_CODES:
+            raise GateError(f"ikinci yonlendirme reddedildi (HTTP {exc.code})") from None
+        raise GateError(f"ZIP okunamadi (HTTP {exc.code})") from None
+    except (urllib.error.URLError, OSError) as exc:
+        raise GateError(f"ZIP okunamadi ({type(exc).__name__})") from None
+
+
+def _checked_url(url: str) -> str:
+    """Yalnizca https; yerel test sunucusu (loopback) icin http."""
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in LOOPBACK_HOSTS):
+        return url
+    raise GateError("beklenmeyen adres semasi")
+
+
+def _read_limited(response: Any, limit: int) -> bytes:
+    body: bytes = response.read(limit + 1)
+    if len(body) > limit:
+        raise GateError("yanit boyut sinirini asti")
+    return body
+
+
+def _day_from_zip(data: bytes) -> bytes:
+    """Tek uyeli ZIP'ten gun ozeti: ad sabit, yol bileseni yok, CRC temiz."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            members = archive.infolist()
+            if len(members) != 1 or members[0].filename != DAY_FILE:
+                raise GateError("ZIP beklenen tek uyeyi tasimiyor")
+            (member,) = members
+            if member.file_size > MAX_DAY_BYTES:
+                raise GateError("gun ozeti boyut sinirini asti")
+            # Okuma bildirilen boyutta durur ve sonunda CRC denetlenir:
+            # boyutu yanlis bildiren uye `BadZipFile` olur.
+            with archive.open(member) as handle:
+                content: bytes = handle.read()
+    except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, EOFError):
+        raise GateError("ZIP okunamadi (bicim ya da CRC)") from None
+    return content
+
+
+def _check_day(content: bytes, run_day: date, planned: Sequence[date]) -> None:
+    """Gun ozeti semasi tanimli, gunu planli ve kosunun seans gunuyle ayni."""
+    try:
+        payload = json.loads(content)
+        day = date.fromisoformat(str(payload["day"]))
+        schema = payload["day_schema"]
+    except (ValueError, KeyError, TypeError):
+        raise GateError("gun ozeti beklenen bicimde degil") from None
+    if schema != DAY_SCHEMA:
+        raise GateError("gun ozeti semasi tanimsiz")
+    if day not in planned or day != run_day:
+        raise GateError("gun ozetinin gunu kosuyla ya da planla uyusmuyor")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m tlab.shadow_job")
     sub = parser.add_subparsers(dest="step", required=True)
@@ -895,6 +1137,8 @@ def main(argv: list[str] | None = None) -> int:
     step_observe.add_argument("--out", type=Path, required=True)
     step_late = sub.add_parser("late", help="Gec kayit isi (secret'siz)")
     step_late.add_argument("--out", type=Path, required=True)
+    step_collect = sub.add_parser("collect", help="Gun ozetlerini indir (secret'siz)")
+    step_collect.add_argument("--days", type=Path, required=True)
     step_total = sub.add_parser("aggregate", help="Toplam ozet (secret'siz)")
     step_total.add_argument("--days", type=Path, required=True)
     step_total.add_argument("--out", type=Path, required=True)
@@ -916,6 +1160,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.step == "late":
         return record_late(os.environ, clock=clock, out=args.out)
+    if args.step == "collect":
+        return collect(os.environ, clock=clock, days_dir=args.days)
     return aggregate(os.environ, days_dir=args.days, out=args.out, root=Path.cwd())
 
 
