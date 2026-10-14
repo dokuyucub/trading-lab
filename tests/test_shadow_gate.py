@@ -26,6 +26,7 @@ from urllib.parse import urlparse
 
 import pytest
 
+from shadow_days import day_payload, write_day
 from tlab import shadow_job
 from tlab.core.clock import SimClock
 from tlab.shadow.schedule import GATE_LATE, GATE_OBSERVE, GATE_SKIP
@@ -328,9 +329,15 @@ def test_a_malformed_api_answer_keeps_the_gate_closed(
 D1, D2, D3, D4 = (date(2026, 1, 5), date(2026, 1, 6), date(2026, 1, 7), date(2026, 1, 8))
 
 
-def day_summary(directory: Path, day: date, status: str, reason: str | None) -> None:
-    payload = {"day_schema": 1, "day": day.isoformat(), "status": status, "reason": reason}
-    (directory / f"{day.isoformat()}.json").write_text(json.dumps(payload), encoding="utf-8")
+def day_summary(
+    directory: Path,
+    root: Path,
+    planned: tuple[date, ...],
+    day: date,
+    status: str,
+    reason: str | None,
+) -> None:
+    write_day(directory, day_payload(root, planned, day, status, reason))
 
 
 def aggregate_env(api_url: str) -> dict[str, str]:
@@ -347,8 +354,9 @@ def test_missing_summaries_are_classified_by_run_evidence(
 ) -> None:
     days = tmp_path / "days"
     days.mkdir()
-    day_summary(days, D1, "tamam", None)
     d5, d6 = date(2026, 1, 9), date(2026, 1, 12)
+    planned = (D1, D2, D3, D4, d5, d6)
+    day_summary(days, project_root, planned, D1, "tamam", None)
     api.runs = [
         run_record(11, "2026-01-06T12:50:03Z"),
         run_record(12, "2026-01-07T12:50:03Z"),
@@ -378,7 +386,7 @@ def test_missing_summaries_are_classified_by_run_evidence(
         days_dir=days,
         out=out,
         root=project_root,
-        planned=(D1, D2, D3, D4, d5, d6),
+        planned=planned,
     )
     assert code == 0
     assert total_days(out) == {
@@ -470,16 +478,23 @@ def test_the_strongest_evidence_of_a_day_wins_in_any_order(
     assert reason.startswith(expected)
 
 
-def test_a_day_with_no_runs_at_all_is_not_started(
+def test_a_day_with_no_runs_at_all_is_unknown_not_not_started(
     api: Api, api_url: str, tmp_path: Path, project_root: Path
 ) -> None:
+    """Silinmis kosu ile hic tetiklenmemis cron okunarak ayrilamaz
+    (Codex 6171961412): kosu kaydi olmayan gun `baslamadi` DEGIL."""
     days = tmp_path / "days"
     days.mkdir()
+    api.runs = [run_record(21, "2026-01-06T12:50:03Z")]
+    api.jobs = {"21": [record_job("completed", "skipped")]}
     out = tmp_path / "total.json"
     shadow_job.aggregate(
-        aggregate_env(api_url), days_dir=days, out=out, root=project_root, planned=(D1,)
+        aggregate_env(api_url), days_dir=days, out=out, root=project_root, planned=(D1, D2)
     )
-    assert total_days(out) == {D1.isoformat(): ("baslamadi", "gozlem baslamadi")}
+    assert total_days(out) == {
+        D1.isoformat(): ("bilinmiyor", "kosu kaydi yok"),
+        D2.isoformat(): ("baslamadi", "gozlem baslamadi"),
+    }
 
 
 @pytest.mark.parametrize("failure", ["status", "page", "env"])
@@ -493,7 +508,7 @@ def test_unreadable_history_makes_missing_days_unknown_not_not_started(
 ) -> None:
     days = tmp_path / "days"
     days.mkdir()
-    day_summary(days, D1, "eksik", "gec baslangic")
+    day_summary(days, project_root, (D1, D2), D1, "eksik", "gec baslangic")
     if failure == "status":
         api.status = 500
     elif failure == "page":
@@ -518,7 +533,7 @@ def test_the_aggregate_does_not_call_the_api_when_every_day_has_a_summary(
 ) -> None:
     days = tmp_path / "days"
     days.mkdir()
-    day_summary(days, D1, "tamam", None)
+    day_summary(days, project_root, (D1,), D1, "tamam", None)
     shadow_job.aggregate(
         aggregate_env(api_url),
         days_dir=days,

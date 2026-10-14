@@ -27,6 +27,7 @@ import pytest
 
 from alpaca_stub import StubState, alpaca_stub
 from conftest import make_bars
+from shadow_days import CODE_SHA, RUN_ID, SOURCE_ENV
 from tlab import shadow_job
 from tlab.core.clock import SimClock
 from tlab.core.types import Timeframe
@@ -67,6 +68,7 @@ def keys() -> dict[str, str]:
     return {
         "ALPACA_PAPER_API_KEY": MARKERS["api_key"],
         "ALPACA_PAPER_SECRET_KEY": MARKERS["secret"],
+        **SOURCE_ENV,
     }
 
 
@@ -197,9 +199,14 @@ def test_the_summary_carries_only_known_fields(
     serve_day(state)
     _, summary, _ = run_observe(base_url, root, tmp_path, start=OPEN - timedelta(minutes=40))
     assert summary is not None
+    assert set(summary) == shadow_job.DAY_HEAD | shadow_job.DAY_BODY
     assert set(summary) == {
         "day_schema",
         "day",
+        "campaign",
+        "run_id",
+        "run_attempt",
+        "code_sha",
         "status",
         "reason",
         "params_version",
@@ -211,6 +218,8 @@ def test_the_summary_carries_only_known_fields(
         "symbols",
     }
     assert summary["live_pure_mismatches"] == 0
+    assert summary["campaign"] == shadow_job.campaign_of(PLANNED, SYMBOLS, root)
+    assert (summary["run_id"], summary["run_attempt"], summary["code_sha"]) == (RUN_ID, 1, CODE_SHA)
 
 
 # --------------------------------------------------------------------------
@@ -596,11 +605,50 @@ def test_missing_keys_record_the_day_without_any_request(
 ) -> None:
     base_url, state = stub
     _, summary, _ = run_observe(
-        base_url, root, tmp_path, start=OPEN - timedelta(minutes=40), env={}
+        base_url, root, tmp_path, start=OPEN - timedelta(minutes=40), env=dict(SOURCE_ENV)
     )
     assert summary is not None
     assert (summary["status"], summary["reason"]) == (DAY_INCOMPLETE, "yapilandirma")
     assert state.requests == []
+
+
+@pytest.mark.parametrize(
+    "environment",
+    [
+        {},
+        {**SOURCE_ENV, "GITHUB_RUN_ID": ""},
+        {**SOURCE_ENV, "GITHUB_RUN_ID": "0"},
+        {**SOURCE_ENV, "GITHUB_RUN_ATTEMPT": "x"},
+        {**SOURCE_ENV, "GITHUB_SHA": "A" * 40},
+        {**SOURCE_ENV, "GITHUB_SHA": "a" * 39},
+    ],
+    ids=["hepsi-yok", "kosu-bos", "kosu-sifir", "deneme-metin", "sha-buyuk", "sha-kisa"],
+)
+def test_a_missing_source_identity_writes_no_summary(
+    environment: dict[str, str],
+    stub: tuple[str, StubState],
+    root: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Gun ozeti kaynak kosusunu tasimak zorunda: kimlik yoksa ozet
+    yazilmaz, istek gitmez (Codex 6172892558)."""
+    base_url, state = stub
+    without_source = {name: value for name, value in keys().items() if name not in SOURCE_ENV}
+    code, summary, _ = run_observe(
+        base_url,
+        root,
+        tmp_path,
+        start=OPEN - timedelta(minutes=40),
+        env={**without_source, **environment},
+    )
+    assert (code, summary) == (1, None)
+    assert "FAIL yapilandirma: kosu kimligi" in capsys.readouterr().out
+    assert state.requests == []
+    late = shadow_job.record_late(
+        environment, clock=SimClock(OPEN), out=tmp_path / "late.json", root=root, planned=PLANNED
+    )
+    assert late == 1 and not (tmp_path / "late.json").exists()
 
 
 def test_an_unplanned_day_does_nothing(
@@ -643,29 +691,157 @@ def test_the_planned_days_are_empty_until_the_execution_decision() -> None:
     assert shadow_job.PLANNED_DAYS == ()
 
 
+def test_an_unreadable_configuration_writes_no_summary(
+    stub: tuple[str, StubState], root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Kampanya kimligi evrene baglidir: yapilandirma okunamazsa gun
+    ozeti yazilmaz ve hic istek gitmez (toplamda kosu kaniti siniflar)."""
+    base_url, state = stub
+    (root / "config" / "base.yaml").unlink()
+    code, summary, _ = run_observe(base_url, root, tmp_path, start=OPEN - timedelta(minutes=40))
+    assert (code, summary) == (1, None)
+    assert "FAIL yapilandirma: kampanya kimligi" in capsys.readouterr().out
+    assert state.requests == []
+    late = shadow_job.record_late(
+        dict(SOURCE_ENV),
+        clock=SimClock(OPEN),
+        out=tmp_path / "late.json",
+        root=root,
+        planned=PLANNED,
+    )
+    assert late == 1
+    assert not (tmp_path / "late.json").exists()
+
+
+def test_the_campaign_follows_every_input(root: Path) -> None:
+    """Kimlik planli gunlere, evrene, esiklere, strateji ve sema surumlerine
+    ve uygulama parmak izine baglidir; sira ve tekrar dizilimi kimligi
+    degistirmez."""
+    from tlab.shadow import summary
+
+    base = shadow_job.campaign_of(PLANNED, SYMBOLS, root)
+    assert len(base) == 64 and int(base, 16) >= 0
+    assert shadow_job.campaign_of(PLANNED, tuple(reversed(SYMBOLS)), root) == base
+    assert shadow_job.campaign_of((DAY, date(2026, 1, 6)), SYMBOLS, root) == (
+        shadow_job.campaign_of((date(2026, 1, 6), DAY), SYMBOLS, root)
+    )
+    changed = {
+        "gun": shadow_job.campaign_of((date(2026, 1, 6),), SYMBOLS, root),
+        "evren": shadow_job.campaign_of(PLANNED, ("SPY",), root),
+    }
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(summary.Thresholds, "__init__", _thresholds_with(range_bps=6.0))
+        changed["esik"] = shadow_job.campaign_of(PLANNED, SYMBOLS, root)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(shadow_job, "DAY_SCHEMA", 2)
+        changed["gun semasi"] = shadow_job.campaign_of(PLANNED, SYMBOLS, root)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(summary, "SUMMARY_SCHEMA", 2)
+        changed["toplam semasi"] = shadow_job.campaign_of(PLANNED, SYMBOLS, root)
+    with pytest.MonkeyPatch.context() as patch:
+        from tlab.strategies import orb
+
+        patch.setattr(orb.ORBParams, "fingerprint", lambda _self: "baska")
+        changed["strateji"] = shadow_job.campaign_of(PLANNED, SYMBOLS, root)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(shadow_job, "implementation_fingerprint", lambda _root: "0" * 64)
+        changed["uygulama"] = shadow_job.campaign_of(PLANNED, SYMBOLS, root)
+    assert len({base, *changed.values()}) == len(changed) + 1, changed
+
+
+@pytest.mark.parametrize(
+    "relative",
+    ["config/base.yaml", "config/universe.yaml", *shadow_job.IMPLEMENTATION_ROOT_FILES],
+)
+def test_the_implementation_fingerprint_follows_every_frozen_file(
+    relative: str, root: Path
+) -> None:
+    """Parmak izi kararli; dondurulan kok dosyalarindan biri bir bayt
+    degisince degisir. Silinince: sabit kok dosyasi hata verir, `config`
+    dosyasi manifestten duser (yapilandirma zaten yuklenemez); iki
+    durumda da kampanya kimligi hesaplanamaz (Codex 6172892558)."""
+    base = shadow_job.implementation_fingerprint(root)
+    assert base == shadow_job.implementation_fingerprint(root)
+    assert len(base) == 64
+    target = root / relative
+    original = target.read_bytes()
+    target.write_bytes(original + b"\n# degisti\n")
+    assert shadow_job.implementation_fingerprint(root) != base
+    # Ayni boyutta baska icerik: parmak izi boyuta degil icerige bakar.
+    target.write_bytes(original[:-1] + bytes([original[-1] ^ 1]))
+    assert shadow_job.implementation_fingerprint(root) != base
+    target.unlink()
+    if relative.startswith("config/"):
+        assert shadow_job.implementation_fingerprint(root) != base
+    else:
+        with pytest.raises(FileNotFoundError):
+            shadow_job.implementation_fingerprint(root)
+    assert shadow_job._campaign(root, PLANNED) is None
+    target.write_bytes(original)
+    assert shadow_job.implementation_fingerprint(root) == base
+
+
+def test_the_implementation_fingerprint_covers_the_whole_package(root: Path) -> None:
+    """Paketin her `.py` dosyasi manifestte: dolayli bagimlilik (core/clock)
+    degisince de kimlik degisir. Gercek dosya degistirilmez; paket koku
+    gecici bir kopyaya cevrilir."""
+    import shutil
+
+    copy = root / "pkg"
+    shutil.copytree(shadow_job.PACKAGE_ROOT, copy, ignore=shutil.ignore_patterns("__pycache__"))
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(shadow_job, "PACKAGE_ROOT", copy)
+        base = shadow_job.implementation_fingerprint(root)
+        clock = copy / "core" / "clock.py"
+        clock.write_bytes(clock.read_bytes() + b"\n# degisti\n")
+        assert shadow_job.implementation_fingerprint(root) != base
+        (copy / "core" / "__pycache__").mkdir(exist_ok=True)
+        (copy / "core" / "__pycache__" / "x.pyc").write_bytes(b"x")
+        clock.write_bytes(clock.read_bytes().removesuffix(b"\n# degisti\n"))
+        assert shadow_job.implementation_fingerprint(root) == base, "derlenmis dosya sayilmaz"
+
+
+def _thresholds_with(**values: float) -> Any:
+    from tlab.shadow.summary import Thresholds
+
+    original = Thresholds.__init__
+
+    def init(self: Thresholds, *args: Any, **kwargs: Any) -> None:
+        original(self, *args, **{**values, **kwargs})
+
+    return init
+
+
 # --------------------------------------------------------------------------
 # Gec kayit ve toplam
 # --------------------------------------------------------------------------
 
 
-def test_the_late_record_writes_an_incomplete_day(tmp_path: Path) -> None:
+def test_the_late_record_writes_an_incomplete_day(tmp_path: Path, root: Path) -> None:
     out = tmp_path / "day.json"
     code = shadow_job.record_late(
-        {}, clock=SimClock(OPEN + timedelta(minutes=20)), out=out, planned=PLANNED
+        dict(SOURCE_ENV),
+        clock=SimClock(OPEN + timedelta(minutes=20)),
+        out=out,
+        root=root,
+        planned=PLANNED,
     )
     assert code == 0
     summary = json.loads(out.read_text(encoding="utf-8"))
     assert (summary["status"], summary["reason"]) == (DAY_INCOMPLETE, "gec baslangic")
+    assert summary["campaign"] == shadow_job.campaign_of(PLANNED, SYMBOLS, root)
+    assert (summary["run_id"], summary["run_attempt"], summary["code_sha"]) == (RUN_ID, 1, CODE_SHA)
+    assert set(summary) == shadow_job.DAY_HEAD
 
 
 @pytest.mark.parametrize("step", ["late", "aggregate"])
 def test_secret_free_steps_refuse_a_secret_environment(
     step: str, tmp_path: Path, root: Path
 ) -> None:
-    env = {"ALPACA_PAPER_API_KEY": "x"}
+    env = {"ALPACA_PAPER_API_KEY": "x", **SOURCE_ENV}
     if step == "late":
         code = shadow_job.record_late(
-            env, clock=SimClock(OPEN), out=tmp_path / "d.json", planned=PLANNED
+            env, clock=SimClock(OPEN), out=tmp_path / "d.json", root=root, planned=PLANNED
         )
     else:
         code = shadow_job.aggregate(
@@ -681,21 +857,23 @@ def test_the_aggregate_builds_the_total_from_day_summaries(
     serve_day(state)
     days = tmp_path / "days"
     days.mkdir()
-    run_observe(base_url, root, tmp_path, start=OPEN - timedelta(minutes=40))
-    (tmp_path / "day.json").rename(days / "2026-01-05.json")
     second = date(2026, 1, 6)
+    planned = (DAY, second, date(2026, 1, 7))
+    run_observe(base_url, root, tmp_path, start=OPEN - timedelta(minutes=40), planned=planned)
+    (tmp_path / "day.json").rename(days / "2026-01-05.json")
     shadow_job.record_late(
-        {},
+        {**SOURCE_ENV, "GITHUB_RUN_ID": "12"},
         clock=SimClock(datetime(2026, 1, 6, 15, 0, tzinfo=UTC)),
         out=days / "b.json",
-        planned=(DAY, second),
+        root=root,
+        planned=planned,
     )
     out = tmp_path / "total.json"
-    code = shadow_job.aggregate(
-        {}, days_dir=days, out=out, root=root, planned=(DAY, second, date(2026, 1, 7))
-    )
+    code = shadow_job.aggregate({}, days_dir=days, out=out, root=root, planned=planned)
     assert code == 0
     total = json.loads(out.read_text(encoding="utf-8"))
+    assert total["campaign"] == shadow_job.campaign_of(planned, SYMBOLS, root)
+    assert total["implementation"] == shadow_job.implementation_fingerprint(root)
     assert total["days"] == {"tamam": 1, "eksik": 1, "baslamadi": 0, "bilinmiyor": 1}
     completeness = total["total"]["iex_window_initial"]
     assert (completeness["numerator"], completeness["denominator"]) == (2, 6)
@@ -707,7 +885,11 @@ def test_the_aggregate_refuses_two_summaries_of_one_day(tmp_path: Path, root: Pa
     days.mkdir()
     for name in ("a.json", "b.json"):
         shadow_job.record_late(
-            {}, clock=SimClock(OPEN + timedelta(minutes=20)), out=days / name, planned=PLANNED
+            dict(SOURCE_ENV),
+            clock=SimClock(OPEN + timedelta(minutes=20)),
+            out=days / name,
+            root=root,
+            planned=PLANNED,
         )
     code = shadow_job.aggregate(
         {}, days_dir=days, out=tmp_path / "t.json", root=root, planned=PLANNED

@@ -46,6 +46,7 @@ SIGNAL_MISMATCH = "mismatch"
 """Yalnizca bir tarafta niyet var ya da yon/an uyusmuyor."""
 SIGNAL_UNKNOWN = "unknown"
 """Taraflardan birinin ilk niyeti bilinemiyor (eksik ya da okunamayan tur)."""
+SIGNALS = (SIGNAL_NONE, SIGNAL_MATCH, SIGNAL_MISMATCH, SIGNAL_UNKNOWN)
 
 RANGE_COMPUTED = "hesaplandi"
 """Iki pencere de o turda tam, payda gecerli: fark hesaplandi."""
@@ -62,6 +63,14 @@ RANGE_SIP_INCOMPLETE = "sip_eksik"
 """O turda SIP penceresi eksik: "iki pencere tamsa" sartini saglamaz; ayri sayilir."""
 RANGE_INVALID = "gecersiz_payda"
 """SIP araligi pozitif ve sonlu degil: `unknown`."""
+RANGE_STATUSES = (
+    RANGE_COMPUTED,
+    RANGE_IEX_INCOMPLETE,
+    RANGE_UNKNOWN,
+    RANGE_SIP_MISSING,
+    RANGE_SIP_INCOMPLETE,
+    RANGE_INVALID,
+)
 
 SYNTHETIC_ACCOUNT = Account(
     equity=100_000.0,

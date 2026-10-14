@@ -13,8 +13,24 @@ Sozlesme: docs/designs/shadow-observation.md. Adimlar:
     gunun ozetini yazar.
   * `late` (gec kayit isi) - secret'siz. Gunu `eksik (gec baslangic)`
     diye yazar.
+  * `collect` (toplam isi, indirme) - secret'siz, `actions: read`. Son
+    planli gunden sonra, kampanya basina BIR kez: gozlem kosularinin gun
+    ozeti artefaktlarini secer, indirir ve denetler (digest, tek elle
+    izlenen yonlendirme, Authorization tasinmaz, tek uyeli ZIP, alan
+    turleri).
   * `aggregate` (toplam) - secret'siz. Gunluk ozetlerden 20 gunluk
     ozeti kurar.
+
+Toplam kampanya basina birdir: onceki toplam kosulari artefakt adi,
+zaman ve adim kanitiyla kampanyaya baglanir; yeniden deneme yalnizca
+`TOTAL_RETRY_FILE` kaydiyla (parmak izi disinda, kampanya + kesin kosu).
+
+Her gun ozeti ve toplam KAMPANYA KIMLIGINI tasir (`campaign_of`): planli
+tarihler, evren, esikler, strateji surumu, sema surumleri ve uygulama
+parmak izinin (`implementation_fingerprint`) ozeti. Gun ozeti ayrica
+kaynak kosusunu (`run_id`, `run_attempt`, `code_sha`) tasir; toplam isi
+bunu API kosusuyla eslestirir. Baska kampanyanin ya da baska kosunun
+ciktisi toplama girmez.
 
 Log'a yalnizca sabit satirlar gider. Dongu islemleri fiyatla, kesiciyi
 yuzdeyle loglar; bu yuzden butun adimlar boyunca `logging` kapatilir
@@ -29,19 +45,24 @@ listeyle her gun plan disidir ve is hicbir sey yapmaz.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import io
 import json
+import math
 import os
+import re
 import shutil
 import sqlite3
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple, get_args, get_type_hints
 
 from tlab.core.clock import Clock, LiveClock
 from tlab.job_io import silenced, write_new
@@ -74,6 +95,109 @@ SIP_DELAY = timedelta(minutes=15)
 SIP_DEADLINE = timedelta(minutes=45)
 """Giris penceresi sonundan sonra SIP icin son sure."""
 SIP_POLL = timedelta(minutes=5)
+
+
+# --------------------------------------------------------------------------
+# Kampanya
+# --------------------------------------------------------------------------
+
+CAMPAIGN_PREFIX = 16
+"""Toplam artefaktinin adina giren kimlik hanesi: yalnizca arama anahtari.
+Gun ozetlerinde TAM kimlik karsilastirilir."""
+PACKAGE_ROOT = Path(__file__).resolve().parent
+IMPLEMENTATION_ROOT_FILES = (
+    "requirements.lock",
+    ".github/workflows/shadow-observation.yml",
+    ".github/workflows/shadow-aggregate.yml",
+)
+"""Parmak izine giren kok dosyalari. Paketin butun `.py` dosyalari (dolayli
+bagimliliklar dahil) ve `config/*.yaml` de girer."""
+SOURCE_ENV = ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_SHA")
+"""Gun ozetine yazilan kaynak kimligi; toplam isi API kosusuyla eslestirir."""
+_SHA40 = re.compile(r"[0-9a-f]{40}")
+
+
+class Campaign(NamedTuple):
+    identity: str
+    symbols: tuple[str, ...]
+    implementation: str
+
+
+def implementation_fingerprint(root: Path) -> str:
+    """Uygulama parmak izi: sirali dosya manifestinin SHA-256'si.
+
+    Paketin butun `.py` dosyalari, `config/*.yaml`, `requirements.lock` ve
+    iki golge workflow'u. Kampanya kimligine girer: ayni parametrelerle
+    degisen kod BASKA kampanyadir; gun ozetleri karismaz, toplam ancak
+    ayni uygulamayla kurulur (Codex 6172892558). Dondurma boylece kodla
+    zorlanir. Eksik dosya hatadir; `_campaign` sabit satirla yakalar.
+    Yeniden deneme kaydi (`TOTAL_RETRY_FILE`, JSON) bilincli olarak
+    DISARIDADIR: yetki olcumu degistirmez.
+    """
+    entries = [
+        (f"tlab/{path.relative_to(PACKAGE_ROOT).as_posix()}", path)
+        for path in PACKAGE_ROOT.rglob("*.py")
+    ]
+    entries += [(f"config/{path.name}", path) for path in (root / "config").glob("*.yaml")]
+    entries += [(name, root / name) for name in IMPLEMENTATION_ROOT_FILES]
+    manifest = hashlib.sha256()
+    for name, path in sorted(entries):
+        manifest.update(f"{name}\0{hashlib.sha256(path.read_bytes()).hexdigest()}\n".encode())
+    return manifest.hexdigest()
+
+
+def campaign_of(planned: Sequence[date], symbols: Sequence[str], root: Path) -> str:
+    """Kampanya kimligi: kanonik JSON'un SHA-256'si (64 onaltilik hane).
+
+    Icerik: planli tarihler, evren sembolleri, esikler (`Thresholds`),
+    strateji `params_version`, gun ve toplam sema surumleri ve uygulama
+    parmak izi. Biri degisirse kimlik de degisir: eski kampanyanin gun
+    ozeti yeni toplama girmez, yeni kampanyanin toplami eskisinin teklik
+    kanitina takilmaz.
+    """
+    from tlab.shadow.summary import SUMMARY_SCHEMA, Thresholds
+    from tlab.strategies.orb import OpeningRangeBreakout, ORBParams
+
+    content = {
+        "planned_days": sorted(day.isoformat() for day in planned),
+        "symbols": sorted(symbols),
+        "thresholds": asdict(Thresholds()),
+        "params_version": OpeningRangeBreakout(ORBParams()).params_version,
+        "day_schema": DAY_SCHEMA,
+        "summary_schema": SUMMARY_SCHEMA,
+        "implementation": implementation_fingerprint(root),
+    }
+    canonical = json.dumps(content, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _campaign(root: Path, planned: Sequence[date]) -> Campaign | None:
+    """Kimlik, evren ve parmak izi; yapilandirma okunamazsa sabit satir ve None."""
+    from tlab.config import load_config
+
+    try:
+        symbols = tuple(load_config(root).symbols)
+        return Campaign(
+            campaign_of(planned, symbols, root), symbols, implementation_fingerprint(root)
+        )
+    except Exception as exc:  # sinifi basilir; metni (yol, deger) basilmaz
+        print(f"FAIL yapilandirma: kampanya kimligi ({type(exc).__name__})")
+        return None
+
+
+def _source(env: Mapping[str, str]) -> tuple[int, int, str] | None:
+    """Kosu kimligi (run_id, run_attempt, code_sha); yoksa sabit satir ve None."""
+    run_id, attempt, sha = (env.get(name, "").strip() for name in SOURCE_ENV)
+    if (
+        run_id.isdigit()
+        and attempt.isdigit()
+        and int(run_id) > 0
+        and int(attempt) > 0
+        and _SHA40.fullmatch(sha)
+    ):
+        return int(run_id), int(attempt), sha
+    print("FAIL yapilandirma: kosu kimligi (GITHUB_RUN_ID, GITHUB_RUN_ATTEMPT, GITHUB_SHA)")
+    return None
 
 
 # --------------------------------------------------------------------------
@@ -202,7 +326,7 @@ def _single_page(payload: dict[str, Any], key: str, what: str) -> list[dict[str,
     return items
 
 
-def _api_json(url: str, token: str) -> dict[str, Any]:
+def _api_json(url: str, token: str, what: str = "kosu gecmisi") -> dict[str, Any]:
     parts = urllib.parse.urlsplit(url)
     if not (
         parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in LOOPBACK_HOSTS)
@@ -222,9 +346,9 @@ def _api_json(url: str, token: str) -> dict[str, Any]:
             body: bytes = response.read(MAX_API_BYTES + 1)
     except urllib.error.HTTPError as exc:
         exc.close()
-        raise GateError(f"kosu gecmisi okunamadi (HTTP {exc.code})") from None
+        raise GateError(f"{what} okunamadi (HTTP {exc.code})") from None
     except (urllib.error.URLError, OSError) as exc:
-        raise GateError(f"kosu gecmisi okunamadi ({type(exc).__name__})") from None
+        raise GateError(f"{what} okunamadi ({type(exc).__name__})") from None
     if len(body) > MAX_API_BYTES:
         raise GateError("API yaniti boyut sinirini asti")
     try:
@@ -261,15 +385,20 @@ def observe(
         if day not in planned:
             print("SKIP gozlem: plan disi gun")
             return 0
+        found = _campaign(root, planned)
+        source = _source(env)
+        if found is None or source is None:
+            return 1
+        campaign = found.identity
         if clock.now() > regular_open(day) - LAST_START:
             # Ilk denetim, ag yok: kapi pencerede gecmis olabilir ama bu is
             # kuyrukta acilisi kacirdi. Gecmis barla doldurulmaz.
             print("FAIL zamanlama: gec baslangic (is baslarken)")
-            return _write_day(out, day, "eksik", "gec baslangic", {})
+            return _write_day(out, day, campaign, source, "eksik", "gec baslangic", {})
         key, secret = (env.get(name, "").strip() for name in KEY_ENV)
         if not key or not secret:
             print("FAIL yapilandirma: paper anahtar ve secret gerekli")
-            return _write_day(out, day, "eksik", "yapilandirma", {})
+            return _write_day(out, day, campaign, source, "eksik", "yapilandirma", {})
         try:
             workdir.parent.mkdir(parents=True, exist_ok=True)
             workdir.mkdir()
@@ -292,7 +421,7 @@ def observe(
             status, reason, body = "eksik", f"beklenmeyen hata ({type(exc).__name__})", {}
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
-        return _write_day(out, day, status, reason, body)
+        return _write_day(out, day, campaign, source, status, reason, body)
 
 
 def _observe_day(
@@ -666,11 +795,22 @@ def _pure_intents(
 
 
 def _write_day(
-    out: Path, day: date, status: str, reason: str | None, body: Mapping[str, Any]
+    out: Path,
+    day: date,
+    campaign: str,
+    source: tuple[int, int, str],
+    status: str,
+    reason: str | None,
+    body: Mapping[str, Any],
 ) -> int:
+    run_id, run_attempt, code_sha = source
     payload = {
         "day_schema": DAY_SCHEMA,
         "day": day.isoformat(),
+        "campaign": campaign,
+        "run_id": run_id,
+        "run_attempt": run_attempt,
+        "code_sha": code_sha,
         "status": status,
         "reason": reason,
         **body,
@@ -690,7 +830,12 @@ def _write_day(
 
 
 def record_late(
-    env: Mapping[str, str], *, clock: Clock, out: Path, planned: Sequence[date] = PLANNED_DAYS
+    env: Mapping[str, str],
+    *,
+    clock: Clock,
+    out: Path,
+    root: Path,
+    planned: Sequence[date] = PLANNED_DAYS,
 ) -> int:
     """Gunu `eksik (gec baslangic)` diye yazar. Secret'li ortamda baslamaz."""
     with silenced():
@@ -701,7 +846,11 @@ def record_late(
         if day not in planned:
             print("SKIP gec kayit: plan disi gun")
             return 0
-        return _write_day(out, day, "eksik", "gec baslangic", {})
+        found = _campaign(root, planned)
+        source = _source(env)
+        if found is None or source is None:
+            return 1
+        return _write_day(out, day, found.identity, source, "eksik", "gec baslangic", {})
 
 
 # --------------------------------------------------------------------------
@@ -714,10 +863,19 @@ EVIDENCE_STEP = "adim"
 EVIDENCE_RECORDED = "kayitli"
 """Kayit isi atlanmamis bir kosu var; gun rezerve edildi ama adim kaniti yok."""
 EVIDENCE_NONE = "yok"
-"""Kosu gecmisi okundu; gunun butun kosularinda kayit isi atlandi ya da kosu yok."""
+"""Kosu gecmisi okundu; gunun kosulari var ve hepsinde kayit isi atlandi."""
+EVIDENCE_ABSENT = "kosu yok"
+"""Gunun HIC kosu kaydi yok. Silinmis kosu ile hic tetiklenmemis cron
+okunarak ayrilamaz: `baslamadi` DEGIL, `bilinmiyor` (Codex 6171961412)."""
 EVIDENCE_UNCLEAR = "belirsiz"
 """Kanit yetersiz: gecmis okunamadi, kayit isi listede yok ya da hala suruyor."""
-_EVIDENCE_RANK = {EVIDENCE_NONE: 0, EVIDENCE_UNCLEAR: 1, EVIDENCE_RECORDED: 2, EVIDENCE_STEP: 3}
+_EVIDENCE_RANK = {
+    EVIDENCE_ABSENT: 0,
+    EVIDENCE_NONE: 1,
+    EVIDENCE_UNCLEAR: 2,
+    EVIDENCE_RECORDED: 3,
+    EVIDENCE_STEP: 4,
+}
 """Birden cok kosuda en guclu kanit kazanir."""
 
 RECORD_STEPS = ("Gozle", "Gec kaydi yaz")
@@ -739,21 +897,21 @@ def aggregate(
 ) -> int:
     """Gunluk ozetler ve kosu gecmisinden toplam ozeti kurar (tasarim §6).
 
-    Ozet yoklugu `baslamadi` kaniti DEGILDIR. Ozeti olmayan gunun durumu
-    kosu ve is ust verisinden gelir:
+    Her gun ozeti once sozlesmeye gore denetlenir (`_parse_day`); biri
+    uymazsa toplam yazilmaz. Ozet yoklugu `baslamadi` kaniti DEGILDIR.
+    Ozeti olmayan gunun durumu kosu ve is ust verisinden gelir:
 
       * kayit adimi gercekten kostu: `eksik (kayit adimi kostu, ozet yok)`;
       * kayit isi atlanmamis kosu var ama adim kaniti yok (kuyruk, kurulum
         ya da iptal): `eksik (kosu var, ozet yok)`. Gun rezerve edildi;
         "basladi" denmez;
-      * gecmis okundu, boyle kosu yok: `baslamadi`;
+      * gunun kosulari okundu ve hepsinde kayit isi atlandi: `baslamadi`;
+      * gunun hic kosu kaydi yok: `bilinmiyor (kosu kaydi yok)`;
       * gecmis okunamadi, kayit isi suruyor ya da kanit yetersiz:
         `bilinmiyor`.
 
     Secret'li (Alpaca) ortamda baslamaz.
     """
-    from tlab.config import load_config
-    from tlab.shadow.core import Comparison
     from tlab.shadow.summary import (
         DAY_INCOMPLETE,
         DAY_NOT_STARTED,
@@ -768,42 +926,52 @@ def aggregate(
         if any(name.startswith(SECRET_ENV_PREFIXES) for name in env):
             print("FAIL yapilandirma: toplam isi secret'siz calisir")
             return 1
-        symbols = list(load_config(root).symbols)
+        found = _campaign(root, planned)
+        if found is None:
+            return 1
+        campaign, symbols, implementation = found
         days: list[Day] = []
         results: list[SymbolDay] = []
-        fields = set(Comparison.__dataclass_fields__)
         try:
             for path in sorted(days_dir.rglob("*.json")):
-                payload = json.loads(path.read_text(encoding="utf-8"))
-                if payload.get("day_schema") != DAY_SCHEMA:
-                    raise ValueError("gunluk ozet semasi tanimsiz")
-                day = date.fromisoformat(payload["day"])
-                if any(known.day == day for known in days):
-                    raise ValueError("ayni gunun iki ozeti var")
-                days.append(Day(day, payload["status"], payload["reason"]))
-                for item in payload.get("symbols", []):
-                    comparison = Comparison(**{key: item[key] for key in fields})
-                    results.append(
-                        SymbolDay(day, comparison.symbol, comparison, bool(item["sip_available"]))
-                    )
-        except (OSError, ValueError, KeyError, TypeError) as exc:
+                parsed = _parse_day(
+                    json.loads(path.read_text(encoding="utf-8")),
+                    campaign=campaign,
+                    symbols=symbols,
+                    planned=planned,
+                )
+                if any(known.day == parsed.day for known in days):
+                    raise DaySummaryError("ayni gunun iki ozeti var")
+                days.append(Day(parsed.day, parsed.status, parsed.reason))
+                results.extend(
+                    SymbolDay(parsed.day, comparison.symbol, comparison, sip_available)
+                    for comparison, sip_available in parsed.symbols
+                )
+        except DaySummaryError as exc:
+            print(f"FAIL toplam: {exc}")
+            return 1
+        except (OSError, ValueError, RecursionError) as exc:
             print(f"FAIL toplam: gunluk ozetler okunamadi ({type(exc).__name__})")
             return 1
 
         missing = [day for day in planned if not any(known.day == day for known in days)]
         evidence = _evidence_for(env, planned) if missing else {}
         for day in missing:
-            found = evidence.get(day, EVIDENCE_UNCLEAR)
-            if found == EVIDENCE_STEP:
+            kind = evidence.get(day, EVIDENCE_UNCLEAR)
+            if kind == EVIDENCE_STEP:
                 days.append(Day(day, DAY_INCOMPLETE, "kayit adimi kostu, ozet yok"))
-            elif found == EVIDENCE_RECORDED:
+            elif kind == EVIDENCE_RECORDED:
                 days.append(Day(day, DAY_INCOMPLETE, "kosu var, ozet yok"))
-            elif found == EVIDENCE_NONE:
+            elif kind == EVIDENCE_NONE:
                 days.append(Day(day, DAY_NOT_STARTED, "gozlem baslamadi"))
+            elif kind == EVIDENCE_ABSENT:
+                days.append(Day(day, DAY_UNKNOWN, "kosu kaydi yok"))
             else:
                 days.append(Day(day, DAY_UNKNOWN, "kanit yetersiz"))
         try:
             summary = summarize(planned, symbols, days, results, Thresholds())
+            summary["campaign"] = campaign
+            summary["implementation"] = implementation
             write_new(out, (json.dumps(summary, indent=2, sort_keys=True) + "\n").encode())
         except (OSError, ValueError) as exc:
             print(f"FAIL toplam yazilamadi ({type(exc).__name__})")
@@ -827,20 +995,8 @@ def _evidence_for(env: Mapping[str, str], planned: Sequence[date]) -> dict[date,
 
 def _day_evidence(api: str, repo: str, token: str, planned: Sequence[date]) -> dict[date, str]:
     """Her planli gun icin kosu ve is ust verisinden kanit (tasarim §6)."""
-    first, last = min(planned), max(planned)
-    query = urllib.parse.urlencode(
-        {
-            "created": f"{(first - timedelta(days=1)).isoformat()}"
-            f"..{(last + timedelta(days=1)).isoformat()}",
-            "per_page": str(PAGE_SIZE),
-        }
-    )
-    runs = _single_page(
-        _api_json(f"{api}/repos/{repo}/actions/workflows/{WORKFLOW_FILE}/runs?{query}", token),
-        "workflow_runs",
-        "kosu listesi",
-    )
-    evidence = dict.fromkeys(planned, EVIDENCE_NONE)
+    runs = _observation_runs(api, repo, token, planned)
+    evidence = dict.fromkeys(planned, EVIDENCE_ABSENT)
     for run in runs:
         try:
             identifier = int(run["id"])
@@ -865,6 +1021,25 @@ def _day_evidence(api: str, repo: str, token: str, planned: Sequence[date]) -> d
     return evidence
 
 
+def _observation_runs(
+    api: str, repo: str, token: str, planned: Sequence[date]
+) -> list[dict[str, Any]]:
+    """Planli gunleri (bir gun payla) kapsayan gozlem kosulari; tek sayfa."""
+    first, last = min(planned), max(planned)
+    query = urllib.parse.urlencode(
+        {
+            "created": f"{(first - timedelta(days=1)).isoformat()}"
+            f"..{(last + timedelta(days=1)).isoformat()}",
+            "per_page": str(PAGE_SIZE),
+        }
+    )
+    return _single_page(
+        _api_json(f"{api}/repos/{repo}/actions/workflows/{WORKFLOW_FILE}/runs?{query}", token),
+        "workflow_runs",
+        "kosu listesi",
+    )
+
+
 def _run_evidence(record: list[dict[str, Any]]) -> str:
     """Bir kosunun kayit isi kaydindan kanit."""
     if not record:
@@ -887,6 +1062,717 @@ def _run_evidence(record: list[dict[str, Any]]) -> str:
     return EVIDENCE_RECORDED
 
 
+# --------------------------------------------------------------------------
+# Gun ozeti sozlesmesi
+# --------------------------------------------------------------------------
+
+
+class DaySummaryError(ValueError):
+    """Gun ozeti sozlesmeye uymuyor. Metin SABIT: deger tasimaz."""
+
+
+DAY_HEAD = frozenset(
+    {"day_schema", "day", "campaign", "run_id", "run_attempt", "code_sha", "status", "reason"}
+)
+"""Her gun ozetinde bulunan alanlar: kimlik (kampanya, kosu, kod) ve durum."""
+DAY_BODY = frozenset(
+    {
+        "params_version",
+        "clock_consistent",
+        "turns",
+        "symbol_turns",
+        "sip_reasons",
+        "live_pure_mismatches",
+        "symbols",
+    }
+)
+"""Gozlem govdesi. Tamamlanan gunde hepsi zorunlu; eksik gunde bulunanlar
+denetlenir."""
+TURN_KEYS = ("expected", "called", "failed", "missed")
+SYMBOL_TURN_KEYS = ("expected", "observed")
+COUNT_FIELDS = ("window_expected", "iex_present", "sip_present", "iex_unknown_turns")
+"""Karsilastirmanin sayac alanlari: negatif olamaz."""
+
+
+class ParsedDay(NamedTuple):
+    day: date
+    status: str
+    reason: str | None
+    symbols: list[tuple[Any, bool]]
+    """(Comparison, sip_available) ciftleri."""
+    run_id: int
+    run_attempt: int
+    code_sha: str
+
+
+def _parse_day(
+    payload: Any, *, campaign: str, symbols: Sequence[str], planned: Sequence[date]
+) -> ParsedDay:
+    """Gun ozetini tur ve tutarlilik bakimindan denetler (tasarim §6).
+
+    Her sapma `DaySummaryError`dir: ozet sessizce dusurulmez, butun
+    toplama durur. Beklenen tur ve pencere sayilari sabit stratejiden
+    turetilir; `params_version` kampanyaninkine esit olmali (Codex
+    6175607709). Tamamlanan gun sayaclarla tutarli olmalidir: kacan ya da
+    hatali tur yok, butun sembol-turlar gozlendi, canli-saf tutarsizligi
+    yok, evrenin her sembolu SIP'li (SIP sebebi yoklugu bundan cikar:
+    sebep anahtarlari SIP'siz sembollerle birebir).
+    """
+    from tlab.shadow.summary import DAY_COMPLETE, DAY_INCOMPLETE
+    from tlab.strategies.orb import OpeningRangeBreakout, ORBParams
+
+    params = ORBParams()
+    expected_turns = params.entry_window_minutes - params.opening_range_minutes + 1
+
+    if not isinstance(payload, dict):
+        raise DaySummaryError("gun ozeti beklenen bicimde degil")
+    keys = set(payload)
+    if not keys >= DAY_HEAD or not keys <= DAY_HEAD | DAY_BODY:
+        raise DaySummaryError("gun ozetinin alanlari beklenen kumede degil")
+    if not _typed(payload["day_schema"], int) or payload["day_schema"] != DAY_SCHEMA:
+        raise DaySummaryError("gun ozeti semasi tanimsiz")
+    raw_day = payload["day"]
+    try:
+        day = date.fromisoformat(raw_day)
+    except (TypeError, ValueError):
+        raise DaySummaryError("gun ozetinin gunu bicimsiz") from None
+    if day.isoformat() != raw_day:
+        raise DaySummaryError("gun ozetinin gunu bicimsiz")
+    if day not in planned:
+        raise DaySummaryError("gun ozetinin gunu planda yok")
+    if payload["campaign"] != campaign:
+        raise DaySummaryError("gun ozeti baska kampanyanin")
+    run_id, attempt, sha = payload["run_id"], payload["run_attempt"], payload["code_sha"]
+    if not (_typed(run_id, int) and run_id > 0 and _typed(attempt, int) and attempt == 1):
+        raise DaySummaryError("gun ozetinin kosu kimligi beklenen bicimde degil")
+    if not (isinstance(sha, str) and _SHA40.fullmatch(sha)):
+        raise DaySummaryError("gun ozetinin kod kimligi beklenen bicimde degil")
+    status, reason = payload["status"], payload["reason"]
+    if status == DAY_COMPLETE:
+        consistent = reason is None
+    elif status == DAY_INCOMPLETE:
+        consistent = isinstance(reason, str) and bool(reason)
+    else:
+        raise DaySummaryError("gun durumu tanimsiz")
+    if not consistent:
+        raise DaySummaryError("gun durumu ve sebebi tutarsiz")
+
+    if "params_version" in payload:
+        if not isinstance(payload["params_version"], str):
+            raise DaySummaryError("strateji surumu beklenen bicimde degil")
+        if payload["params_version"] != OpeningRangeBreakout(params).params_version:
+            raise DaySummaryError("strateji surumu kampanyayla uyusmuyor")
+    if "clock_consistent" in payload and not _typed(payload["clock_consistent"], bool | None):
+        raise DaySummaryError("saat denetimi beklenen bicimde degil")
+    turns = _counts(payload, "turns", TURN_KEYS)
+    if turns and turns["expected"] != expected_turns:
+        raise DaySummaryError("tur sayaclari stratejiyle uyusmuyor")
+    if turns and turns["called"] + turns["failed"] + turns["missed"] != turns["expected"]:
+        raise DaySummaryError("tur sayaclari tutarsiz")
+    symbol_turns = _counts(payload, "symbol_turns", SYMBOL_TURN_KEYS)
+    if symbol_turns and symbol_turns["expected"] != expected_turns * len(symbols):
+        raise DaySummaryError("sembol-tur sayaclari stratejiyle uyusmuyor")
+    if symbol_turns and symbol_turns["observed"] > symbol_turns["expected"]:
+        raise DaySummaryError("sembol-tur sayaclari tutarsiz")
+    sip_reasons = payload.get("sip_reasons", {})
+    if not isinstance(sip_reasons, dict) or not all(
+        name in symbols and isinstance(text, str) for name, text in sip_reasons.items()
+    ):
+        raise DaySummaryError("SIP sebepleri beklenen bicimde degil")
+    mismatches = payload.get("live_pure_mismatches", 0)
+    if not _is_count(mismatches):
+        raise DaySummaryError("canli-saf sayaci beklenen bicimde degil")
+    items = payload.get("symbols", [])
+    if not isinstance(items, list):
+        raise DaySummaryError("sembol sonuclari beklenen bicimde degil")
+    parsed = [_parse_symbol(item, symbols, params, expected_turns) for item in items]
+    names = [comparison.symbol for comparison, _ in parsed]
+    if len(set(names)) != len(names):
+        raise DaySummaryError("bir sembol iki kez raporlandi")
+    if set(sip_reasons) != {comparison.symbol for comparison, sip in parsed if not sip}:
+        raise DaySummaryError("SIP sebepleri SIP'siz sembollerle uyusmuyor")
+
+    if status == DAY_COMPLETE and not (
+        keys == DAY_HEAD | DAY_BODY
+        and turns["failed"] == turns["missed"] == 0
+        and symbol_turns["observed"] == symbol_turns["expected"]
+        and mismatches == 0
+        and set(names) == set(symbols)
+        and all(sip_available for _, sip_available in parsed)
+    ):
+        raise DaySummaryError("tamamlanan gun sayaclarla tutarsiz")
+    return ParsedDay(day, status, reason, parsed, run_id, attempt, sha)
+
+
+def _parse_symbol(
+    item: Any, symbols: Sequence[str], params: Any, expected_turns: int
+) -> tuple[Any, bool]:
+    """Bir sembol sonucu: alanlar `Comparison` + `sip_available`, turleriyle.
+
+    Tutarlilik `compare_symbol_day`in uretebildigi birlesimlerdir: pencere
+    sayaclari stratejinin penceresini asmaz, SIP penceresi IEX'siz
+    sayilmaz, gecikmeli tamlik eksik pencere ister, aralik farki yalnizca
+    `hesaplandi` ile gelir, ilk niyet dakikasi planli pencerede, sinyal ilk
+    niyet dakikalariyla uyumlu, SIP'siz sembolde SIP'e dayanan alan yok.
+    """
+    from tlab.shadow.core import (
+        RANGE_COMPUTED,
+        RANGE_IEX_INCOMPLETE,
+        RANGE_SIP_MISSING,
+        RANGE_STATUSES,
+        RANGE_UNKNOWN,
+        SIGNAL_MATCH,
+        SIGNAL_MISMATCH,
+        SIGNAL_NONE,
+        SIGNAL_UNKNOWN,
+        SIGNALS,
+        Comparison,
+    )
+
+    hints = get_type_hints(Comparison)
+    if not isinstance(item, dict) or set(item) != set(hints) | {"sip_available"}:
+        raise DaySummaryError("sembol sonucunun alanlari beklenen kumede degil")
+    if not all(_typed(item[name], hint) for name, hint in hints.items()) or not _typed(
+        item["sip_available"], bool
+    ):
+        raise DaySummaryError("sembol sonucunun turleri beklenen gibi degil")
+    if item["symbol"] not in symbols:
+        raise DaySummaryError("sembol kampanya evreninde yok")
+    if item["range_status"] not in RANGE_STATUSES or item["signal"] not in SIGNALS:
+        raise DaySummaryError("sembol sonucunun durumu tanimsiz")
+    if any(item[name] is not None and item[name] < 0 for name in COUNT_FIELDS):
+        raise DaySummaryError("sembol sonucunda negatif sayac")
+    window = params.opening_range_minutes
+    present = (item["iex_present"], item["sip_present"])
+    if item["window_expected"] != window or any(p is not None and p > window for p in present):
+        raise DaySummaryError("pencere sayaclari stratejiyle uyusmuyor")
+    if present[1] is not None and present[0] is None:
+        raise DaySummaryError("SIP penceresi IEX penceresi olmadan sayilmaz")
+    if item["iex_completed_later"] and not (present[0] is not None and present[0] < window):
+        raise DaySummaryError("gecikmeli tamlik eksik pencere gerektirir")
+    if item["iex_unknown_turns"] > expected_turns:
+        raise DaySummaryError("bilinmeyen tur sayisi planli turlari asiyor")
+    computed = item["range_status"] == RANGE_COMPUTED
+    if (item["or_high_bps"] is not None, item["or_low_bps"] is not None) != (computed, computed):
+        raise DaySummaryError("aralik durumu ve farklari tutarsiz")
+    firsts = (item["iex_first_minute"], item["sip_first_minute"])
+    if any(m is not None and not window <= m < params.entry_window_minutes + 1 for m in firsts):
+        raise DaySummaryError("ilk niyet dakikasi planli pencerenin disinda")
+    signal, both, neither = item["signal"], None not in firsts, firsts == (None, None)
+    if (
+        (signal == SIGNAL_MATCH and not both)
+        or (signal == SIGNAL_NONE and not neither)
+        or (signal == SIGNAL_MISMATCH and neither)
+    ):
+        raise DaySummaryError("sinyal ve ilk niyet dakikalari tutarsiz")
+    if not item["sip_available"] and (
+        present[1] is not None
+        or firsts[1] is not None
+        or signal != SIGNAL_UNKNOWN
+        or item["range_status"] not in (RANGE_SIP_MISSING, RANGE_UNKNOWN, RANGE_IEX_INCOMPLETE)
+    ):
+        raise DaySummaryError("SIP'siz sembolde SIP'e dayanan alan var")
+    return Comparison(**{name: item[name] for name in hints}), item["sip_available"]
+
+
+def _typed(value: Any, hint: Any) -> bool:
+    """JSON degeri alan turune uyuyor mu. bool tamsayi sayilmaz; tamsayi
+    ondalik alana uyar; ondalik sonlu olmali."""
+    options = get_args(hint) or (hint,)
+    if value is None:
+        return type(None) in options
+    if isinstance(value, bool):
+        return bool in options
+    if isinstance(value, int):
+        return int in options or float in options
+    if isinstance(value, float):
+        return float in options and math.isfinite(value)
+    if isinstance(value, str):
+        return str in options
+    return False
+
+
+def _is_count(value: Any) -> bool:
+    return _typed(value, int) and value >= 0
+
+
+def _counts(payload: dict[str, Any], key: str, names: tuple[str, ...]) -> dict[str, int]:
+    """Sayac sozlugu: tam olarak `names`, negatif olmayan tamsayilar. Yoksa bos."""
+    if key not in payload:
+        return {}
+    value = payload[key]
+    if (
+        not isinstance(value, dict)
+        or set(value) != set(names)
+        or not all(_is_count(value[name]) for name in names)
+    ):
+        raise DaySummaryError(f"{key} beklenen bicimde degil")
+    return value
+
+
+# --------------------------------------------------------------------------
+# Toplam isi: gun ozetlerini indirme
+# --------------------------------------------------------------------------
+
+AGGREGATE_WORKFLOW_FILE = "shadow-aggregate.yml"
+TOTAL_JOB = "total"
+TOTAL_STEPS = ("Indir", "Topla")
+"""Toplam isinin indirme ve toplam adimlari (workflow adim adlari; mimari
+test baglar). Sonraki toplam kosusu bunlarin sonucunu kanit olarak okur."""
+TOTAL_RETRY_FILE = "config/shadow-total-retry.json"
+"""Yeniden deneme yetkisi kaydi: `{"campaign": <tam kimlik>, "failed_run":
+<kosu kimligi>, "decision": "#17/<yorum>"}`. Parmak izinin BILINCLI olarak
+disindadir (yalnizca `config/*.yaml` girer): bu dosyayi degistiren karar
+PR'i kampanya kimligini degistirmez, mevcut gunlukler gecerli kalir.
+Yetki yalnizca o kampanyanin O basarisiz kosusunu kanit disi birakir;
+baska kampanyanin kaydi isi durdurur (Codex 6177175728)."""
+OBSERVATION_SOURCE = ("main", "schedule", f".github/workflows/{WORKFLOW_FILE}", 1)
+"""Gun ozeti alinan kosu: `main` dali, zamanlanmis tetik, gozlem workflow'u,
+ilk deneme (`head_branch`, `event`, `path`, `run_attempt`)."""
+DAY_ARTIFACT = "shadow-day"
+DAY_FILE = "shadow-day.json"
+"""Kayit isinin yukledigi TEK dosya (workflow `Gun ozetini yukle`)."""
+TOTAL_ARTIFACT = "shadow-total"
+"""Toplam artefaktinin ad koku: `shadow-total-<kampanya kimliginin ilk 16 hanesi>`."""
+DIGEST_PREFIX = "sha256:"
+MAX_ZIP_BYTES = 1_000_000
+MAX_DAY_BYTES = 1_000_000
+REDIRECT_CODES = frozenset({301, 302, 303, 307, 308})
+COLLECT_ENV = ("GITHUB_API_URL", "GITHUB_REPOSITORY", "GITHUB_RUN_ID", "GH_TOKEN")
+
+
+def total_artifact(campaign: str) -> str:
+    return f"{TOTAL_ARTIFACT}-{campaign[:CAMPAIGN_PREFIX]}"
+
+
+def collect(
+    env: Mapping[str, str],
+    *,
+    clock: Clock,
+    days_dir: Path,
+    root: Path,
+    output: Path,
+    planned: Sequence[date] = PLANNED_DAYS,
+) -> int:
+    """Gozlem kosularinin gun ozetlerini `days_dir`e indirir; basariliysa 0.
+
+    Toplam kampanya basina BIR kez uretilir (tasarim §6). Hicbir gozlem
+    artefakti indirilmeden is kirmizi biter:
+
+      * New York tarihi son planli gunden sonra degilse;
+      * yeniden deneme kosusunda;
+      * bu kosudan once olusturulmus bir toplam kosusu henuz bitmediyse,
+        BU kampanya icin toplam adimi kostuysa (cikti yok ya da silinmis
+        olsa da) ya da kaynagi belirsizse (`_prior_total_blocks`);
+        `Indir`de duran bos, erken ya da reddedilmis kosu ve kanitli
+        baska kampanyanin kosusu engel degildir; kayitli tekrar yetkisi
+        (`TOTAL_RETRY_FILE`) yalnizca o kosuyu disarida birakir;
+      * bu kampanyanin toplam artefakti depoda varsa (suresi dolmus
+        olsa da);
+      * planli gunun bir gozlem kosusu henuz bitmediyse.
+
+    Gun ozetinin kaynagi (`run_id`, `run_attempt`, `code_sha`) API
+    kosusuyla eslesmeli; kampanya kimligi uygulama parmak izini tasir.
+
+    Okunamayan ya da tek sayfayi asan liste, eksik ya da uyusmaz digest,
+    beklenmeyen ZIP ya da sozlesmeye uymayan gun ozeti KISMI toplam
+    yazdirmaz: is kirmizi biter. Suresi dolmus artefakt ve secilmeyen
+    kosu atlanir; o gunun durumu toplamda kosu kanitiyla belirlenir.
+    Basarida `output`a `campaign=<ilk 16 hane>` yazilir (yukleme adi).
+    """
+    with silenced():
+        if any(name.startswith(SECRET_ENV_PREFIXES) for name in env):
+            print("FAIL yapilandirma: toplam isi secret'siz calisir")
+            return 1
+        if not planned:
+            print("FAIL toplam: planli gun yok")
+            return 1
+        # session_day_of: America/New_York takvim gunu (tlab.shadow.schedule).
+        if session_day_of(clock.now()) <= max(planned):
+            print("FAIL toplam: son planli gun henuz bitmedi (New York tarihi)")
+            return 1
+        api, repo, run_id, token = (env.get(name, "").strip() for name in COLLECT_ENV)
+        if not (api and repo and run_id and token):
+            print("FAIL yapilandirma: Actions API ortami eksik")
+            return 1
+        if env.get("GITHUB_RUN_ATTEMPT", "1") != "1":
+            print("FAIL toplam: yeniden deneme kosusu (ayri karar gerekir)")
+            return 1
+        found = _campaign(root, planned)
+        if found is None:
+            return 1
+        campaign, symbols = found.identity, found.symbols
+        try:
+            retry = _retry_authorisation(root, campaign)
+            blocker = _prior_total_blocks(
+                api, repo, run_id, token, campaign=campaign, planned=planned, retry=retry
+            )
+            if blocker is not None:
+                print(f"FAIL toplam: {blocker}")
+                return 1
+            if _artifact_exists(api, repo, token, total_artifact(campaign)):
+                print("FAIL toplam: bu kampanyanin toplami daha once uretildi")
+                return 1
+            written = _download_days(
+                api, repo, token, planned, days_dir, campaign=campaign, symbols=symbols
+            )
+        except GateError as exc:
+            print(f"FAIL toplam: {exc}")
+            return 1
+        try:
+            with output.open("a", encoding="utf-8") as handle:
+                handle.write(f"campaign={campaign[:CAMPAIGN_PREFIX]}\n")
+        except OSError as exc:
+            print(f"FAIL toplam: adim ciktisi yazilamadi ({type(exc).__name__})")
+            return 1
+        print(f"OK toplam: kampanya {campaign[:CAMPAIGN_PREFIX]}, {written} gun ozeti indirildi")
+        return 0
+
+
+def _retry_authorisation(root: Path, campaign: str) -> int | None:
+    """Kayitli tekrar yetkisi: bu kampanyanin kanit disi birakilan kosusu.
+
+    Dosya yoksa None. Biciminde degilse ya da baska kampanyaya aitse
+    `GateError`: eski kayit yeni kampanyada birakilamaz.
+    """
+    path = root / TOTAL_RETRY_FILE
+    if not path.exists():
+        return None
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise GateError("tekrar kaydi beklenen bicimde degil") from None
+    if (
+        not isinstance(record, dict)
+        or set(record) != {"campaign", "failed_run", "decision"}
+        or not isinstance(record["campaign"], str)
+        or not _is_count(record["failed_run"])
+        or record["failed_run"] == 0
+        or not isinstance(record["decision"], str)
+        or not record["decision"]
+    ):
+        raise GateError("tekrar kaydi beklenen bicimde degil")
+    if record["campaign"] != campaign:
+        raise GateError("tekrar kaydi baska kampanyanin")
+    failed_run: int = record["failed_run"]
+    return failed_run
+
+
+def _prior_total_blocks(
+    api: str,
+    repo: str,
+    run_id: str,
+    token: str,
+    *,
+    campaign: str,
+    planned: Sequence[date],
+    retry: int | None,
+) -> str | None:
+    """Bu kosudan ONCE olusturulmus toplam kosularinin kaniti; engel sebebi ya da None.
+
+    Teklik kampanyaya baglidir, workflow omrune degil (Codex 6171961412,
+    6177175728). Bitmis her onceki kosu icin sirayla:
+
+      1. kosu bitmemis: engel (suruyor; eszamanlilik);
+      2. kayitli tekrar yetkisi bu kosuyu gosteriyorsa: kanit disi;
+      3. kosunun `shadow-total-*` artefakti varsa (suresi dolmus dahil):
+         bu kampanyanin onekiyle engel; baska onekle kanit degil;
+      4. artefakti yok ve kosu bu kampanyanin son planli gununden once ya
+         da o gun (New York) olusturulmussa: bu kampanyanin toplami
+         olamaz (`collect` o tarihte reddederdi); kanit degil;
+      5. artefakti yok ve son planli gunden sonra: kaynagi belirsiz, adim
+         kaniti okunur (Codex 6175607709):
+           * `total` isi listede yok ya da adimlari okunamiyor: engel;
+           * `Topla` kostu (`success`/`failure`): engel; upload hatasi ve
+             silinmis artefakt burada yakalanir;
+           * `Topla` atlandi ve `Indir` `failure`/`skipped`: engel degil
+             (bos, erken, ret ya da indirme hatasi; cikti uretilmedi);
+           * baska her birlesim (iptal, sonucsuz): engel (belirsiz).
+    """
+    try:
+        current = int(run_id)
+    except ValueError:
+        raise GateError("kosu kimligi bicimsiz") from None
+    prefix = total_artifact(campaign)
+    last_day = max(planned)
+    runs = _single_page(
+        _api_json(
+            f"{api}/repos/{repo}/actions/workflows/{AGGREGATE_WORKFLOW_FILE}/runs"
+            f"?per_page={PAGE_SIZE}",
+            token,
+            "toplam kosu listesi",
+        ),
+        "workflow_runs",
+        "toplam kosu listesi",
+    )
+    for run in runs:
+        try:
+            identifier = int(run["id"])
+            created = datetime.fromisoformat(str(run["created_at"]).replace("Z", "+00:00"))
+        except (KeyError, TypeError, ValueError):
+            raise GateError("kosu kaydi beklenen bicimde degil") from None
+        if identifier >= current:
+            continue
+        if run.get("status") != "completed":
+            return "onceki toplam kosusu suruyor"
+        if identifier == retry:
+            continue  # kayitli tekrar yetkisi: yalnizca bu kosu
+        totals = [
+            str(item.get("name", ""))
+            for item in _single_page(
+                _api_json(
+                    f"{api}/repos/{repo}/actions/runs/{identifier}/artifacts?per_page={PAGE_SIZE}",
+                    token,
+                    "artefakt listesi",
+                ),
+                "artifacts",
+                "artefakt listesi",
+            )
+            if str(item.get("name", "")).startswith(TOTAL_ARTIFACT + "-")
+        ]
+        if totals:
+            if prefix in totals:
+                return "bu kampanyanin toplami daha once uretildi"
+            continue  # kanitli baska kampanya
+        if session_day_of(created) <= last_day:
+            continue  # bu kampanyanin toplami olamaz: son planli gun gecmemisti
+        jobs = _single_page(
+            _api_json(
+                f"{api}/repos/{repo}/actions/runs/{identifier}/jobs"
+                f"?filter=all&per_page={PAGE_SIZE}",
+                token,
+                "toplam is listesi",
+            ),
+            "jobs",
+            "toplam is listesi",
+        )
+        total = [job for job in jobs if job.get("name") == TOTAL_JOB]
+        if not total:
+            return "onceki toplam kosusunun kaniti yok"
+        for job in total:
+            if job.get("conclusion") == "skipped" and job.get("status") == "completed":
+                continue  # is hic kosmadi (ornegin main disi dal)
+            if job.get("status") != "completed":
+                return "onceki toplam kosusu suruyor"
+            steps = job.get("steps")
+            if not isinstance(steps, list) or not all(isinstance(step, dict) for step in steps):
+                return "onceki toplam kosusunun kaniti okunamadi"
+            found = {
+                step.get("name"): step.get("conclusion")
+                for step in steps
+                if step.get("name") in TOTAL_STEPS
+            }
+            if set(found) != set(TOTAL_STEPS):
+                return "onceki toplam kosusunun kaniti okunamadi"
+            collected, totaled = (found[name] for name in TOTAL_STEPS)
+            if totaled in STEP_RAN:
+                return "onceki toplam adimi kostu (cikti yok ya da silinmis)"
+            if totaled == "skipped" and collected in ("failure", "skipped"):
+                continue
+            return "onceki toplam kosusu belirsiz"
+    return None
+
+
+def _artifact_exists(api: str, repo: str, token: str, name: str) -> bool:
+    """Depoda bu adda artefakt var mi; suresi dolmus olanlar da listelenir."""
+    query = urllib.parse.urlencode({"name": name, "per_page": str(PAGE_SIZE)})
+    items = _single_page(
+        _api_json(f"{api}/repos/{repo}/actions/artifacts?{query}", token, "artefakt listesi"),
+        "artifacts",
+        "artefakt listesi",
+    )
+    return any(item.get("name") == name for item in items)
+
+
+def _download_days(
+    api: str,
+    repo: str,
+    token: str,
+    planned: Sequence[date],
+    days_dir: Path,
+    *,
+    campaign: str,
+    symbols: Sequence[str],
+) -> int:
+    """Planli gunlerin gozlem kosularindan gun ozetlerini indirir.
+
+    Once BUTUN kosular okunur: planli gunun bitmemis kosusu varsa hicbir
+    sey indirilmez. Plan disi gunun kosusu listelenmez. Kaynagi
+    `OBSERVATION_SOURCE` olmayan kosu sabit satirla atlanir.
+    """
+    selected: list[tuple[int, date, str]] = []
+    for run in _observation_runs(api, repo, token, planned):
+        try:
+            identifier = int(run["id"])
+            created = datetime.fromisoformat(str(run["created_at"]).replace("Z", "+00:00"))
+        except (KeyError, TypeError, ValueError):
+            raise GateError("kosu kaydi beklenen bicimde degil") from None
+        day = session_day_of(created)
+        if day not in planned:
+            continue
+        if run.get("status") != "completed":
+            raise GateError("planli gunun gozlem kosusu henuz bitmedi")
+        source = tuple(run.get(key) for key in ("head_branch", "event", "path", "run_attempt"))
+        if source != OBSERVATION_SOURCE or not _typed(source[-1], int):
+            print(f"UYARI toplam: {day.isoformat()} kosusu secilmedi (kaynak ya da deneme)")
+            continue
+        head_sha = run.get("head_sha")
+        if not (isinstance(head_sha, str) and _SHA40.fullmatch(head_sha)):
+            raise GateError("kosu kaydi beklenen bicimde degil")
+        selected.append((identifier, day, head_sha))
+
+    days_dir.mkdir(parents=True, exist_ok=True)
+    seen: set[date] = set()
+    for identifier, day, head_sha in selected:
+        query = urllib.parse.urlencode({"name": DAY_ARTIFACT, "per_page": str(PAGE_SIZE)})
+        artifacts = [
+            item
+            for item in _single_page(
+                _api_json(
+                    f"{api}/repos/{repo}/actions/runs/{identifier}/artifacts?{query}",
+                    token,
+                    "artefakt listesi",
+                ),
+                "artifacts",
+                "artefakt listesi",
+            )
+            if item.get("name") == DAY_ARTIFACT
+        ]
+        if not artifacts:
+            continue
+        if len(artifacts) > 1:
+            raise GateError("bir kosuda birden cok gun ozeti artefakti")
+        (artifact,) = artifacts
+        expired = artifact.get("expired")
+        if not isinstance(expired, bool):
+            raise GateError("artefakt kaydi beklenen bicimde degil")
+        if expired:
+            print(f"UYARI toplam: {day.isoformat()} artefakti suresi dolmus")
+            continue
+        try:
+            artifact_id = int(artifact["id"])
+        except (KeyError, TypeError, ValueError):
+            raise GateError("artefakt kaydi beklenen bicimde degil") from None
+        digest = artifact.get("digest")
+        if not isinstance(digest, str) or not digest.startswith(DIGEST_PREFIX):
+            raise GateError("artefakt digest'i yok")
+        data = _download_zip(api, repo, artifact_id, token)
+        if hashlib.sha256(data).hexdigest() != digest.removeprefix(DIGEST_PREFIX):
+            raise GateError("artefakt digest'i uyusmuyor")
+        content = _day_from_zip(data)
+        parsed = _check_day(content, day, campaign=campaign, symbols=symbols, planned=planned)
+        if (parsed.run_id, parsed.run_attempt, parsed.code_sha) != (identifier, 1, head_sha):
+            # Kaynak kimligi kosuyla eslesmeli: baska kosunun, denemenin ya
+            # da kodun ozeti bu kosunun artefakti olamaz (Codex 6172892558).
+            raise GateError("gun ozetinin kaynagi kosuyla uyusmuyor")
+        if day in seen:
+            raise GateError("ayni gunun iki gun ozeti var")
+        seen.add(day)
+        try:
+            write_new(days_dir / f"{identifier}.json", content)
+        except OSError as exc:
+            raise GateError(f"gun ozeti yazilamadi ({type(exc).__name__})") from None
+    return len(seen)
+
+
+def _download_zip(api: str, repo: str, artifact_id: int, token: str) -> bytes:
+    """API ZIP adresi -> TEK, elle izlenen yonlendirme -> baytlar.
+
+    Ikinci istek YENI bir istektir: Authorization basligi YOKTUR ve o da
+    yonlendirme izlemez. Ikinci yonlendirme okunmaz ve istenmez. Adres,
+    token ve yanit govdesi basilmaz.
+    """
+    url = f"{api}/repos/{repo}/actions/artifacts/{artifact_id}/zip"
+    opener = urllib.request.build_opener(_NoRedirect)
+    request = urllib.request.Request(  # noqa: S310 - sema _checked_url ile denetlendi
+        _checked_url(url),
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    try:
+        with opener.open(request, timeout=API_TIMEOUT_SECONDS) as response:
+            return _read_limited(response, MAX_ZIP_BYTES)
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        if exc.code not in REDIRECT_CODES:
+            raise GateError(f"ZIP adresi okunamadi (HTTP {exc.code})") from None
+        location = exc.headers.get("Location") if exc.headers is not None else None
+    except (urllib.error.URLError, OSError) as exc:
+        raise GateError(f"ZIP adresi okunamadi ({type(exc).__name__})") from None
+    if not location:
+        raise GateError("yonlendirme adresi yok")
+    plain = urllib.request.Request(_checked_url(location))  # noqa: S310 - sema denetlendi
+    try:
+        with opener.open(plain, timeout=API_TIMEOUT_SECONDS) as response:
+            return _read_limited(response, MAX_ZIP_BYTES)
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        if exc.code in REDIRECT_CODES:
+            raise GateError(f"ikinci yonlendirme reddedildi (HTTP {exc.code})") from None
+        raise GateError(f"ZIP okunamadi (HTTP {exc.code})") from None
+    except (urllib.error.URLError, OSError) as exc:
+        raise GateError(f"ZIP okunamadi ({type(exc).__name__})") from None
+
+
+def _checked_url(url: str) -> str:
+    """Yalnizca https; yerel test sunucusu (loopback) icin http."""
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme == "https" or (parts.scheme == "http" and parts.hostname in LOOPBACK_HOSTS):
+        return url
+    raise GateError("beklenmeyen adres semasi")
+
+
+def _read_limited(response: Any, limit: int) -> bytes:
+    body: bytes = response.read(limit + 1)
+    if len(body) > limit:
+        raise GateError("yanit boyut sinirini asti")
+    return body
+
+
+def _day_from_zip(data: bytes) -> bytes:
+    """Tek uyeli ZIP'ten gun ozeti: ad sabit, yol bileseni yok, CRC temiz."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            members = archive.infolist()
+            if len(members) != 1 or members[0].filename != DAY_FILE:
+                raise GateError("ZIP beklenen tek uyeyi tasimiyor")
+            (member,) = members
+            if member.file_size > MAX_DAY_BYTES:
+                raise GateError("gun ozeti boyut sinirini asti")
+            # Okuma bildirilen boyutta durur ve sonunda CRC denetlenir:
+            # boyutu yanlis bildiren uye `BadZipFile` olur.
+            with archive.open(member) as handle:
+                content: bytes = handle.read()
+    except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, EOFError):
+        raise GateError("ZIP okunamadi (bicim ya da CRC)") from None
+    return content
+
+
+def _check_day(
+    content: bytes,
+    run_day: date,
+    *,
+    campaign: str,
+    symbols: Sequence[str],
+    planned: Sequence[date],
+) -> ParsedDay:
+    """Gun ozeti sozlesmeye uyuyor ve gunu kosunun seans gunuyle ayni."""
+    try:
+        payload = json.loads(content)
+    except (ValueError, RecursionError):
+        raise GateError("gun ozeti JSON degil") from None
+    try:
+        parsed = _parse_day(payload, campaign=campaign, symbols=symbols, planned=planned)
+    except DaySummaryError as exc:
+        raise GateError(str(exc)) from None
+    if parsed.day != run_day:
+        raise GateError("gun ozetinin gunu kosuyla uyusmuyor")
+    return parsed
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m tlab.shadow_job")
     sub = parser.add_subparsers(dest="step", required=True)
@@ -895,6 +1781,9 @@ def main(argv: list[str] | None = None) -> int:
     step_observe.add_argument("--out", type=Path, required=True)
     step_late = sub.add_parser("late", help="Gec kayit isi (secret'siz)")
     step_late.add_argument("--out", type=Path, required=True)
+    step_collect = sub.add_parser("collect", help="Gun ozetlerini indir (secret'siz)")
+    step_collect.add_argument("--days", type=Path, required=True)
+    step_collect.add_argument("--output", type=Path, required=True)
     step_total = sub.add_parser("aggregate", help="Toplam ozet (secret'siz)")
     step_total.add_argument("--days", type=Path, required=True)
     step_total.add_argument("--out", type=Path, required=True)
@@ -915,7 +1804,11 @@ def main(argv: list[str] | None = None) -> int:
             root=Path.cwd(),
         )
     if args.step == "late":
-        return record_late(os.environ, clock=clock, out=args.out)
+        return record_late(os.environ, clock=clock, out=args.out, root=Path.cwd())
+    if args.step == "collect":
+        return collect(
+            os.environ, clock=clock, days_dir=args.days, root=Path.cwd(), output=args.output
+        )
     return aggregate(os.environ, days_dir=args.days, out=args.out, root=Path.cwd())
 
 

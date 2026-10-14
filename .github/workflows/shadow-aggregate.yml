@@ -1,0 +1,72 @@
+# Golge gozlem toplam isi (#17, docs/designs/shadow-observation.md §6).
+#
+# Son planli gunden sonra, kampanya basina BIR kez, elle: gozlem
+# kosularinin fiyatsiz gun ozeti artefaktlarini secer, indirir, denetler ve
+# 20 gunluk toplami kurar. Secret YOK, Alpaca YOK, emir YOK. Tek toplam: bu
+# kampanyanin toplam artefakti depoda varsa, onceki bir toplam kosusunun
+# toplam adimi kostuysa ya da sonucu belirsizse (kanit: is adimlari),
+# yeniden deneme kosusunda, New York tarihi son planli gunu gecmediyse ya da
+# planli gunun gozlem kosusu suruyorsa is kirmizi biter ve hicbir gozlem
+# artefakti indirmez (tlab.shadow_job collect). Onceki kosular kampanyaya
+# baglanir (artefakt adi, zaman, adim kaniti); yeniden deneme yalnizca
+# config/shadow-total-retry.json kaydiyla (ayri karar PR'i, parmak izi disi). Token yalnizca indirme ve
+# toplam adiminda; ZIP yonlendirmesi elle ve bir kez izlenir, Authorization
+# tasinmaz. Bu sozlesme tests/test_architecture.py tarafindan denetlenir.
+name: Shadow aggregate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shadow-aggregate
+  cancel-in-progress: false
+
+jobs:
+  total:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # Kosu listesi, artefakt listesi ve ZIP indirme icin yalnizca okuma.
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Kilitli calisma zamani bagimliliklarini kur
+        run: |
+          python -m pip install -r requirements.lock
+          python -m pip check
+      # Token yalnizca bu iki adimda; basilmaz ve indirme adresine gitmez.
+      # Adim adlari koddaki TOTAL_STEPS sabitine bagli: sonraki bir toplam
+      # kosusu bunlarin sonucunu kanit olarak okur. `Topla` yalnizca
+      # `Indir` basariliysa kosar; bos/erken/ret kosusu `Indir`de durur.
+      - name: Indir
+        id: collect
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          PYTHONPATH=src python -m tlab.shadow_job collect
+          --days "$RUNNER_TEMP/shadow-days" --output "$GITHUB_OUTPUT"
+      - name: Topla
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          PYTHONPATH=src python -m tlab.shadow_job aggregate
+          --days "$RUNNER_TEMP/shadow-days" --out "$RUNNER_TEMP/shadow-total.json"
+      # Yuklenen TEK dosya: fiyatsiz toplam. Adi kampanya kimligini tasir;
+      # teklik kaniti budur.
+      - name: Toplami yukle
+        uses: actions/upload-artifact@v7
+        with:
+          name: shadow-total-${{ steps.collect.outputs.campaign }}
+          path: ${{ runner.temp }}/shadow-total.json
+          if-no-files-found: error
+          retention-days: 90
