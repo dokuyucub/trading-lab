@@ -3,10 +3,12 @@
 # Son planli gunden sonra, kampanya basina BIR kez, elle: gozlem
 # kosularinin fiyatsiz gun ozeti artefaktlarini secer, indirir, denetler ve
 # 20 gunluk toplami kurar. Secret YOK, Alpaca YOK, emir YOK. Tek toplam: bu
-# kampanyanin toplam artefakti depoda varsa, onceki toplam kosusu bitmediyse,
+# kampanyanin toplam artefakti depoda varsa, onceki bir toplam kosusunun
+# toplam adimi kostuysa ya da sonucu belirsizse (kanit: is adimlari),
 # yeniden deneme kosusunda, New York tarihi son planli gunu gecmediyse ya da
 # planli gunun gozlem kosusu suruyorsa is kirmizi biter ve hicbir gozlem
-# artefakti indirmez (tlab.shadow_job collect). Token yalnizca indirme ve
+# artefakti indirmez (tlab.shadow_job collect). Yeniden deneme yalnizca
+# koddaki TOTAL_RETRY_AFTER sabitini degistiren ayri bir karar PR'iyla. Token yalnizca indirme ve
 # toplam adiminda; ZIP yonlendirmesi elle ve bir kez izlenir, Authorization
 # tasinmaz. Bu sozlesme tests/test_architecture.py tarafindan denetlenir.
 name: Shadow aggregate
@@ -41,20 +43,29 @@ jobs:
         run: |
           python -m pip install -r requirements.lock
           python -m pip check
-      # Token YALNIZCA bu adimda; basilmaz ve indirme adresine gitmez.
-      - name: Indir ve topla
-        id: total
+      # Token yalnizca bu iki adimda; basilmaz ve indirme adresine gitmez.
+      # Adim adlari koddaki TOTAL_STEPS sabitine bagli: sonraki bir toplam
+      # kosusu bunlarin sonucunu kanit olarak okur. `Topla` yalnizca
+      # `Indir` basariliysa kosar; bos/erken/ret kosusu `Indir`de durur.
+      - name: Indir
+        id: collect
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          PYTHONPATH=src python -m tlab.shadow_job collect --days "$RUNNER_TEMP/shadow-days" --output "$GITHUB_OUTPUT"
-          PYTHONPATH=src python -m tlab.shadow_job aggregate --days "$RUNNER_TEMP/shadow-days" --out "$RUNNER_TEMP/shadow-total.json"
+        run: >-
+          PYTHONPATH=src python -m tlab.shadow_job collect
+          --days "$RUNNER_TEMP/shadow-days" --output "$GITHUB_OUTPUT"
+      - name: Topla
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          PYTHONPATH=src python -m tlab.shadow_job aggregate
+          --days "$RUNNER_TEMP/shadow-days" --out "$RUNNER_TEMP/shadow-total.json"
       # Yuklenen TEK dosya: fiyatsiz toplam. Adi kampanya kimligini tasir;
       # teklik kaniti budur.
       - name: Toplami yukle
         uses: actions/upload-artifact@v7
         with:
-          name: shadow-total-${{ steps.total.outputs.campaign }}
+          name: shadow-total-${{ steps.collect.outputs.campaign }}
           path: ${{ runner.temp }}/shadow-total.json
           if-no-files-found: error
           retention-days: 90

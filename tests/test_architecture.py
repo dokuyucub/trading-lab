@@ -1288,11 +1288,12 @@ SHADOW_AGGREGATE = "shadow-aggregate.yml"
 
 
 def test_the_shadow_aggregate_is_manual_secret_free_and_reads_only() -> None:
-    """Golge toplam isi: yalnizca elle, secret yok, token tek adimda,
-    indirme toplamdan once, tek yukleme. Toplam artefaktinin adi indirme
-    adiminin yazdigi kampanya kimligini tasir (teklik kaniti). Gun ozeti
-    artefaktinin adi ve dosyasi, secilen kosunun kaynagi gozlem
-    workflow'una bagli."""
+    """Golge toplam isi: yalnizca elle, secret yok, token yalnizca indirme
+    ve toplam adimlarinda, indirme toplamdan once, tek yukleme. Toplam
+    artefaktinin adi indirme adiminin yazdigi kampanya kimligini tasir.
+    Is ve adim adlari koddaki sabitlere bagli: sonraki toplam kosusu
+    bunlari kanit olarak okur (Codex 6175607709). Gun ozeti artefaktinin
+    adi ve dosyasi, secilen kosunun kaynagi gozlem workflow'una bagli."""
     from tlab import shadow_job
 
     assert shadow_job.AGGREGATE_WORKFLOW_FILE == SHADOW_AGGREGATE
@@ -1303,26 +1304,36 @@ def test_the_shadow_aggregate_is_manual_secret_free_and_reads_only() -> None:
     assert workflow["concurrency"] == {"group": "shadow-aggregate", "cancel-in-progress": False}
     assert "env" not in workflow
     assert "secrets." not in yaml.safe_dump(workflow)
-    assert set(workflow["jobs"]) == {"total"}
-    job = workflow["jobs"]["total"]
+    assert set(workflow["jobs"]) == {shadow_job.TOTAL_JOB}
+    job = workflow["jobs"][shadow_job.TOTAL_JOB]
     assert job["if"] == "github.ref == 'refs/heads/main'"
     assert "env" not in job and "continue-on-error" not in job
     with_token = [step for step in job["steps"] if "github.token" in yaml.safe_dump(step)]
-    assert len(with_token) == 1, "token yalnizca tek adimda"
-    (step,) = with_token
-    assert step["env"] == {"GH_TOKEN": "${{ github.token }}"}
-    run = step["run"]
-    assert run.index("tlab.shadow_job collect") < run.index("tlab.shadow_job aggregate")
-    assert '--days "$RUNNER_TEMP/shadow-days" --output "$GITHUB_OUTPUT"' in run
-    assert '--out "$RUNNER_TEMP/shadow-total.json"' in run
+    assert [step["name"] for step in with_token] == list(shadow_job.TOTAL_STEPS), (
+        "token yalnizca indirme ve toplam adimlarinda, bu sirayla"
+    )
+    collect_step, total_step = with_token
+    for step in with_token:
+        assert step["env"] == {"GH_TOKEN": "${{ github.token }}"}
+        assert "if" not in step, "toplam adimi yalnizca basarili indirmeden sonra (varsayilan)"
+    assert collect_step["id"] == "collect"
+    assert "tlab.shadow_job collect" in collect_step["run"]
+    assert '--days "$RUNNER_TEMP/shadow-days" --output "$GITHUB_OUTPUT"' in collect_step["run"]
+    assert "tlab.shadow_job aggregate" in total_step["run"]
+    assert (
+        '--days "$RUNNER_TEMP/shadow-days" --out "$RUNNER_TEMP/shadow-total.json"'
+        in (total_step["run"])
+    )
+    names = [step.get("name") for step in job["steps"]]
+    assert names.index(shadow_job.TOTAL_STEPS[0]) + 1 == names.index(shadow_job.TOTAL_STEPS[1])
     assert not [item for item in job["steps"] if "continue-on-error" in item]
 
     upload = next(
         item for item in job["steps"] if str(item.get("uses", "")).startswith(UPLOAD_ACTION)
     )
-    assert step["id"] == "total"
     assert (
-        upload["with"]["name"] == shadow_job.TOTAL_ARTIFACT + "-${{ steps.total.outputs.campaign }}"
+        upload["with"]["name"]
+        == shadow_job.TOTAL_ARTIFACT + "-${{ steps.collect.outputs.campaign }}"
     )
     assert "if" not in upload, "toplam yalnizca basarili indirme ve toplamdan sonra yuklenir"
 

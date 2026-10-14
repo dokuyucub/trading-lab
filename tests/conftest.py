@@ -48,6 +48,12 @@ symbols:
   - AAPL
 """
 
+IMPLEMENTATION_ROOT_FILES = (
+    "requirements.lock",
+    ".github/workflows/shadow-observation.yml",
+    ".github/workflows/shadow-aggregate.yml",
+)
+
 
 @pytest.fixture
 def project_root(tmp_path: Path) -> Path:
@@ -56,6 +62,11 @@ def project_root(tmp_path: Path) -> Path:
     config_dir.mkdir()
     (config_dir / "base.yaml").write_text(BASE_YAML, encoding="utf-8")
     (config_dir / "universe.yaml").write_text(UNIVERSE_YAML, encoding="utf-8")
+    # Golge kampanya parmak izinin okudugu kok dosyalari (icerik onemsiz, varligi sart).
+    for relative in IMPLEMENTATION_ROOT_FILES:
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(f"# test: {relative}\n", encoding="utf-8")
     return tmp_path
 
 

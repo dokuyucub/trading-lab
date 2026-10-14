@@ -10,7 +10,12 @@ ZIP adresine 302 ile yonlendirir. Gosterilenler:
     ama cikti birakmayan toplam kosusu engel degildir;
   * yalnizca `main` dalindaki zamanlanmis, ilk denemeli gozlem kosusu
     secilir; plan disi gunun kosusu listelenmez; planli gunun bitmemis
-    kosusu varsa hicbir sey indirilmez;
+    kosusu varsa hicbir sey indirilmez; gun ozetinin kaynagi (run_id,
+    run_attempt, code_sha) API kosusuyla eslesmeli;
+  * onceki toplam kosularinin ADIM kaniti okunur: toplam adimi kostuysa
+    (upload hatasi, silinmis cikti) ya da sonucu belirsizse durur; bos,
+    erken ya da reddedilmis kosu engel degil; yeniden deneme yalnizca
+    koddaki `TOTAL_RETRY_AFTER` ile (Codex 6172892558, 6175607709);
   * digest eksikse indirilmez, uyusmazsa kabul edilmez;
   * yonlendirme elle ve bir kez izlenir; indirme istegine Authorization
     gitmez, ikinci yonlendirme okunmaz, https disi adres reddedilir;
@@ -38,7 +43,17 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from shadow_days import TURNS, campaign, comparison, day_payload, symbols_of, write_day
+from shadow_days import (
+    CODE_SHA,
+    PARAMS_VERSION,
+    TURNS,
+    campaign,
+    comparison,
+    day_payload,
+    no_sip,
+    symbols_of,
+    write_day,
+)
 from tlab import shadow_job
 from tlab.core.clock import SimClock
 
@@ -187,7 +202,8 @@ def env(api_url: str, **extra: str) -> dict[str, str]:
 
 
 def run(run_id: int, created: str, **overrides: Any) -> dict[str, Any]:
-    """Secilecek bicimde gozlem kosusu: main, zamanlanmis, ilk deneme, bitti."""
+    """Secilecek bicimde gozlem kosusu: main, zamanlanmis, ilk deneme, bitti,
+    kodu `CODE_SHA` (gun ozeti fixture'inin yazdigi kaynak)."""
     return {
         "id": run_id,
         "created_at": created,
@@ -196,7 +212,39 @@ def run(run_id: int, created: str, **overrides: Any) -> dict[str, Any]:
         "event": "schedule",
         "path": f".github/workflows/{shadow_job.WORKFLOW_FILE}",
         "run_attempt": 1,
+        "head_sha": CODE_SHA,
         **overrides,
+    }
+
+
+def total_run(
+    run_id: int, status: str = "completed", conclusion: str | None = "failure"
+) -> dict[str, Any]:
+    return {"id": run_id, "status": status, "conclusion": conclusion}
+
+
+def total_job(
+    collected: str | None,
+    totaled: str | None,
+    *,
+    upload: str | None = None,
+    status: str = "completed",
+    conclusion: str | None = "failure",
+    steps: Any = "",
+) -> dict[str, Any]:
+    """Onceki toplam kosusunun `total` isi: `Indir`, `Topla` ve yukleme adimlari."""
+    if steps == "":
+        steps = [
+            {"name": "Kilitli calisma zamani bagimliliklarini kur", "conclusion": "success"},
+            {"name": shadow_job.TOTAL_STEPS[0], "conclusion": collected},
+            {"name": shadow_job.TOTAL_STEPS[1], "conclusion": totaled},
+            {"name": "Toplami yukle", "conclusion": upload},
+        ]
+    return {
+        "name": shadow_job.TOTAL_JOB,
+        "status": status,
+        "conclusion": conclusion,
+        "steps": steps,
     }
 
 
@@ -487,7 +535,7 @@ def test_two_selected_summaries_of_one_day_fail(
     blobs, host_url = host
     state.runs = [run(11, "2026-01-05T12:50:03Z"), run(12, "2026-01-05T13:50:03Z")]
     serve(state, blobs, host_url, 11, day_zip(project_root, D1))
-    serve(state, blobs, host_url, 12, day_zip(project_root, D1))
+    serve(state, blobs, host_url, 12, day_zip(project_root, D1, run_id=12))
     assert collect(env(api_url), tmp_path, project_root)[0] == 1
     assert "ayni gunun iki gun ozeti var" in capsys.readouterr().out
 
@@ -617,6 +665,42 @@ def test_a_missing_or_wrong_digest_fails_the_collection(
     assert not written(days)
 
 
+@pytest.mark.parametrize(
+    ("run_overrides", "summary_overrides", "reason"),
+    [
+        ({"head_sha": "f" * 40}, {}, "gun ozetinin kaynagi kosuyla uyusmuyor"),
+        ({}, {"code_sha": "f" * 40}, "gun ozetinin kaynagi kosuyla uyusmuyor"),
+        ({}, {"run_id": 12}, "gun ozetinin kaynagi kosuyla uyusmuyor"),
+        ({}, {"run_attempt": 2}, "gun ozetinin kosu kimligi beklenen bicimde degil"),
+        ({"head_sha": "F" * 40}, {}, "kosu kaydi beklenen bicimde degil"),
+        ({"head_sha": None}, {}, "kosu kaydi beklenen bicimde degil"),
+        ({"head_sha": "a" * 39}, {}, "kosu kaydi beklenen bicimde degil"),
+    ],
+    ids=["kosu-sha", "ozet-sha", "ozet-kosu", "ozet-deneme", "sha-buyuk", "sha-yok", "sha-kisa"],
+)
+def test_a_summary_whose_source_does_not_match_the_run_fails(
+    run_overrides: dict[str, Any],
+    summary_overrides: dict[str, Any],
+    reason: str,
+    api: tuple[Api, str],
+    host: tuple[Host, str],
+    tmp_path: Path,
+    project_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Codex 6175607709 karsi ornegi: secilen kosuya `head_sha='f'*40` koymak
+    indirmeyi engellemeliydi. Gun ozetinin run_id / run_attempt / code_sha
+    alanlari API kosusuyla eslesmezse butun toplama durur."""
+    state, api_url = api
+    blobs, host_url = host
+    state.runs = [run(11, "2026-01-05T13:50:03Z", **run_overrides)]
+    serve(state, blobs, host_url, 11, day_zip(project_root, D1, **summary_overrides))
+    code, days = collect(env(api_url), tmp_path, project_root)
+    assert code == 1
+    assert reason in capsys.readouterr().out
+    assert not written(days)
+
+
 # --------------------------------------------------------------------------
 # Tek toplam: kampanya kaniti ve hic istek yapmadan reddedilen durumlar
 # --------------------------------------------------------------------------
@@ -696,46 +780,172 @@ def test_an_existing_total_of_this_campaign_blocks_a_second_one(
     assert not days.exists()
 
 
-def test_another_campaign_or_an_empty_successful_run_does_not_block(
+def test_another_campaign_total_does_not_block(
     api: tuple[Api, str], tmp_path: Path, project_root: Path
 ) -> None:
-    """Basariyla bitip cikti birakmayan toplam kosusu (bos ya da erken
-    PLANNED_DAYS) kanit degildir; baska kampanyanin toplami da engel degil."""
     state, api_url = api
     other = shadow_job.total_artifact(campaign(project_root, (D1,)))
     state.repo_artifacts = [{"id": 5, "name": other, "expired": False}]
-    state.totals = [
-        {"id": 800, "status": "completed", "conclusion": "success"},
-        {"id": 850, "status": "completed", "conclusion": "failure"},
-    ]
     assert collect(env(api_url), tmp_path, project_root)[0] == 0
 
 
+RAN = "onceki toplam adimi kostu (cikti yok ya da silinmis)"
+UNCLEAR = "onceki toplam kosusu belirsiz"
+RUNNING = "onceki toplam kosusu suruyor"
+EVIDENCE_CASES: list[tuple[str, dict[str, Any], list[dict[str, Any]] | None, str | None]] = [
+    # Codex 6175607709 karsi ornegi: hesaplama bitti, yukleme kirildi, artefakt yok.
+    ("upload-hatasi", total_run(800), [total_job("success", "success", upload="failure")], RAN),
+    # Toplam uretildi ve yuklendi, sonra artefakt silindi: adim kaniti kalir.
+    (
+        "silinmis-cikti",
+        total_run(800, conclusion="success"),
+        [total_job("success", "success", upload="success")],
+        RAN,
+    ),
+    ("topla-hatasi", total_run(800), [total_job("success", "failure", upload="skipped")], RAN),
+    # Bos, erken ya da reddedilmis kosu `Indir`de durur: cikti yok, engel yok.
+    ("erken-ret", total_run(800), [total_job("failure", "skipped", upload="skipped")], None),
+    (
+        "bos-basarili",
+        total_run(800, conclusion="success"),
+        [total_job("skipped", "skipped", upload="skipped", conclusion="success")],
+        None,
+    ),
+    (
+        "is-atlandi",
+        total_run(800, conclusion="success"),
+        [total_job(None, None, conclusion="skipped", steps=[])],
+        None,
+    ),
+    ("indirme-hatasi", total_run(800), [total_job("failure", "skipped", upload="skipped")], None),
+    # Belirsiz: iptal ya da sonucsuz adimlar.
+    (
+        "indir-iptal",
+        total_run(800, conclusion="cancelled"),
+        [total_job("cancelled", "skipped", upload="skipped", conclusion="cancelled")],
+        UNCLEAR,
+    ),
+    (
+        "topla-iptal",
+        total_run(800, conclusion="cancelled"),
+        [total_job("success", "cancelled", upload="skipped", conclusion="cancelled")],
+        UNCLEAR,
+    ),
+    (
+        "indir-basarili-topla-yok",
+        total_run(800),
+        [total_job("success", "skipped", upload="skipped")],
+        UNCLEAR,
+    ),
+    ("indir-sonucsuz", total_run(800), [total_job(None, "skipped", upload="skipped")], UNCLEAR),
+    # Suruyor.
+    ("kosu-suruyor", total_run(800, status="in_progress", conclusion=None), None, RUNNING),
+    ("kosu-kuyrukta", total_run(800, status="queued", conclusion=None), None, RUNNING),
+    ("kosu-durumsuz", {"id": 800}, None, RUNNING),
+    (
+        "is-suruyor",
+        total_run(800),
+        [total_job("success", None, status="in_progress", conclusion=None)],
+        RUNNING,
+    ),
+    # Kanit okunamiyor: eksik gecmis basari ya da "hic baslamadi" kaniti degildir.
+    ("is-yok", total_run(800), [], "onceki toplam kosusunun kaniti yok"),
+    (
+        "adimlar-yok",
+        total_run(800),
+        [{"name": shadow_job.TOTAL_JOB, "status": "completed", "conclusion": "failure"}],
+        "onceki toplam kosusunun kaniti okunamadi",
+    ),
+    (
+        "adimlar-metin",
+        total_run(800),
+        [total_job(None, None, steps="Indir")],
+        "onceki toplam kosusunun kaniti okunamadi",
+    ),
+    (
+        "adimlar-sozluk-degil",
+        total_run(800),
+        [total_job(None, None, steps=["Indir", "Topla"])],
+        "onceki toplam kosusunun kaniti okunamadi",
+    ),
+    (
+        "adim-eksik",
+        total_run(800),
+        [total_job(None, None, steps=[{"name": "Indir", "conclusion": "success"}])],
+        "onceki toplam kosusunun kaniti okunamadi",
+    ),
+]
+
+
 @pytest.mark.parametrize(
-    ("totals", "blocked"),
-    [
-        ([{"id": 800, "status": "in_progress"}], True),
-        ([{"id": 800, "status": "queued"}], True),
-        ([{"id": 800}], True),
-        ([{"id": 950, "status": "in_progress"}, {"id": 900, "status": "in_progress"}], False),
-    ],
-    ids=["suruyor", "kuyrukta", "durum-yok", "sonraki-ve-kendisi"],
+    ("prior", "jobs", "reason"),
+    [case[1:] for case in EVIDENCE_CASES],
+    ids=[case[0] for case in EVIDENCE_CASES],
 )
-def test_an_unfinished_earlier_total_run_blocks(
-    totals: list[dict[str, Any]],
-    blocked: bool,
+def test_prior_total_runs_block_by_step_evidence(
+    prior: dict[str, Any],
+    jobs: list[dict[str, Any]] | None,
+    reason: str | None,
     api: tuple[Api, str],
+    host: tuple[Host, str],
     tmp_path: Path,
     project_root: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """Onceki toplam kosusunun durumu yetmez; `total` isinin adimlari okunur
+    (6172892558 kabul ornekleri). Engelde hicbir gozlem artefakti
+    listelenmez ve indirilmez."""
     state, api_url = api
-    state.totals = totals
-    code, _ = collect(env(api_url), tmp_path, project_root)
-    assert code == int(blocked)
-    assert ("onceki toplam kosusu suruyor" in capsys.readouterr().out) is blocked
-    if blocked:
-        assert state.paths() == [TOTAL_RUNS_PATH]
+    blobs, host_url = host
+    state.runs = [run(11, "2026-01-05T13:50:03Z")]
+    serve(state, blobs, host_url, 11, day_zip(project_root, D1))
+    state.totals = [prior]
+    if jobs is not None:
+        state.jobs["800"] = jobs
+    code, days = collect(env(api_url), tmp_path, project_root)
+    text = capsys.readouterr().out
+    if reason is None:
+        assert code == 0 and written(days) == ["11.json"]
+        return
+    assert code == 1
+    assert f"FAIL toplam: {reason}" in text
+    assert blobs.requests == [] and not days.exists()
+    assert not [path for path in state.paths() if path.endswith("/artifacts")]
+    if jobs is not None:
+        assert f"/repos/{REPO}/actions/runs/800/jobs" in state.paths()
+
+
+def test_later_total_runs_and_this_run_are_not_evidence(
+    api: tuple[Api, str], tmp_path: Path, project_root: Path
+) -> None:
+    state, api_url = api
+    state.totals = [total_run(950, status="in_progress", conclusion=None), total_run(900)]
+    state.jobs["900"] = [total_job("success", "success", upload="failure")]
+    assert collect(env(api_url), tmp_path, project_root)[0] == 0
+    assert not [path for path in state.paths() if path.endswith("/jobs")]
+
+
+def test_a_retry_is_authorised_only_by_the_code_constant(
+    api: tuple[Api, str],
+    tmp_path: Path,
+    project_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Yeni dispatch izin degildir. `TOTAL_RETRY_AFTER` basarisiz kosunun
+    kimligine cekilirse (ayri karar PR'i) o ve oncekiler kanit sayilmaz;
+    sonrakiler sayilmaya devam eder."""
+    state, api_url = api
+    state.totals = [total_run(800), total_run(801)]
+    state.jobs["800"] = [total_job("success", "success", upload="failure")]
+    state.jobs["801"] = [total_job("success", "success", upload="failure")]
+    assert shadow_job.TOTAL_RETRY_AFTER == 0
+    assert collect(env(api_url), tmp_path, project_root)[0] == 1
+    monkeypatch.setattr(shadow_job, "TOTAL_RETRY_AFTER", 800)
+    assert collect(env(api_url), tmp_path / "ikinci", project_root)[0] == 1
+    assert RAN in capsys.readouterr().out
+    monkeypatch.setattr(shadow_job, "TOTAL_RETRY_AFTER", 801)
+    assert collect(env(api_url), tmp_path / "ucuncu", project_root)[0] == 0
 
 
 def test_an_unwritable_step_output_fails(
@@ -807,10 +1017,34 @@ CASES: list[tuple[str, dict[str, Any], str]] = [
     ("tur-anahtar", {"turns": {"expected": 106, "called": 106}}, "turns beklenen"),
     ("tur-liste", {"turns": [106, 106, 0, 0]}, "turns beklenen"),
     (
-        "sembol-tur-fazla",
-        {"symbol_turns": {"expected": 2, "observed": 3}},
+        "sembol-tur-fazla",  # project_root evreni 2 sembol: 106 x 2
+        {"symbol_turns": {"expected": 212, "observed": 213}},
         "sembol-tur sayaclari tutarsiz",
     ),
+    # Codex 6175607709: sifir ya da azaltilmis beklenen sayilar ve yanlis surum.
+    (
+        "tur-beklenen-sifir",
+        {"turns": {"expected": 0, "called": 0, "failed": 0, "missed": 0}},
+        "tur sayaclari stratejiyle uyusmuyor",
+    ),
+    (
+        "tur-beklenen-az",
+        {"turns": {"expected": 100, "called": 100, "failed": 0, "missed": 0}},
+        "tur sayaclari stratejiyle uyusmuyor",
+    ),
+    (
+        "sembol-tur-beklenen-sifir",
+        {"symbol_turns": {"expected": 0, "observed": 0}},
+        "sembol-tur sayaclari stratejiyle uyusmuyor",
+    ),
+    ("surum-baska", {"params_version": "orb-test"}, "strateji surumu kampanyayla uyusmuyor"),
+    ("kosu-sifir", {"run_id": 0}, "gun ozetinin kosu kimligi beklenen bicimde degil"),
+    ("kosu-bool", {"run_id": True}, "gun ozetinin kosu kimligi beklenen bicimde degil"),
+    ("kosu-metin", {"run_id": "11"}, "gun ozetinin kosu kimligi beklenen bicimde degil"),
+    ("deneme-2", {"run_attempt": 2}, "gun ozetinin kosu kimligi beklenen bicimde degil"),
+    ("sha-kisa", {"code_sha": "a" * 39}, "gun ozetinin kod kimligi beklenen bicimde degil"),
+    ("sha-buyuk", {"code_sha": "A" * 40}, "gun ozetinin kod kimligi beklenen bicimde degil"),
+    ("sha-sayi", {"code_sha": 1}, "gun ozetinin kod kimligi beklenen bicimde degil"),
     (
         "sembol-tur-metin",
         {"symbol_turns": {"expected": "2", "observed": 2}},
@@ -869,7 +1103,142 @@ SYMBOL_CASES: list[tuple[str, int, dict[str, Any], str]] = [
     ("negatif-sip", 1, {"sip_present": -1}, "sembol sonucunda negatif sayac"),
     ("negatif-tur", 1, {"iex_unknown_turns": -2}, "sembol sonucunda negatif sayac"),
     ("fazla-alan", 0, {"close": 100.5}, "sembol sonucunun alanlari beklenen kumede degil"),
+    # compare_symbol_day'in uretemeyecegi birlesimler (Codex 6175607709).
+    ("pencere-16", 0, {"window_expected": 16}, "pencere sayaclari stratejiyle uyusmuyor"),
+    ("iex-16", 0, {"iex_present": 16}, "pencere sayaclari stratejiyle uyusmuyor"),
+    ("sip-16", 1, {"sip_present": 16}, "pencere sayaclari stratejiyle uyusmuyor"),
+    ("sip-iexsiz", 0, {"iex_present": None}, "SIP penceresi IEX penceresi olmadan sayilmaz"),
+    (
+        "gecikmeli-tam",
+        0,
+        {"iex_completed_later": True},
+        "gecikmeli tamlik eksik pencere gerektirir",
+    ),
+    (
+        "gecikmeli-bilinmeyen",
+        0,
+        {"iex_completed_later": True, "iex_present": None, "sip_present": None},
+        "gecikmeli tamlik eksik pencere gerektirir",
+    ),
+    (
+        "bilinmeyen-tur-107",
+        1,
+        {"iex_unknown_turns": 107},
+        "bilinmeyen tur sayisi planli turlari asiyor",
+    ),
+    ("bps-hesaplanmadan", 0, {"range_status": "sip_eksik"}, "aralik durumu ve farklari tutarsiz"),
+    ("hesaplandi-bpssiz", 0, {"or_high_bps": None}, "aralik durumu ve farklari tutarsiz"),
+    (
+        "dakika-14",
+        0,
+        {"iex_first_minute": 14.0, "signal": "mismatch"},
+        "ilk niyet dakikasi planli pencerenin disinda",
+    ),
+    (
+        "dakika-121",
+        1,
+        {"sip_first_minute": 121, "signal": "mismatch"},
+        "ilk niyet dakikasi planli pencerenin disinda",
+    ),
+    (
+        "match-tek-taraf",
+        0,
+        {"signal": "match", "iex_first_minute": 40.1167},
+        "sinyal ve ilk niyet dakikalari tutarsiz",
+    ),
+    (
+        "none-dakikali",
+        0,
+        {"signal": "none", "sip_first_minute": 40.1167},
+        "sinyal ve ilk niyet dakikalari tutarsiz",
+    ),
+    ("mismatch-dakikasiz", 1, {"signal": "mismatch"}, "sinyal ve ilk niyet dakikalari tutarsiz"),
 ]
+
+NO_SIP_CASES: list[tuple[str, dict[str, Any], str]] = [
+    ("sip-penceresi", {"sip_present": 15}, "SIP'siz sembolde SIP'e dayanan alan var"),
+    ("sip-dakikasi", {"sip_first_minute": 40.1167}, "SIP'siz sembolde SIP'e dayanan alan var"),
+    ("sinyal-none", {"signal": "none"}, "SIP'siz sembolde SIP'e dayanan alan var"),
+    ("aralik-sip-eksik", {"range_status": "sip_eksik"}, "SIP'siz sembolde SIP'e dayanan alan var"),
+    (
+        "aralik-hesaplandi",
+        {"range_status": "hesaplandi", "or_high_bps": 1.0, "or_low_bps": 1.0},
+        "SIP'siz sembolde SIP'e dayanan alan var",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reason"),
+    [case[1:] for case in NO_SIP_CASES],
+    ids=[case[0] for case in NO_SIP_CASES],
+)
+def test_a_symbol_without_sip_cannot_carry_sip_based_fields(
+    overrides: dict[str, Any], reason: str, project_root: Path
+) -> None:
+    first, second = symbols_of(project_root)
+    symbols = [no_sip(first, **overrides), comparison(second)]
+    payload = day_payload(
+        project_root,
+        PLANNED,
+        D1,
+        **INCOMPLETE,
+        sip_reasons={first: "son sure doldu"},
+        symbols=symbols,
+    )
+    with pytest.raises(shadow_job.DaySummaryError, match=reason):
+        parse(project_root, payload)
+
+
+def test_sip_reasons_must_name_exactly_the_symbols_without_sip(project_root: Path) -> None:
+    first, second = symbols_of(project_root)
+    symbols = [no_sip(first), comparison(second)]
+    with pytest.raises(shadow_job.DaySummaryError, match="SIP sebepleri SIP'siz sembollerle"):
+        parse(project_root, day_payload(project_root, PLANNED, D1, **INCOMPLETE, symbols=symbols))
+    with pytest.raises(shadow_job.DaySummaryError, match="SIP sebepleri SIP'siz sembollerle"):
+        parse(
+            project_root,
+            day_payload(
+                project_root, PLANNED, D1, **INCOMPLETE, sip_reasons={second: "son sure doldu"}
+            ),
+        )
+    parsed = parse(
+        project_root,
+        day_payload(
+            project_root,
+            PLANNED,
+            D1,
+            **INCOMPLETE,
+            sip_reasons={first: "son sure doldu"},
+            symbols=symbols,
+        ),
+    )
+    assert [sip for _, sip in parsed.symbols] == [False, True]
+
+
+def test_codex_counterexample_zero_expected_complete_day_is_refused(project_root: Path) -> None:
+    """6175607709: turns ve symbol_turns sifir, diger alanlar normal, surum
+    `orb-test` iken `tamam` kabul ediliyordu."""
+    payload = day_payload(
+        project_root,
+        PLANNED,
+        D1,
+        turns={"expected": 0, "called": 0, "failed": 0, "missed": 0},
+        symbol_turns={"expected": 0, "observed": 0},
+        params_version="orb-test",
+    )
+    with pytest.raises(
+        shadow_job.DaySummaryError, match=r"^strateji surumu kampanyayla uyusmuyor$"
+    ):
+        parse(project_root, payload)
+    payload["params_version"] = PARAMS_VERSION
+    with pytest.raises(shadow_job.DaySummaryError, match=r"^tur sayaclari stratejiyle uyusmuyor$"):
+        parse(project_root, payload)
+    payload["turns"] = {"expected": TURNS, "called": TURNS, "failed": 0, "missed": 0}
+    with pytest.raises(
+        shadow_job.DaySummaryError, match=r"^sembol-tur sayaclari stratejiyle uyusmuyor$"
+    ):
+        parse(project_root, payload)
 
 
 @pytest.mark.parametrize(
@@ -909,6 +1278,7 @@ def test_a_symbol_reported_twice_is_refused(project_root: Path) -> None:
 
 def complete_breaks(root: Path) -> list[tuple[str, dict[str, Any]]]:
     n = len(symbols_of(root))
+    first, second = symbols_of(root)
     return [
         (
             "hatali-tur",
@@ -920,9 +1290,21 @@ def complete_breaks(root: Path) -> list[tuple[str, dict[str, Any]]]:
         ),
         ("eksik-gozlem", {"symbol_turns": {"expected": TURNS * n, "observed": TURNS * n - 1}}),
         ("canli-saf", {"live_pure_mismatches": 1}),
-        ("sip-sebebi", {"sip_reasons": {symbols_of(root)[0]: "yanit eksik (1 dakika)"}}),
-        ("eksik-sembol", {"symbols": [comparison(symbols_of(root)[0])]}),
-        ("sipsiz-sembol", {"symbols": with_symbol(root, 1, sip_available=False)}),
+        (
+            "sip-sebebi",
+            {
+                "sip_reasons": {first: "yanit eksik (1 dakika)"},
+                "symbols": [no_sip(first), comparison(second)],
+            },
+        ),
+        ("eksik-sembol", {"symbols": [comparison(first)]}),
+        (
+            "sipsiz-sembol",
+            {
+                "sip_reasons": {second: "son sure doldu"},
+                "symbols": [comparison(first), no_sip(second)],
+            },
+        ),
     ]
 
 
@@ -967,16 +1349,23 @@ def test_valid_summaries_are_parsed_with_their_results(project_root: Path) -> No
         or_low_bps=None,
         range_status="bilinmiyor",
         signal="unknown",
-        iex_first_minute=12,
+        iex_first_minute=40,  # tamsayi, ondalik alana girer
         sip_available=False,
     )
     partial = parse(
         project_root,
         day_payload(
-            project_root, PLANNED, D1, **INCOMPLETE, clock_consistent=None, symbols=unknown
+            project_root,
+            PLANNED,
+            D1,
+            **INCOMPLETE,
+            clock_consistent=None,
+            sip_reasons={symbols_of(project_root)[0]: "son sure doldu"},
+            symbols=unknown,
         ),
     )
-    assert partial.symbols[0][0].iex_first_minute == 12
+    assert partial.symbols[0][0].iex_first_minute == 40
+    assert (partial.run_id, partial.run_attempt, partial.code_sha) == (11, 1, CODE_SHA)
 
 
 def test_the_aggregate_refuses_a_summary_that_breaks_the_contract(

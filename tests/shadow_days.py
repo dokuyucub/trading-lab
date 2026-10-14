@@ -14,9 +14,15 @@ from typing import Any
 
 from tlab import shadow_job
 from tlab.config import load_config
+from tlab.strategies.orb import OpeningRangeBreakout, ORBParams
 
 TURNS = 106
 """Varsayilan ORB: acilis araligi 15. dakikadan giris penceresi 120. dakikaya."""
+PARAMS_VERSION = OpeningRangeBreakout(ORBParams()).params_version
+RUN_ID = 11
+CODE_SHA = "a" * 40
+SOURCE_ENV = {"GITHUB_RUN_ID": str(RUN_ID), "GITHUB_RUN_ATTEMPT": "1", "GITHUB_SHA": CODE_SHA}
+"""Gozlem ve gec kayit adimlarinin gun ozetine yazdigi kaynak kimligi."""
 
 
 def symbols_of(root: Path) -> tuple[str, ...]:
@@ -24,7 +30,21 @@ def symbols_of(root: Path) -> tuple[str, ...]:
 
 
 def campaign(root: Path, planned: Sequence[date]) -> str:
-    return shadow_job.campaign_of(planned, symbols_of(root))
+    return shadow_job.campaign_of(planned, symbols_of(root), root)
+
+
+def no_sip(symbol: str, **overrides: Any) -> dict[str, Any]:
+    """SIP'i gelmemis sembol: SIP'e dayanan hicbir alan yok, sinyal bilinmiyor."""
+    fields: dict[str, Any] = {
+        "sip_present": None,
+        "or_high_bps": None,
+        "or_low_bps": None,
+        "range_status": "sip_yok",
+        "signal": "unknown",
+        "sip_first_minute": None,
+        "sip_available": False,
+    }
+    return comparison(symbol, **{**fields, **overrides})
 
 
 def comparison(symbol: str, **overrides: Any) -> dict[str, Any]:
@@ -59,20 +79,24 @@ def day_payload(
     """Tamamlanan gun butun govdeyle; eksik gun yalnizca basla (gec kayit gibi).
 
     Konumsal parametreler yalnizca konumla verilir: `overrides` her alani,
-    `day`, `status` ve `reason` dahil, oldugu gibi uzerine yazar.
+    `day`, `status`, `reason` ve `run_id` dahil, oldugu gibi uzerine yazar.
+    Kaynak kimligi varsayilan olarak `RUN_ID` / 1 / `CODE_SHA`.
     """
     symbols = symbols_of(root)
     payload: dict[str, Any] = {
         "day_schema": shadow_job.DAY_SCHEMA,
         "day": day.isoformat(),
         "campaign": campaign(root, planned),
+        "run_id": RUN_ID,
+        "run_attempt": 1,
+        "code_sha": CODE_SHA,
         "status": status,
         "reason": reason,
     }
     if status == "tamam":
         payload.update(
             {
-                "params_version": "orb-test",
+                "params_version": PARAMS_VERSION,
                 "clock_consistent": True,
                 "turns": {"expected": TURNS, "called": TURNS, "failed": 0, "missed": 0},
                 "symbol_turns": {

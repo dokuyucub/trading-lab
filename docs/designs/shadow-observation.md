@@ -20,7 +20,11 @@ Tarih: 2026-10-13. Koordinasyon: #17. Kayıtlar:
 - Codex 6171961412 (toplam işi ön raporu 6162408570'e karar): teklik
   kampanyaya bağlı, eşzamanlılık, artefakt seçimi, son günün bitişi,
   digest, kaybolan koşu; somut karşılıklar Claude ÖN RAPOR eki
-  6172053624.
+  6172053624;
+- Codex 6172892558 ve BULGU 6175607709 (#53, `632fbee`): önceki toplam
+  koşusunun adım kanıtı, kodla temsil edilen yeniden deneme yetkisi,
+  gün özetinde koşu/kod kimliği, uygulama parmak izi kampanyada, sabit
+  stratejiden türeyen sayaç ve pencere tutarlılığı.
 
 Bu belge tasarımdır. Kod, workflow ya da gerçek koşu teslim edildiği
 anlamına gelmez. Yürütme yetkisi de değildir: o, ayrı ve kayıtlı bir
@@ -361,28 +365,64 @@ Tercih: **sınırlı schedule**. Kullanıcıya 20 günlük tıklama yüklenmez
       adımlarının (`Gozle`, `Gec kaydi yaz`) sonucu.
   - **Kampanya kimliği** (`campaign_of`): kanonik JSON'un SHA-256'sı.
     İçerik: planlı tarihler, evren sembolleri, eşikler (`Thresholds`),
-    strateji `params_version`, gün ve toplam şema sürümleri. Gözlem ve
-    geç kayıt her gün özetine `campaign` yazar; toplam da taşır. Biri
+    strateji `params_version`, gün ve toplam şema sürümleri ve
+    **uygulama parmak izi**. Gözlem ve geç kayıt her gün özetine
+    `campaign` yazar; toplam da taşır (`implementation` ayrıca). Biri
     kampanya ortasında değişirse kimlik değişir. Eski günlerin özetleri
     yeni kimlikle toplanamaz; değişiklik yeni kampanya ve yeni tarihler
     demektir.
+  - **Uygulama parmak izi** (`implementation_fingerprint`): sıralı dosya
+    manifestinin SHA-256'sı: paketin bütün `.py` dosyaları (dolaylı
+    bağımlılıklar dahil: `core`, `features`, `engine`, `data`,
+    `execution`, `sdk_compat`…), `config/*.yaml`, `requirements.lock`,
+    `shadow-observation.yml`, `shadow-aggregate.yml`. Her adım kendi
+    checkout'undan hesaplar; `params_version` kod kimliği değildir.
+    Schedule main'in o anki commit'ini kullanır; bütün günlerin aynı
+    merge SHA ile koştuğu söylenemez. Bu yüzden bağ SHA sabiti değil
+    manifesttir: bu dosyalara dokunan bir merge kampanya ortasında
+    kimliği değiştirir, günler karışmaz ve toplam durur. Dondurma (d)
+    onayından son toplamın doğrulanmasına kadar bu dosyaları kapsar ve
+    kodla zorlanır.
+  - **Koşu ve kod kimliği.** Gün özeti `run_id`, `run_attempt` ve
+    `code_sha` (`GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT`, `GITHUB_SHA`)
+    taşır; yoksa özet yazılmaz. Toplam işi bunları seçilen API
+    koşusuyla eşleştirir (`run_id` = koşu, `run_attempt` = 1,
+    `code_sha` = koşunun `head_sha`'sı); uyuşmazsa bütün toplama durur.
   - **Toplam işi** (`.github/workflows/shadow-aggregate.yml`, ÖN RAPOR
     #17/6162408570, eki 6172053624):
     - Tetiği yalnızca `workflow_dispatch`. Kullanıcı son planlı günden
       sonra bir kez tıklar; #17 kararıyla. Hata sonrası tekrar ayrı #17
       kararıdır; otomatik tekrar yok.
-    - **Tek toplam, kampanya başına.** Teklik kanıtı gerçek çıktıdır:
-      yükleme adı `shadow-total-<kimliğin ilk 16 hanesi>`. Depoda bu
-      adda artefakt varsa (süresi dolmuş olsa da) gözlem artefaktı
-      indirilmez, yeni toplam üretilmez. Başarıyla biten ama çıktı
-      bırakmayan koşu (boş ya da erken `PLANNED_DAYS`) kanıt değildir;
-      boş listeyle bir tıklama gelecekteki toplamı kapatmaz. Silinmiş
-      artefakt kanıt bırakmaz; o durumda tek koruma #17 kararıdır.
+    - **Tek toplam, kampanya başına; iki kanıt.** (1) Gerçek çıktı:
+      yükleme adı `shadow-total-<kimliğin ilk 16 hanesi>` (ad yalnız
+      arama anahtarı; gün özetlerinde tam kimlik karşılaştırılır).
+      Depoda bu adda artefakt varsa (süresi dolmuş olsa da) gözlem
+      artefaktı indirilmez, yeni toplam üretilmez. (2) Önceki toplam
+      koşularının **adım kanıtı**: iş iki adımdır, `Indir` (`collect`)
+      ve `Topla` (`aggregate`, yalnız `Indir` başarılıysa). Bu koşudan
+      önce oluşturulmuş her toplam koşusu için `total` işinin adımları
+      okunur:
+
+      | Önceki koşu | Karar |
+      |---|---|
+      | koşu ya da `total` işi bitmemiş | durur (sürüyor) |
+      | `total` işi listede yok ya da adımları okunamıyor | durur (eksik geçmiş başarı ya da "hiç başlamadı" kanıtı değildir) |
+      | `Topla` `success` ya da `failure` | durur: toplam adımı koştu; upload hatası ve silinmiş artefakt burada yakalanır |
+      | `Topla` atlandı, `Indir` `failure`/`skipped` | engel değil: boş, erken, ret ya da indirme hatası; çıktı üretilmedi |
+      | başka birleşim (iptal, sonuçsuz) | durur (belirsiz) |
+
+      Başarıyla biten ama çıktı bırakmayan koşu (boş ya da erken
+      `PLANNED_DAYS`) `Indir`de durur; kanıt değildir ve geleceği
+      kapatmaz.
+    - **Yeniden deneme yetkisi kodda.** `TOTAL_RETRY_AFTER` sabiti:
+      kimliği bu değerden küçük ya da eşit önceki koşular kanıt
+      sayılmaz; varsayılan 0. Başarısız bir toplamdan sonra tekrar, bu
+      sabiti o koşunun kimliğine çeken ayrı bir karar PR'ıdır (#17).
+      Yeni dispatch, yeni `run_id` ya da `run_attempt = 1` tek başına
+      izin değildir.
     - **Eşzamanlılık.** Workflow düzeyinde `concurrency:
-      shadow-aggregate`, `cancel-in-progress: false`. Bu koşudan önce
-      oluşturulmuş ve bitmemiş bir toplam koşusu varsa iş durur
-      ("önceki toplam koşusu sürüyor"). Yarım kalmış başarısız koşu
-      sessiz tekrar sebebi değildir.
+      shadow-aggregate`, `cancel-in-progress: false`; iki dispatch
+      kapıyı aynı anda geçemez.
     - **Son gün bitmeden başlamaz.** İki şart birlikte: (1) şimdiki
       New York (`America/New_York`) tarihi son planlı günden sonra;
       (2) planlı günlerin gözlem koşularının hepsi `completed`.
@@ -408,20 +448,32 @@ Tercih: **sınırlı schedule**. Kullanıcıya 20 günlük tıklama yüklenmez
     - **ZIP denetimi.** Tek üye, adı `shadow-day.json`. Boyut sınırlı,
       biçim/CRC temiz.
     - **Gün özeti sözleşmesi** (`_parse_day`; toplam adımı da aynı
-      denetimi yapar):
-      - alanlar: baş (`day_schema`, `day`, `campaign`, `status`,
-        `reason`) zorunlu; gövde alanları bilinen kümeden; fazla alan
-        yok;
+      denetimi yapar). Beklenen sayılar sabit stratejiden türer
+      (`ORBParams`: tur = giriş penceresi − açılış aralığı + 1 = 106,
+      pencere = 15):
+      - alanlar: baş (`day_schema`, `day`, `campaign`, `run_id`,
+        `run_attempt`, `code_sha`, `status`, `reason`) zorunlu; gövde
+        alanları bilinen kümeden; fazla alan yok;
       - `day` ISO biçiminde, planlı ve koşunun seans günüyle aynı;
-        `campaign` bu kampanya;
+        `campaign` bu kampanya; `run_id` pozitif, `run_attempt` = 1,
+        `code_sha` 40 hex;
       - `status` ∈ {`tamam`, `eksik`}; `tamam` sebepsiz, `eksik`
         boş olmayan sebepli;
-      - `turns` negatif olmayan tamsayılar ve `called + failed + missed
-        = expected`; `symbol_turns.observed ≤ expected`;
+      - `params_version` kampanyanın strateji sürümü;
+      - `turns.expected` = 106 ve `called + failed + missed =
+        expected`; `symbol_turns.expected` = 106 × evren ve `observed ≤
+        expected`;
       - `symbols` öğeleri karşılaştırma alanları ve `sip_available`,
         türleriyle (bool tamsayı sayılmaz, ondalık sonlu); aralık ve
         sinyal durumu tanımlı; sayaçlar negatif değil; semboller
         kampanya evreninde ve tekil;
+      - karşılaştırma tutarlılığı (`compare_symbol_day`in
+        üretebildikleri): `window_expected` = 15, `iex_present` ve
+        `sip_present` ≤ 15, SIP penceresi IEX'siz sayılmaz, gecikmeli
+        tamlık eksik pencere ister, bilinmeyen tur ≤ 106, aralık farkı
+        yalnız `hesaplandi` ile, ilk niyet dakikası `[15, 121)`, sinyal
+        ilk niyet dakikalarıyla uyumlu, SIP'siz sembolde SIP'e dayanan
+        alan yok; `sip_reasons` anahtarları = SIP'siz semboller;
       - `tamam` gün sayaçlarla tutarlı: bütün gövde var; kaçan ya da
         hatalı tur yok; bütün sembol-turlar gözlendi; canlı-saf
         tutarsızlığı yok; SIP sebebi yok; evrenin her sembolü SIP'li.
@@ -474,7 +526,10 @@ Tercih: **sınırlı schedule**. Kullanıcıya 20 günlük tıklama yüklenmez
   - toplam: başka kampanyanın ya da başka günün özeti; seçilmeyen koşu
     (olay, dal, yol, deneme); bitmemiş koşu; eksik ya da uyuşmaz
     digest; sözleşmeye uymayan alan; aynı kampanyanın önceki toplamı;
-    çıktısız başarılı toplam koşusu;
+    çıktısız başarılı toplam koşusu; hesaplama sonrası upload hatası;
+    silinmiş toplam artefaktı ile adım kanıtı; yanlış kaynak SHA, koşu
+    ya da deneme; sıfır ya da azaltılmış beklenen tur; yanlış
+    `params_version`; `TOTAL_RETRY_AFTER` ile yetkili tekrar;
   - 401/403, 429 ve 5xx;
   - eksik IEX ya da eksik SIP barı;
   - sıfır niyet.
