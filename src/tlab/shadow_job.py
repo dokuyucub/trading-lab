@@ -74,8 +74,6 @@ SIP_DELAY = timedelta(minutes=15)
 SIP_DEADLINE = timedelta(minutes=45)
 """Giris penceresi sonundan sonra SIP icin son sure."""
 SIP_POLL = timedelta(minutes=5)
-SIP_TAIL = timedelta(minutes=2)
-"""SIP yaniti son turdan en fazla bu kadar once biten bari icermeli."""
 
 
 # --------------------------------------------------------------------------
@@ -385,25 +383,41 @@ def _observe_day(
         print("FAIL zamanlama: gec baslangic (kurulumdan sonra)")
         return "eksik", "gec baslangic", {"clock_consistent": clock_check}
 
-    first = today.open + timedelta(minutes=params.opening_range_minutes) + TURN_OFFSET
-    last = today.open + timedelta(minutes=params.entry_window_minutes) + TURN_OFFSET
-    expected_turns = int((last - first) / timedelta(minutes=1)) + 1
-    turns = 0
-    failed_turns = 0
-    target = first
-    while target <= last:
-        _wait_until(clock, sleep, target)
+    first_minute = today.open + timedelta(minutes=params.opening_range_minutes)
+    last_minute = today.open + timedelta(minutes=params.entry_window_minutes)
+    first, last = first_minute + TURN_OFFSET, last_minute + TURN_OFFSET
+    expected_turns = int((last_minute - first_minute) / timedelta(minutes=1)) + 1
+    called = failed = 0
+    minute = first_minute
+    while minute <= last_minute:
+        _wait_until(clock, sleep, minute + TURN_OFFSET)
+        now = clock.now()
+        if now >= minute + timedelta(minutes=1):
+            # Uyku ya da onceki tur bu dakikayi tasirdi: dakikanin turu
+            # KOSMAZ ve telafi edilmez; simdiki dakikadan devam edilir.
+            # Son planli dakika gectiyse dongu biter (Codex 6161518682).
+            minute = now.replace(second=0, microsecond=0)
+            continue
         try:
             runner.run_once()
-            turns += 1
+            called += 1
         except Exception:  # tur hatasi donguyu oldurmez; yalnizca sayilir
-            failed_turns += 1
-        # Kacan dakika telafi edilmez: bir sonraki dakikanin turuna gecilir.
-        target = max(target + timedelta(minutes=1), _next_turn(clock.now()))
+            failed += 1
+        minute += timedelta(minutes=1)
     conn.close()
+    missed = expected_turns - called - failed
 
     symbols = list(config.symbols)
     moments = {symbol: record.moments(symbol) for symbol in symbols}
+    # Cagrinin donmesi veri alindigi demek degildir: dongu sembol hatasini
+    # kendi icinde yakalar. Gozlem, planli dakikanin kayittan OKUNABILEN
+    # sembol-turudur.
+    observed = sum(
+        _observed(record, symbol, moments[symbol], minute_start)
+        for symbol in symbols
+        for minute_start in _planned_minutes(first_minute, last_minute)
+    )
+    expected_symbol_turns = expected_turns * len(symbols)
     grid_start = min((m[0] for m in moments.values() if m), default=first)
     grid_end = max((m[-1] for m in moments.values() if m), default=last)
 
@@ -415,6 +429,7 @@ def _observe_day(
         timeframe,
         start=grid_start - timedelta(days=runner.history_days),
         end=grid_end,
+        session_open=today.open,
         clock=clock,
         sleep=sleep,
         deadline=deadline,
@@ -444,8 +459,14 @@ def _observe_day(
     record.conn.close()
     sip_missing = sum(symbol not in sip_bars for symbol in symbols)
     reasons = []
-    if turns < expected_turns:
-        reasons.append(f"tur kacti ({expected_turns - turns}/{expected_turns})")
+    if missed:
+        reasons.append(f"tur kacti ({missed}/{expected_turns})")
+    if failed:
+        reasons.append(f"tur hatali ({failed}/{expected_turns})")
+    if observed < expected_symbol_turns:
+        reasons.append(
+            f"gozlenemeyen sembol-tur ({expected_symbol_turns - observed}/{expected_symbol_turns})"
+        )
     if sip_missing:
         reasons.append(f"SIP gelmedi ({sip_missing} sembol)")
     if mismatches:
@@ -453,13 +474,17 @@ def _observe_day(
         reasons.append(f"canli-saf tutarsizligi ({mismatches})")
     status = "eksik" if reasons else "tamam"
     print(
-        f"OK gozlem: tur {turns}/{expected_turns}, hatali tur {failed_turns}, "
+        f"OK gozlem: tur {called}/{expected_turns}, hatali tur {failed}, kacan tur {missed}, "
+        f"gozlenen sembol-tur {observed}/{expected_symbol_turns}, "
         f"SIP {len(symbols) - sip_missing}/{len(symbols)}"
     )
     body = {
         "params_version": strategy.params_version,
         "clock_consistent": clock_check,
-        "turns": {"expected": expected_turns, "completed": turns, "failed": failed_turns},
+        # Dongu cagrilari: dondu / hata atti / dakikasinda hic yapilmadi.
+        "turns": {"expected": expected_turns, "called": called, "failed": failed, "missed": missed},
+        # Veri gozlemi: planli dakikada kayittan okunabilen sembol-tur.
+        "symbol_turns": {"expected": expected_symbol_turns, "observed": observed},
         "sip_reasons": dict(sorted(sip_reasons.items())),
         "live_pure_mismatches": mismatches,
         "symbols": results,
@@ -478,10 +503,16 @@ def _clock_check(broker: Any, opening: datetime, clock: Clock) -> bool | None:
     return bool(market_clock.is_open)
 
 
-def _next_turn(now: datetime) -> datetime:
-    floor = now.replace(second=0, microsecond=0)
-    candidate = floor + TURN_OFFSET
-    return candidate if candidate > now else candidate + timedelta(minutes=1)
+def _planned_minutes(first: datetime, last: datetime) -> list[datetime]:
+    count = int((last - first) / timedelta(minutes=1)) + 1
+    return [first + timedelta(minutes=index) for index in range(count)]
+
+
+def _observed(record: Any, symbol: str, moments: Sequence[datetime], minute: datetime) -> bool:
+    """Planli dakikanin turu (o dakikadaki ilk tur) kayittan okunabiliyor mu."""
+    end = minute + timedelta(minutes=1)
+    turn = next((moment for moment in moments if minute <= moment < end), None)
+    return turn is not None and record.view(symbol, turn) is not None
 
 
 def _wait_until(clock: Clock, sleep: Callable[[float], None], target: datetime) -> None:
@@ -497,14 +528,23 @@ def _fetch_sip(
     *,
     start: datetime,
     end: datetime,
+    session_open: datetime,
     clock: Clock,
     sleep: Callable[[float], None],
     deadline: datetime,
 ) -> tuple[dict[str, list[Any]], dict[str, str]]:
-    """SIP'i sembol basina son sureye kadar ister; tam gelenleri dondurur.
+    """SIP'i sembol basina son sureye kadar ister; TAM gelenleri dondurur.
 
-    Son sure seans saatine bagli TEK sabittir; her istekten once
-    denetlenir. Yavas ya da tekrarlanan istek onu kaydirmaz.
+    Son sure seans saatine bagli TEK sabittir; her istekten once ve
+    yanittan sonra denetlenir. Yavas ya da tekrarlanan istek onu
+    kaydirmaz.
+
+    Tam (tasarim §6): acilistan son turun anina kadar her dakika bari var
+    (`ts + sure <= end`). Son barin varligi yetmez (Codex 6161518682).
+    Eksik yanit son sureye kadar yeniden istenir; son surede hala eksikse
+    o sembolun SIP'i yoktur. Gercek veri boslugu ile henuz tamamlanmamis
+    yanit tek yanittan ayrilamaz; ikisi de "tam degil"dir ve SIP tam
+    sayilmaz.
     """
     complete: dict[str, list[Any]] = {}
     reasons: dict[str, str] = {}
@@ -524,14 +564,28 @@ def _fetch_sip(
                 # Son sureden once baslayip sonra donen yanit da kabul edilmez.
                 reasons[symbol] = "son sure doldu (yanit gec)"
                 continue
-            if any(bar.ts >= end - SIP_TAIL for bar in bars):
+            gaps = _session_gaps(bars, session_open, end, timeframe.duration)
+            if not gaps:
                 complete[symbol] = bars
                 reasons.pop(symbol, None)
             else:
-                reasons[symbol] = "yanit tam degil"
+                reasons[symbol] = f"yanit eksik ({gaps} dakika)"
         if len(complete) == len(symbols) or clock.now() + SIP_POLL > deadline:
             return complete, reasons
         sleep(SIP_POLL.total_seconds())
+
+
+def _session_gaps(
+    bars: Sequence[Any], session_open: datetime, end: datetime, duration: timedelta
+) -> int:
+    """Acilistan `end`e kadar kapanmis olmasi gereken ama yanitta olmayan bar sayisi."""
+    present = {bar.ts.timestamp() for bar in bars}
+    missing = 0
+    start = session_open
+    while start + duration <= end:
+        missing += start.timestamp() not in present
+        start += duration
+    return missing
 
 
 def _compare(
