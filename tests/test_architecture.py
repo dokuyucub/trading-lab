@@ -1289,8 +1289,10 @@ SHADOW_AGGREGATE = "shadow-aggregate.yml"
 
 def test_the_shadow_aggregate_is_manual_secret_free_and_reads_only() -> None:
     """Golge toplam isi: yalnizca elle, secret yok, token tek adimda,
-    indirme toplamdan once, tek yukleme. Gun ozeti artefaktinin adi ve
-    dosyasi gozlem workflow'unun yuklemesine bagli."""
+    indirme toplamdan once, tek yukleme. Toplam artefaktinin adi indirme
+    adiminin yazdigi kampanya kimligini tasir (teklik kaniti). Gun ozeti
+    artefaktinin adi ve dosyasi, secilen kosunun kaynagi gozlem
+    workflow'una bagli."""
     from tlab import shadow_job
 
     assert shadow_job.AGGREGATE_WORKFLOW_FILE == SHADOW_AGGREGATE
@@ -1311,14 +1313,17 @@ def test_the_shadow_aggregate_is_manual_secret_free_and_reads_only() -> None:
     assert step["env"] == {"GH_TOKEN": "${{ github.token }}"}
     run = step["run"]
     assert run.index("tlab.shadow_job collect") < run.index("tlab.shadow_job aggregate")
-    assert '--days "$RUNNER_TEMP/shadow-days"' in run
+    assert '--days "$RUNNER_TEMP/shadow-days" --output "$GITHUB_OUTPUT"' in run
     assert '--out "$RUNNER_TEMP/shadow-total.json"' in run
     assert not [item for item in job["steps"] if "continue-on-error" in item]
 
     upload = next(
         item for item in job["steps"] if str(item.get("uses", "")).startswith(UPLOAD_ACTION)
     )
-    assert upload["with"]["name"] == "shadow-total"
+    assert step["id"] == "total"
+    assert (
+        upload["with"]["name"] == shadow_job.TOTAL_ARTIFACT + "-${{ steps.total.outputs.campaign }}"
+    )
     assert "if" not in upload, "toplam yalnizca basarili indirme ve toplamdan sonra yuklenir"
 
     observation = next(
@@ -1328,6 +1333,11 @@ def test_the_shadow_aggregate_is_manual_secret_free_and_reads_only() -> None:
     )
     assert observation["with"]["name"] == shadow_job.DAY_ARTIFACT
     assert str(observation["with"]["path"]).endswith("/" + shadow_job.DAY_FILE)
+    shadow = _workflow(SHADOW)
+    shadow_triggers: dict[str, Any] = shadow["on"] if "on" in shadow else shadow[True]
+    branch, event, path, attempt = shadow_job.OBSERVATION_SOURCE
+    assert (branch, path, attempt) == ("main", ".github/workflows/" + SHADOW, 1)
+    assert set(shadow_triggers) == {event}, "gun ozeti yalnizca zamanlanmis kosudan gelir"
 
 
 @pytest.mark.parametrize(

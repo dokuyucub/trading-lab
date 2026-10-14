@@ -1,14 +1,21 @@
-"""Golge toplam isi: gun ozeti artefaktlarini indirme (tasarim §6, #17).
+"""Golge toplam isi: gun ozeti artefaktlarini secme ve indirme (tasarim §6, #17).
 
 Iki yerel sunucu: sahte GitHub API'si ve ayri bir indirme host'u. API
 ZIP adresine 302 ile yonlendirir. Gosterilenler:
 
-  * toplam BIR kez ve son planli gunden sonra: erken, yeniden deneme,
-    onceki basarili toplam, secret'li ya da eksik ortam hic istek yapmaz
-    (onceki toplam denetimi disinda);
+  * toplam kampanya basina BIR kez ve son planli gunden sonra: erken (New
+    York tarihi), yeniden deneme, secret'li ya da eksik ortam hic istek
+    yapmaz; bu kampanyanin toplam artefakti varsa ya da onceki toplam
+    kosusu bitmediyse hicbir gozlem artefakti indirilmez. Basariyla biten
+    ama cikti birakmayan toplam kosusu engel degildir;
+  * yalnizca `main` dalindaki zamanlanmis, ilk denemeli gozlem kosusu
+    secilir; plan disi gunun kosusu listelenmez; planli gunun bitmemis
+    kosusu varsa hicbir sey indirilmez;
+  * digest eksikse indirilmez, uyusmazsa kabul edilmez;
   * yonlendirme elle ve bir kez izlenir; indirme istegine Authorization
     gitmez, ikinci yonlendirme okunmaz, https disi adres reddedilir;
-  * ZIP tek uyeli ve sabit adli; bicim, boyut, sema ve gun denetlenir;
+  * ZIP tek uyeli ve sabit adli; gun ozeti alan alan sozlesmeye gore
+    denetlenir, biri uymazsa butun toplama durur;
   * suresi dolmus artefakt atlanir, o gun toplamda kosu kanitiyla
     siniflanir; hata kismi toplam yazdirmaz;
   * cikti token, adres ya da govde tasimaz.
@@ -16,6 +23,7 @@ ZIP adresine 302 ile yonlendirir. Gosterilenler:
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import threading
@@ -26,10 +34,11 @@ from datetime import UTC, date, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+from shadow_days import TURNS, campaign, comparison, day_payload, symbols_of, write_day
 from tlab import shadow_job
 from tlab.core.clock import SimClock
 
@@ -41,16 +50,20 @@ TOKEN = "COLLECT-CANARY-TOKEN"  # noqa: S105 - ciktida ARANAN sahte isaret
 BODY = "COLLECT-BODY-CANARY"
 RUNS_PATH = f"/repos/{REPO}/actions/workflows/{shadow_job.WORKFLOW_FILE}/runs"
 TOTAL_RUNS_PATH = f"/repos/{REPO}/actions/workflows/{shadow_job.AGGREGATE_WORKFLOW_FILE}/runs"
+ARTIFACTS_PATH = f"/repos/{REPO}/actions/artifacts"
 
 
-def day_zip(day: date, *, name: str = shadow_job.DAY_FILE, extra: bool = False) -> bytes:
-    payload = {"day_schema": shadow_job.DAY_SCHEMA, "day": day.isoformat(), "status": "tamam"}
+def zipped(content: bytes | str, *, name: str = shadow_job.DAY_FILE, extra: bool = False) -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr(name, json.dumps({**payload, "reason": None, "symbols": []}))
+        archive.writestr(name, content)
         if extra:
             archive.writestr("ikinci.json", "{}")
     return buffer.getvalue()
+
+
+def day_zip(root: Path, day: date, **overrides: Any) -> bytes:
+    return zipped(json.dumps(day_payload(root, PLANNED, day, **overrides)))
 
 
 @dataclass
@@ -67,11 +80,16 @@ class Api:
     runs: list[dict[str, Any]] = field(default_factory=list)
     runs_total: int | None = None
     totals: list[dict[str, Any]] = field(default_factory=list)
+    repo_artifacts: list[dict[str, Any]] = field(default_factory=list)
+    """Depo artefakt listesi; `name` suzgeci uygulanMAZ (istemci de denetler)."""
     artifacts: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     jobs: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     zips: dict[str, str] = field(default_factory=dict)
     """artefakt kimligi -> yonlendirme adresi."""
     requests: list[tuple[str, str | None]] = field(default_factory=list)
+
+    def paths(self) -> list[str]:
+        return [urlparse(path).path for path, _ in self.requests]
 
 
 def _start(handler: type[BaseHTTPRequestHandler]) -> tuple[ThreadingHTTPServer, str]:
@@ -130,6 +148,9 @@ def api() -> Iterator[tuple[Api, str]]:
                 _reply(self, 200, {"total_count": total, "workflow_runs": state.runs})
             elif path == TOTAL_RUNS_PATH:
                 _reply(self, 200, {"total_count": len(state.totals), "workflow_runs": state.totals})
+            elif path == ARTIFACTS_PATH:
+                items = state.repo_artifacts
+                _reply(self, 200, {"total_count": len(items), "artifacts": items})
             elif path.endswith("/artifacts") and "/actions/runs/" in path:
                 items = state.artifacts.get(parts[-2], [])
                 _reply(self, 200, {"total_count": len(items), "artifacts": items})
@@ -165,27 +186,64 @@ def env(api_url: str, **extra: str) -> dict[str, str]:
     }
 
 
-def run(run_id: int, created: str) -> dict[str, Any]:
-    return {"id": run_id, "created_at": created}
+def run(run_id: int, created: str, **overrides: Any) -> dict[str, Any]:
+    """Secilecek bicimde gozlem kosusu: main, zamanlanmis, ilk deneme, bitti."""
+    return {
+        "id": run_id,
+        "created_at": created,
+        "status": "completed",
+        "head_branch": "main",
+        "event": "schedule",
+        "path": f".github/workflows/{shadow_job.WORKFLOW_FILE}",
+        "run_attempt": 1,
+        **overrides,
+    }
 
 
-def artifact(artifact_id: int, *, expired: bool = False) -> dict[str, Any]:
-    return {"id": artifact_id, "name": shadow_job.DAY_ARTIFACT, "expired": expired}
+def artifact(artifact_id: int, *, expired: bool = False, digest: Any = None) -> dict[str, Any]:
+    item: dict[str, Any] = {"id": artifact_id, "name": shadow_job.DAY_ARTIFACT, "expired": expired}
+    if digest is not None:
+        item["digest"] = digest
+    return item
 
 
-def serve(api: Api, host: Host, host_url: str, run_id: int, day: date, data: bytes) -> None:
-    """Bir kosunun gun ozeti: API listesi, 302 ve indirme host'undaki ZIP."""
+def sha256(data: bytes) -> str:
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def serve(
+    api: Api, host: Host, host_url: str, run_id: int, data: bytes, *, digest: Any = ""
+) -> None:
+    """Bir kosunun gun ozeti: API listesi (digest'le), 302 ve indirme host'undaki ZIP."""
     artifact_id = 1000 + run_id
-    api.artifacts[str(run_id)] = [artifact(artifact_id)]
+    api.artifacts[str(run_id)] = [
+        artifact(artifact_id, digest=sha256(data) if digest == "" else digest)
+    ]
     api.zips[str(artifact_id)] = f"{host_url}/blob/{artifact_id}?sig=IMZA"
     host.files[f"/blob/{artifact_id}?sig=IMZA"] = data
 
 
 def collect(
-    environment: dict[str, str], tmp_path: Path, clock: SimClock = AFTER
+    environment: dict[str, str],
+    tmp_path: Path,
+    root: Path,
+    clock: SimClock = AFTER,
+    planned: tuple[date, ...] = PLANNED,
 ) -> tuple[int, Path]:
     days = tmp_path / "days"
-    return shadow_job.collect(environment, clock=clock, days_dir=days, planned=PLANNED), days
+    code = shadow_job.collect(
+        environment,
+        clock=clock,
+        days_dir=days,
+        root=root,
+        output=tmp_path / "github-output",
+        planned=planned,
+    )
+    return code, days
+
+
+def written(days: Path) -> list[str]:
+    return sorted(path.name for path in days.glob("*.json"))
 
 
 # --------------------------------------------------------------------------
@@ -207,7 +265,7 @@ def test_day_summaries_are_downloaded_and_the_total_classifies_the_rest(
         run(12, "2026-01-06T13:50:03Z"),
         run(13, "2026-01-06T12:50:03Z"),
     ]
-    serve(state, blobs, host_url, 11, D1, day_zip(D1))
+    serve(state, blobs, host_url, 11, day_zip(project_root, D1))
     # D2: ozeti suresi dolmus; kayit adimi gercekten kostu.
     state.artifacts["12"] = [artifact(112, expired=True)]
     state.jobs["12"] = [
@@ -218,9 +276,13 @@ def test_day_summaries_are_downloaded_and_the_total_classifies_the_rest(
             "steps": [{"name": "Gozle", "status": "completed", "conclusion": "success"}],
         }
     ]
-    code, days = collect(env(api_url), tmp_path)
+    code, days = collect(env(api_url), tmp_path, project_root)
     assert code == 0
-    assert sorted(path.name for path in days.iterdir()) == ["11.json"]
+    assert written(days) == ["11.json"]
+    prefix = campaign(project_root, PLANNED)[: shadow_job.CAMPAIGN_PREFIX]
+    assert (tmp_path / "github-output").read_text(encoding="utf-8") == f"campaign={prefix}\n"
+    total_query = parse_qs(urlparse(state.requests[1][0]).query)
+    assert total_query["name"] == [f"{shadow_job.TOTAL_ARTIFACT}-{prefix}"]
 
     out = tmp_path / "total.json"
     assert (
@@ -234,20 +296,21 @@ def test_day_summaries_are_downloaded_and_the_total_classifies_the_rest(
         (D1.isoformat(), "tamam", None),
         (D2.isoformat(), "eksik", "kayit adimi kostu, ozet yok"),
     ]
+    assert total["campaign"] == campaign(project_root, PLANNED)
     text = capsys.readouterr().out
-    assert "OK toplam: 1 gun ozeti indirildi" in text
+    assert f"OK toplam: kampanya {prefix}, 1 gun ozeti indirildi" in text
     assert "suresi dolmus" in text
     assert TOKEN not in text and "IMZA" not in text and BODY not in text
 
 
 def test_the_token_goes_only_to_the_api_and_the_redirect_is_followed_once(
-    api: tuple[Api, str], host: tuple[Host, str], tmp_path: Path
+    api: tuple[Api, str], host: tuple[Host, str], tmp_path: Path, project_root: Path
 ) -> None:
     state, api_url = api
     blobs, host_url = host
     state.runs = [run(11, "2026-01-05T13:50:03Z")]
-    serve(state, blobs, host_url, 11, D1, day_zip(D1))
-    code, _ = collect(env(api_url), tmp_path)
+    serve(state, blobs, host_url, 11, day_zip(project_root, D1))
+    code, _ = collect(env(api_url), tmp_path, project_root)
     assert code == 0
     assert state.requests and all(auth == f"Bearer {TOKEN}" for _, auth in state.requests)
     assert blobs.requests == [("/blob/1011?sig=IMZA", None)], "indirmeye Authorization gitmez"
@@ -257,29 +320,34 @@ def test_a_second_redirect_is_refused_and_not_followed(
     api: tuple[Api, str],
     host: tuple[Host, str],
     tmp_path: Path,
+    project_root: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     state, api_url = api
     blobs, host_url = host
     state.runs = [run(11, "2026-01-05T13:50:03Z")]
-    serve(state, blobs, host_url, 11, D1, day_zip(D1))
+    serve(state, blobs, host_url, 11, day_zip(project_root, D1))
     blobs.redirect_to = f"{host_url}/third?sig=IKINCI"
-    code, days = collect(env(api_url), tmp_path)
+    code, days = collect(env(api_url), tmp_path, project_root)
     assert code == 1
     assert "ikinci yonlendirme reddedildi (HTTP 302)" in capsys.readouterr().out
     assert [path for path, _ in blobs.requests] == ["/blob/1011?sig=IMZA"], "ucuncu adres istenmez"
-    assert not list(days.glob("*.json"))
+    assert not written(days)
 
 
 def test_a_non_https_download_address_is_refused(
-    api: tuple[Api, str], host: tuple[Host, str], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    api: tuple[Api, str],
+    host: tuple[Host, str],
+    tmp_path: Path,
+    project_root: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     state, api_url = api
     blobs, _ = host
     state.runs = [run(11, "2026-01-05T13:50:03Z")]
-    state.artifacts["11"] = [artifact(1011)]
+    state.artifacts["11"] = [artifact(1011, digest=sha256(b"x"))]
     state.zips["1011"] = "http://example.invalid/blob?sig=IMZA"
-    code, _ = collect(env(api_url), tmp_path)
+    code, _ = collect(env(api_url), tmp_path, project_root)
     assert code == 1
     text = capsys.readouterr().out
     assert "beklenmeyen adres semasi" in text
@@ -290,14 +358,25 @@ def test_a_non_https_download_address_is_refused(
 @pytest.mark.parametrize(
     ("data", "reason"),
     [
-        (day_zip(D1, extra=True), "ZIP beklenen tek uyeyi tasimiyor"),
-        (day_zip(D1, name="baska.json"), "ZIP beklenen tek uyeyi tasimiyor"),
-        (day_zip(D1, name="../shadow-day.json"), "ZIP beklenen tek uyeyi tasimiyor"),
-        (day_zip(D1, name="alt/shadow-day.json"), "ZIP beklenen tek uyeyi tasimiyor"),
+        (zipped("{}", extra=True), "ZIP beklenen tek uyeyi tasimiyor"),
+        (zipped("{}", name="baska.json"), "ZIP beklenen tek uyeyi tasimiyor"),
+        (zipped("{}", name="../shadow-day.json"), "ZIP beklenen tek uyeyi tasimiyor"),
+        (zipped("{}", name="alt/shadow-day.json"), "ZIP beklenen tek uyeyi tasimiyor"),
         (b"PK\x03\x04bozuk", "ZIP okunamadi (bicim ya da CRC)"),
-        (day_zip(D2), "gun ozetinin gunu kosuyla ya da planla uyusmuyor"),
+        (zipped("{bozuk"), "gun ozeti JSON degil"),
+        (zipped(b"\xff\xfe"), "gun ozeti JSON degil"),
+        (zipped("[" * 100_000), "gun ozeti JSON degil"),
     ],
-    ids=["iki-uye", "baska-ad", "ust-dizin", "alt-dizin", "bozuk", "baska-gun"],
+    ids=[
+        "iki-uye",
+        "baska-ad",
+        "ust-dizin",
+        "alt-dizin",
+        "bozuk",
+        "json-degil",
+        "utf8-degil",
+        "derin",
+    ],
 )
 def test_an_unexpected_archive_fails_the_whole_collection(
     data: bytes,
@@ -305,36 +384,45 @@ def test_an_unexpected_archive_fails_the_whole_collection(
     api: tuple[Api, str],
     host: tuple[Host, str],
     tmp_path: Path,
+    project_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    state, api_url = api
+    blobs, host_url = host
+    state.runs = [run(11, "2026-01-05T13:50:03Z"), run(12, "2026-01-06T13:50:03Z")]
+    serve(state, blobs, host_url, 11, day_zip(project_root, D1))
+    serve(state, blobs, host_url, 12, data)
+    code, _ = collect(env(api_url), tmp_path, project_root)
+    assert code == 1
+    assert reason in capsys.readouterr().out
+    assert not (tmp_path / "github-output").exists(), "yukleme adi yazilmaz"
+
+
+def test_a_summary_of_another_day_or_campaign_fails_the_whole_collection(
+    api: tuple[Api, str],
+    host: tuple[Host, str],
+    tmp_path: Path,
+    project_root: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     state, api_url = api
     blobs, host_url = host
     state.runs = [run(11, "2026-01-05T13:50:03Z")]
-    serve(state, blobs, host_url, 11, D1, data)
-    code, days = collect(env(api_url), tmp_path)
-    assert code == 1
-    assert reason in capsys.readouterr().out
-    assert not list(days.glob("*.json"))
+    serve(state, blobs, host_url, 11, day_zip(project_root, D2))
+    assert collect(env(api_url), tmp_path, project_root)[0] == 1
+    assert "gun ozetinin gunu kosuyla uyusmuyor" in capsys.readouterr().out
 
-
-def test_an_undefined_schema_is_refused(
-    api: tuple[Api, str], host: tuple[Host, str], tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    state, api_url = api
-    blobs, host_url = host
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr(shadow_job.DAY_FILE, json.dumps({"day_schema": 99, "day": "2026-01-05"}))
-    state.runs = [run(11, "2026-01-05T13:50:03Z")]
-    serve(state, blobs, host_url, 11, D1, buffer.getvalue())
-    assert collect(env(api_url), tmp_path)[0] == 1
-    assert "gun ozeti semasi tanimsiz" in capsys.readouterr().out
+    other = day_zip(project_root, D1, campaign=campaign(project_root, (D1,)))
+    serve(state, blobs, host_url, 11, other)
+    assert collect(env(api_url), tmp_path / "ikinci", project_root)[0] == 1
+    assert "gun ozeti baska kampanyanin" in capsys.readouterr().out
 
 
 def test_an_oversized_member_is_refused(
     api: tuple[Api, str],
     host: tuple[Host, str],
     tmp_path: Path,
+    project_root: Path,
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -342,8 +430,8 @@ def test_an_oversized_member_is_refused(
     blobs, host_url = host
     monkeypatch.setattr(shadow_job, "MAX_DAY_BYTES", 10)
     state.runs = [run(11, "2026-01-05T13:50:03Z")]
-    serve(state, blobs, host_url, 11, D1, day_zip(D1))
-    assert collect(env(api_url), tmp_path)[0] == 1
+    serve(state, blobs, host_url, 11, day_zip(project_root, D1))
+    assert collect(env(api_url), tmp_path, project_root)[0] == 1
     assert "gun ozeti boyut sinirini asti" in capsys.readouterr().out
 
 
@@ -363,39 +451,174 @@ def lying_zip(day: date, declared: int) -> bytes:
 
 
 def test_a_member_that_lies_about_its_size_is_refused(
-    api: tuple[Api, str], host: tuple[Host, str], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    api: tuple[Api, str],
+    host: tuple[Host, str],
+    tmp_path: Path,
+    project_root: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Okuma bildirilen boyutta durur ve CRC tutmaz: kisaltilmis icerik kabul edilmez."""
     state, api_url = api
     blobs, host_url = host
     state.runs = [run(11, "2026-01-05T13:50:03Z")]
-    serve(state, blobs, host_url, 11, D1, lying_zip(D1, declared=10))
-    assert collect(env(api_url), tmp_path)[0] == 1
+    serve(state, blobs, host_url, 11, lying_zip(D1, declared=10))
+    assert collect(env(api_url), tmp_path, project_root)[0] == 1
     assert "ZIP okunamadi (bicim ya da CRC)" in capsys.readouterr().out
 
 
 def test_two_day_artifacts_in_one_run_fail(
-    api: tuple[Api, str], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    api: tuple[Api, str], tmp_path: Path, project_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     state, api_url = api
     state.runs = [run(11, "2026-01-05T13:50:03Z")]
     state.artifacts["11"] = [artifact(1), artifact(2)]
-    assert collect(env(api_url), tmp_path)[0] == 1
+    assert collect(env(api_url), tmp_path, project_root)[0] == 1
     assert "birden cok gun ozeti artefakti" in capsys.readouterr().out
 
 
+def test_two_selected_summaries_of_one_day_fail(
+    api: tuple[Api, str],
+    host: tuple[Host, str],
+    tmp_path: Path,
+    project_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    state, api_url = api
+    blobs, host_url = host
+    state.runs = [run(11, "2026-01-05T12:50:03Z"), run(12, "2026-01-05T13:50:03Z")]
+    serve(state, blobs, host_url, 11, day_zip(project_root, D1))
+    serve(state, blobs, host_url, 12, day_zip(project_root, D1))
+    assert collect(env(api_url), tmp_path, project_root)[0] == 1
+    assert "ayni gunun iki gun ozeti var" in capsys.readouterr().out
+
+
 def test_more_than_one_page_of_runs_fails(
-    api: tuple[Api, str], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    api: tuple[Api, str], tmp_path: Path, project_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     state, api_url = api
     state.runs = [run(11, "2026-01-05T13:50:03Z")]
     state.runs_total = 101
-    assert collect(env(api_url), tmp_path)[0] == 1
+    assert collect(env(api_url), tmp_path, project_root)[0] == 1
     assert "kosu listesi tek sayfayi asti" in capsys.readouterr().out
 
 
 # --------------------------------------------------------------------------
-# Tek toplam: hic istek yapmadan reddedilen durumlar
+# Kosu secimi, son gun ve digest (Codex 6171961412)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"event": "workflow_dispatch"},
+        {"event": "push"},
+        {"head_branch": "feature"},
+        {"head_branch": None},
+        {"path": ".github/workflows/baska.yml"},
+        {"run_attempt": 2},
+        {"run_attempt": True},
+        {"run_attempt": "1"},
+    ],
+    ids=["dispatch", "push", "dal", "dal-yok", "yol", "deneme-2", "deneme-bool", "deneme-metin"],
+)
+def test_only_a_scheduled_first_attempt_main_run_is_selected(
+    overrides: dict[str, Any],
+    api: tuple[Api, str],
+    host: tuple[Host, str],
+    tmp_path: Path,
+    project_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    state, api_url = api
+    blobs, host_url = host
+    state.runs = [run(11, "2026-01-05T13:50:03Z"), run(12, "2026-01-06T13:50:03Z", **overrides)]
+    serve(state, blobs, host_url, 11, day_zip(project_root, D1))
+    serve(state, blobs, host_url, 12, day_zip(project_root, D2))
+    code, days = collect(env(api_url), tmp_path, project_root)
+    assert code == 0
+    assert written(days) == ["11.json"]
+    assert f"/repos/{REPO}/actions/runs/12/artifacts" not in state.paths()
+    assert f"UYARI toplam: {D2.isoformat()} kosusu secilmedi" in capsys.readouterr().out
+
+
+def test_an_unplanned_day_run_is_not_listed(
+    api: tuple[Api, str], host: tuple[Host, str], tmp_path: Path, project_root: Path
+) -> None:
+    state, api_url = api
+    blobs, host_url = host
+    state.runs = [
+        run(10, "2026-01-04T13:50:03Z", status="in_progress"),
+        run(11, "2026-01-05T13:50:03Z"),
+        run(13, "2026-01-07T13:50:03Z", status="queued"),
+    ]
+    serve(state, blobs, host_url, 11, day_zip(project_root, D1))
+    serve(state, blobs, host_url, 13, day_zip(project_root, D2))
+    code, days = collect(env(api_url), tmp_path, project_root)
+    assert code == 0
+    assert written(days) == ["11.json"]
+    listed = [path for path in state.paths() if path.endswith("/artifacts")]
+    assert listed == [ARTIFACTS_PATH, f"/repos/{REPO}/actions/runs/11/artifacts"]
+
+
+@pytest.mark.parametrize("status", ["in_progress", "queued", "waiting", None])
+def test_an_unfinished_planned_day_run_stops_before_any_download(
+    status: str | None,
+    api: tuple[Api, str],
+    host: tuple[Host, str],
+    tmp_path: Path,
+    project_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Son gunun gozlemi ya da SIP bekleyisi suruyorsa toplam baslamaz;
+    once butun kosular okunur, hicbir artefakt listelenmez."""
+    state, api_url = api
+    blobs, host_url = host
+    state.runs = [
+        run(11, "2026-01-05T13:50:03Z"),
+        run(12, "2026-01-06T13:50:03Z", status=status, event="workflow_dispatch"),
+    ]
+    serve(state, blobs, host_url, 11, day_zip(project_root, D1))
+    code, days = collect(env(api_url), tmp_path, project_root)
+    assert code == 1
+    assert "planli gunun gozlem kosusu henuz bitmedi" in capsys.readouterr().out
+    assert not [path for path in state.paths() if "/actions/runs/" in path]
+    assert blobs.requests == []
+    assert not days.exists()
+
+
+@pytest.mark.parametrize(
+    ("digest", "reason", "downloaded"),
+    [
+        (None, "artefakt digest'i yok", False),
+        (12, "artefakt digest'i yok", False),
+        ("md5:abc", "artefakt digest'i yok", False),
+        ("sha256:" + "0" * 64, "artefakt digest'i uyusmuyor", True),
+    ],
+    ids=["yok", "metin-degil", "baska-algoritma", "uyusmaz"],
+)
+def test_a_missing_or_wrong_digest_fails_the_collection(
+    digest: Any,
+    reason: str,
+    downloaded: bool,
+    api: tuple[Api, str],
+    host: tuple[Host, str],
+    tmp_path: Path,
+    project_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    state, api_url = api
+    blobs, host_url = host
+    state.runs = [run(11, "2026-01-05T13:50:03Z")]
+    serve(state, blobs, host_url, 11, day_zip(project_root, D1), digest=digest)
+    code, days = collect(env(api_url), tmp_path, project_root)
+    assert code == 1
+    assert reason in capsys.readouterr().out
+    assert bool(blobs.requests) is downloaded
+    assert not written(days)
+
+
+# --------------------------------------------------------------------------
+# Tek toplam: kampanya kaniti ve hic istek yapmadan reddedilen durumlar
 # --------------------------------------------------------------------------
 
 
@@ -404,11 +627,17 @@ def test_more_than_one_page_of_runs_fails(
     [
         ({"ALPACA_PAPER_API_KEY": "x"}, AFTER, PLANNED, "toplam isi secret'siz calisir"),
         ({}, AFTER, (), "planli gun yok"),
-        ({}, SimClock(datetime(2026, 1, 6, 23, 0, tzinfo=UTC)), PLANNED, "henuz bitmedi"),
+        # UTC tarihi 7 Ocak, New York tarihi hala 6 Ocak (son planli gun).
+        (
+            {},
+            SimClock(datetime(2026, 1, 7, 4, 59, tzinfo=UTC)),
+            PLANNED,
+            "son planli gun henuz bitmedi (New York tarihi)",
+        ),
         ({"GITHUB_RUN_ATTEMPT": "2"}, AFTER, PLANNED, "yeniden deneme kosusu"),
         ({"GH_TOKEN": ""}, AFTER, PLANNED, "Actions API ortami eksik"),
     ],
-    ids=["secret", "plan-bos", "erken", "yeniden-deneme", "ortam-eksik"],
+    ids=["secret", "plan-bos", "erken-new-york", "yeniden-deneme", "ortam-eksik"],
 )
 def test_a_refused_collection_makes_no_request(
     environment: dict[str, str],
@@ -417,41 +646,360 @@ def test_a_refused_collection_makes_no_request(
     reason: str,
     api: tuple[Api, str],
     tmp_path: Path,
+    project_root: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     state, api_url = api
-    code = shadow_job.collect(
-        env(api_url, **environment), clock=clock, days_dir=tmp_path / "days", planned=planned
-    )
+    code, _ = collect(env(api_url, **environment), tmp_path, project_root, clock, planned)
     assert code == 1
     assert reason in capsys.readouterr().out
     assert state.requests == []
 
 
-def test_a_prior_successful_total_blocks_a_second_one(
-    api: tuple[Api, str], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+def test_the_first_new_york_day_after_the_campaign_may_collect(
+    api: tuple[Api, str], tmp_path: Path, project_root: Path
+) -> None:
+    _, api_url = api
+    clock = SimClock(datetime(2026, 1, 7, 5, 0, tzinfo=UTC))
+    assert collect(env(api_url), tmp_path, project_root, clock)[0] == 0
+
+
+def test_an_unreadable_configuration_makes_no_request(
+    api: tuple[Api, str], tmp_path: Path, project_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     state, api_url = api
-    state.runs = [run(11, "2026-01-05T13:50:03Z")]
-    state.totals = [{"id": 800, "conclusion": "success"}, {"id": 950, "conclusion": "success"}]
-    assert collect(env(api_url), tmp_path)[0] == 1
-    assert "toplam daha once uretildi" in capsys.readouterr().out
-    assert [urlparse(path).path for path, _ in state.requests] == [TOTAL_RUNS_PATH]
+    (project_root / "config" / "universe.yaml").unlink()
+    assert collect(env(api_url), tmp_path, project_root)[0] == 1
+    assert "FAIL yapilandirma: kampanya kimligi" in capsys.readouterr().out
+    assert state.requests == []
 
 
-def test_a_later_or_failed_total_does_not_block(api: tuple[Api, str], tmp_path: Path) -> None:
+@pytest.mark.parametrize("expired", [False, True])
+def test_an_existing_total_of_this_campaign_blocks_a_second_one(
+    expired: bool,
+    api: tuple[Api, str],
+    tmp_path: Path,
+    project_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Teklik kaniti gercek cikti: suresi dolmus olsa da bu kampanyanin
+    toplam artefakti varsa gozlem artefakti indirilmez, yeni toplam
+    uretilmez."""
     state, api_url = api
-    state.totals = [{"id": 950, "conclusion": "success"}, {"id": 800, "conclusion": "failure"}]
-    assert collect(env(api_url), tmp_path)[0] == 0
+    name = shadow_job.total_artifact(campaign(project_root, PLANNED))
+    state.runs = [run(11, "2026-01-05T13:50:03Z")]
+    state.repo_artifacts = [{"id": 5, "name": name, "expired": expired}]
+    code, days = collect(env(api_url), tmp_path, project_root)
+    assert code == 1
+    assert "bu kampanyanin toplami daha once uretildi" in capsys.readouterr().out
+    assert state.paths() == [TOTAL_RUNS_PATH, ARTIFACTS_PATH]
+    assert not days.exists()
+
+
+def test_another_campaign_or_an_empty_successful_run_does_not_block(
+    api: tuple[Api, str], tmp_path: Path, project_root: Path
+) -> None:
+    """Basariyla bitip cikti birakmayan toplam kosusu (bos ya da erken
+    PLANNED_DAYS) kanit degildir; baska kampanyanin toplami da engel degil."""
+    state, api_url = api
+    other = shadow_job.total_artifact(campaign(project_root, (D1,)))
+    state.repo_artifacts = [{"id": 5, "name": other, "expired": False}]
+    state.totals = [
+        {"id": 800, "status": "completed", "conclusion": "success"},
+        {"id": 850, "status": "completed", "conclusion": "failure"},
+    ]
+    assert collect(env(api_url), tmp_path, project_root)[0] == 0
+
+
+@pytest.mark.parametrize(
+    ("totals", "blocked"),
+    [
+        ([{"id": 800, "status": "in_progress"}], True),
+        ([{"id": 800, "status": "queued"}], True),
+        ([{"id": 800}], True),
+        ([{"id": 950, "status": "in_progress"}, {"id": 900, "status": "in_progress"}], False),
+    ],
+    ids=["suruyor", "kuyrukta", "durum-yok", "sonraki-ve-kendisi"],
+)
+def test_an_unfinished_earlier_total_run_blocks(
+    totals: list[dict[str, Any]],
+    blocked: bool,
+    api: tuple[Api, str],
+    tmp_path: Path,
+    project_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    state, api_url = api
+    state.totals = totals
+    code, _ = collect(env(api_url), tmp_path, project_root)
+    assert code == int(blocked)
+    assert ("onceki toplam kosusu suruyor" in capsys.readouterr().out) is blocked
+    if blocked:
+        assert state.paths() == [TOTAL_RUNS_PATH]
+
+
+def test_an_unwritable_step_output_fails(
+    api: tuple[Api, str], tmp_path: Path, project_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _, api_url = api
+    (tmp_path / "github-output").mkdir()
+    assert collect(env(api_url), tmp_path, project_root)[0] == 1
+    assert "adim ciktisi yazilamadi (IsADirectoryError)" in capsys.readouterr().out
 
 
 def test_an_unreadable_history_fails_without_leaks(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, project_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    code = shadow_job.collect(
-        env("http://127.0.0.1:9"), clock=AFTER, days_dir=tmp_path / "days", planned=PLANNED
-    )
+    code, _ = collect(env("http://127.0.0.1:9"), tmp_path, project_root)
     assert code == 1
     text = capsys.readouterr().out
     assert "toplam kosu listesi okunamadi" in text
     assert TOKEN not in text
+
+
+# --------------------------------------------------------------------------
+# Gun ozeti sozlesmesi (tasarim §6): tur ve tutarlilik
+# --------------------------------------------------------------------------
+
+
+def parse(root: Path, payload: Any) -> shadow_job.ParsedDay:
+    return shadow_job._parse_day(
+        payload, campaign=campaign(root, PLANNED), symbols=symbols_of(root), planned=PLANNED
+    )
+
+
+def with_symbol(root: Path, index: int, **overrides: Any) -> list[dict[str, Any]]:
+    items = [comparison(symbol) for symbol in symbols_of(root)]
+    items[index] = {**items[index], **overrides}
+    return items
+
+
+INCOMPLETE = {"status": "eksik", "reason": "tur kacti (1/106)"}
+CASES: list[tuple[str, dict[str, Any], str]] = [
+    ("schema-99", {"day_schema": 99}, "gun ozeti semasi tanimsiz"),
+    ("schema-bool", {"day_schema": True}, "gun ozeti semasi tanimsiz"),
+    ("gun-bicimi", {"day": "20260105"}, "gun ozetinin gunu bicimsiz"),
+    ("gun-sayi", {"day": 5}, "gun ozetinin gunu bicimsiz"),
+    ("gun-plan-disi", {"day": "2026-01-08"}, "gun ozetinin gunu planda yok"),
+    ("kampanya", {"campaign": "0" * 64}, "gun ozeti baska kampanyanin"),
+    ("durum", {"status": "baslamadi"}, "gun durumu tanimsiz"),
+    ("tamam-sebepli", {"reason": "x"}, "gun durumu ve sebebi tutarsiz"),
+    ("eksik-sebepsiz", {"status": "eksik"}, "gun durumu ve sebebi tutarsiz"),
+    ("eksik-bos-sebep", {"status": "eksik", "reason": ""}, "gun durumu ve sebebi tutarsiz"),
+    ("surum", {"params_version": 5}, "strateji surumu beklenen bicimde degil"),
+    ("saat-metin", {"clock_consistent": "evet"}, "saat denetimi beklenen bicimde degil"),
+    ("saat-sayi", {"clock_consistent": 1}, "saat denetimi beklenen bicimde degil"),
+    (
+        "tur-toplami",
+        {"turns": {"expected": 106, "called": 100, "failed": 0, "missed": 0}},
+        "tur sayaclari tutarsiz",
+    ),
+    (
+        "tur-bool",
+        {"turns": {"expected": 1, "called": True, "failed": 0, "missed": 0}},
+        "turns beklenen",
+    ),
+    (
+        "tur-negatif",
+        {"turns": {"expected": 0, "called": 1, "failed": -1, "missed": 0}},
+        "turns beklenen",
+    ),
+    ("tur-anahtar", {"turns": {"expected": 106, "called": 106}}, "turns beklenen"),
+    ("tur-liste", {"turns": [106, 106, 0, 0]}, "turns beklenen"),
+    (
+        "sembol-tur-fazla",
+        {"symbol_turns": {"expected": 2, "observed": 3}},
+        "sembol-tur sayaclari tutarsiz",
+    ),
+    (
+        "sembol-tur-metin",
+        {"symbol_turns": {"expected": "2", "observed": 2}},
+        "symbol_turns beklenen",
+    ),
+    ("sip-sebep-sembol", {"sip_reasons": {"MSFT": "x"}}, "SIP sebepleri beklenen bicimde degil"),
+    ("sip-sebep-deger", {"sip_reasons": {"SPY": 1}}, "SIP sebepleri beklenen bicimde degil"),
+    ("sip-sebep-liste", {"sip_reasons": ["SPY"]}, "SIP sebepleri beklenen bicimde degil"),
+    ("canli-saf-negatif", {"live_pure_mismatches": -1}, "canli-saf sayaci beklenen bicimde degil"),
+    ("canli-saf-bool", {"live_pure_mismatches": False}, "canli-saf sayaci beklenen bicimde degil"),
+    ("semboller-sozluk", {"symbols": {}}, "sembol sonuclari beklenen bicimde degil"),
+    ("fazla-alan", {"price": 100.5}, "gun ozetinin alanlari beklenen kumede degil"),
+]
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reason"), [case[1:] for case in CASES], ids=[case[0] for case in CASES]
+)
+def test_a_summary_field_that_breaks_the_contract_is_refused(
+    overrides: dict[str, Any], reason: str, project_root: Path
+) -> None:
+    payload = day_payload(project_root, PLANNED, D1, **overrides)
+    with pytest.raises(shadow_job.DaySummaryError, match=reason):
+        parse(project_root, payload)
+
+
+@pytest.mark.parametrize("missing", sorted(shadow_job.DAY_HEAD))
+def test_a_summary_without_a_head_field_is_refused(missing: str, project_root: Path) -> None:
+    payload = day_payload(project_root, PLANNED, D1)
+    del payload[missing]
+    with pytest.raises(shadow_job.DaySummaryError, match="alanlari beklenen kumede degil"):
+        parse(project_root, payload)
+
+
+@pytest.mark.parametrize("payload", [[], "tamam", None, 1])
+def test_a_summary_that_is_not_an_object_is_refused(payload: Any, project_root: Path) -> None:
+    with pytest.raises(shadow_job.DaySummaryError, match="gun ozeti beklenen bicimde degil"):
+        parse(project_root, payload)
+
+
+SYMBOL_CASES: list[tuple[str, int, dict[str, Any], str]] = [
+    ("sayi-metin", 0, {"window_expected": "15"}, "turleri beklenen gibi degil"),
+    ("bool-sayi", 0, {"iex_completed_later": 0}, "turleri beklenen gibi degil"),
+    ("sayi-bool", 0, {"iex_present": True}, "turleri beklenen gibi degil"),
+    ("ondalik-bool", 0, {"or_high_bps": True}, "turleri beklenen gibi degil"),
+    ("ondalik-nan", 0, {"or_low_bps": float("nan")}, "turleri beklenen gibi degil"),
+    ("ondalik-sonsuz", 0, {"iex_first_minute": float("inf")}, "turleri beklenen gibi degil"),
+    ("ondalik-sayiya", 0, {"window_expected": 15.0}, "turleri beklenen gibi degil"),
+    ("sip-sayi", 1, {"sip_available": 1}, "turleri beklenen gibi degil"),
+    ("sembol-yok", 0, {"symbol": None}, "turleri beklenen gibi degil"),
+    ("evren-disi", 1, {"symbol": "MSFT"}, "sembol kampanya evreninde yok"),
+    ("aralik-durumu", 0, {"range_status": "tamam"}, "sembol sonucunun durumu tanimsiz"),
+    ("sinyal", 0, {"signal": "buy"}, "sembol sonucunun durumu tanimsiz"),
+    ("negatif-pencere", 0, {"window_expected": -1}, "sembol sonucunda negatif sayac"),
+    ("negatif-iex", 0, {"iex_present": -1}, "sembol sonucunda negatif sayac"),
+    ("negatif-sip", 1, {"sip_present": -1}, "sembol sonucunda negatif sayac"),
+    ("negatif-tur", 1, {"iex_unknown_turns": -2}, "sembol sonucunda negatif sayac"),
+    ("fazla-alan", 0, {"close": 100.5}, "sembol sonucunun alanlari beklenen kumede degil"),
+]
+
+
+@pytest.mark.parametrize(
+    ("index", "overrides", "reason"),
+    [case[1:] for case in SYMBOL_CASES],
+    ids=[case[0] for case in SYMBOL_CASES],
+)
+def test_a_symbol_result_that_breaks_the_contract_is_refused(
+    index: int, overrides: dict[str, Any], reason: str, project_root: Path
+) -> None:
+    payload = day_payload(
+        project_root,
+        PLANNED,
+        D1,
+        **INCOMPLETE,
+        symbols=with_symbol(project_root, index, **overrides),
+    )
+    with pytest.raises(shadow_job.DaySummaryError, match=reason):
+        parse(project_root, json.loads(json.dumps(payload)))
+
+
+def test_a_symbol_result_without_a_field_or_as_a_list_is_refused(project_root: Path) -> None:
+    items = with_symbol(project_root, 0)
+    del items[0]["sip_available"]
+    for symbols in (items, [["SPY"]]):
+        payload = day_payload(project_root, PLANNED, D1, **INCOMPLETE, symbols=symbols)
+        with pytest.raises(shadow_job.DaySummaryError, match="alanlari beklenen kumede degil"):
+            parse(project_root, payload)
+
+
+def test_a_symbol_reported_twice_is_refused(project_root: Path) -> None:
+    first = comparison(symbols_of(project_root)[0])
+    payload = day_payload(project_root, PLANNED, D1, **INCOMPLETE, symbols=[first, first])
+    with pytest.raises(shadow_job.DaySummaryError, match="bir sembol iki kez raporlandi"):
+        parse(project_root, payload)
+
+
+def complete_breaks(root: Path) -> list[tuple[str, dict[str, Any]]]:
+    n = len(symbols_of(root))
+    return [
+        (
+            "hatali-tur",
+            {"turns": {"expected": TURNS, "called": TURNS - 1, "failed": 1, "missed": 0}},
+        ),
+        (
+            "kacan-tur",
+            {"turns": {"expected": TURNS, "called": TURNS - 1, "failed": 0, "missed": 1}},
+        ),
+        ("eksik-gozlem", {"symbol_turns": {"expected": TURNS * n, "observed": TURNS * n - 1}}),
+        ("canli-saf", {"live_pure_mismatches": 1}),
+        ("sip-sebebi", {"sip_reasons": {symbols_of(root)[0]: "yanit eksik (1 dakika)"}}),
+        ("eksik-sembol", {"symbols": [comparison(symbols_of(root)[0])]}),
+        ("sipsiz-sembol", {"symbols": with_symbol(root, 1, sip_available=False)}),
+    ]
+
+
+@pytest.mark.parametrize("case", range(7))
+def test_a_complete_day_must_agree_with_its_counters(case: int, project_root: Path) -> None:
+    """`tamam` ancak hicbir sebep yokken: sayaclarla celisen tam gun reddedilir;
+    ayni govde `eksik` olarak kabul edilir (sebep sayaclari tasir)."""
+    name, overrides = complete_breaks(project_root)[case]
+    payload = day_payload(project_root, PLANNED, D1, **overrides)
+    with pytest.raises(shadow_job.DaySummaryError, match="tamamlanan gun sayaclarla tutarsiz"):
+        parse(project_root, payload)
+    parsed = parse(project_root, {**payload, **INCOMPLETE})
+    assert (parsed.day, parsed.status) == (D1, "eksik"), name
+
+
+@pytest.mark.parametrize("missing", sorted(shadow_job.DAY_BODY))
+def test_a_complete_day_needs_the_whole_body(missing: str, project_root: Path) -> None:
+    payload = day_payload(project_root, PLANNED, D1)
+    del payload[missing]
+    with pytest.raises(shadow_job.DaySummaryError, match="tamamlanan gun sayaclarla tutarsiz"):
+        parse(project_root, payload)
+
+
+def test_valid_summaries_are_parsed_with_their_results(project_root: Path) -> None:
+    complete = parse(project_root, day_payload(project_root, PLANNED, D1))
+    assert (complete.day, complete.status, complete.reason) == (D1, "tamam", None)
+    assert [result.symbol for result, _ in complete.symbols] == list(symbols_of(project_root))
+    assert all(sip for _, sip in complete.symbols)
+    late = parse(project_root, day_payload(project_root, PLANNED, D2, "eksik", "gec baslangic"))
+    assert (late.day, late.status, late.reason, late.symbols) == (
+        D2,
+        "eksik",
+        "gec baslangic",
+        [],
+    )
+    unknown = with_symbol(
+        project_root,
+        0,
+        iex_present=None,
+        sip_present=None,
+        or_high_bps=None,
+        or_low_bps=None,
+        range_status="bilinmiyor",
+        signal="unknown",
+        iex_first_minute=12,
+        sip_available=False,
+    )
+    partial = parse(
+        project_root,
+        day_payload(
+            project_root, PLANNED, D1, **INCOMPLETE, clock_consistent=None, symbols=unknown
+        ),
+    )
+    assert partial.symbols[0][0].iex_first_minute == 12
+
+
+def test_the_aggregate_refuses_a_summary_that_breaks_the_contract(
+    tmp_path: Path, project_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    days = tmp_path / "days"
+    days.mkdir()
+    write_day(days, day_payload(project_root, PLANNED, D1, campaign="0" * 64))
+    out = tmp_path / "total.json"
+    code = shadow_job.aggregate({}, days_dir=days, out=out, root=project_root, planned=PLANNED)
+    assert code == 1
+    assert "FAIL toplam: gun ozeti baska kampanyanin" in capsys.readouterr().out
+    assert not out.exists()
+
+
+def test_the_aggregate_refuses_an_unreadable_summary(
+    tmp_path: Path, project_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    days = tmp_path / "days"
+    days.mkdir()
+    (days / "derin.json").write_text("[" * 100_000, encoding="utf-8")
+    out = tmp_path / "total.json"
+    code = shadow_job.aggregate({}, days_dir=days, out=out, root=project_root, planned=PLANNED)
+    assert code == 1
+    assert "gunluk ozetler okunamadi (RecursionError)" in capsys.readouterr().out
+    assert not out.exists()

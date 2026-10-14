@@ -197,9 +197,11 @@ def test_the_summary_carries_only_known_fields(
     serve_day(state)
     _, summary, _ = run_observe(base_url, root, tmp_path, start=OPEN - timedelta(minutes=40))
     assert summary is not None
+    assert set(summary) == shadow_job.DAY_HEAD | shadow_job.DAY_BODY
     assert set(summary) == {
         "day_schema",
         "day",
+        "campaign",
         "status",
         "reason",
         "params_version",
@@ -211,6 +213,7 @@ def test_the_summary_carries_only_known_fields(
         "symbols",
     }
     assert summary["live_pure_mismatches"] == 0
+    assert summary["campaign"] == shadow_job.campaign_of(PLANNED, SYMBOLS)
 
 
 # --------------------------------------------------------------------------
@@ -643,19 +646,82 @@ def test_the_planned_days_are_empty_until_the_execution_decision() -> None:
     assert shadow_job.PLANNED_DAYS == ()
 
 
+def test_an_unreadable_configuration_writes_no_summary(
+    stub: tuple[str, StubState], root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Kampanya kimligi evrene baglidir: yapilandirma okunamazsa gun
+    ozeti yazilmaz ve hic istek gitmez (toplamda kosu kaniti siniflar)."""
+    base_url, state = stub
+    (root / "config" / "base.yaml").unlink()
+    code, summary, _ = run_observe(base_url, root, tmp_path, start=OPEN - timedelta(minutes=40))
+    assert (code, summary) == (1, None)
+    assert "FAIL yapilandirma: kampanya kimligi" in capsys.readouterr().out
+    assert state.requests == []
+    late = shadow_job.record_late(
+        {}, clock=SimClock(OPEN), out=tmp_path / "late.json", root=root, planned=PLANNED
+    )
+    assert late == 1
+    assert not (tmp_path / "late.json").exists()
+
+
+def test_the_campaign_follows_every_input() -> None:
+    """Kimlik planli gunlere, evrene, esiklere, strateji ve sema surumlerine
+    baglidir; sira ve tekrar dizilimi kimligi degistirmez."""
+    from tlab.shadow import summary
+
+    base = shadow_job.campaign_of(PLANNED, SYMBOLS)
+    assert len(base) == 64 and int(base, 16) >= 0
+    assert shadow_job.campaign_of(PLANNED, tuple(reversed(SYMBOLS))) == base
+    assert shadow_job.campaign_of((DAY, date(2026, 1, 6)), SYMBOLS) == shadow_job.campaign_of(
+        (date(2026, 1, 6), DAY), SYMBOLS
+    )
+    changed = {
+        "gun": shadow_job.campaign_of((date(2026, 1, 6),), SYMBOLS),
+        "evren": shadow_job.campaign_of(PLANNED, ("SPY",)),
+    }
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(summary.Thresholds, "__init__", _thresholds_with(range_bps=6.0))
+        changed["esik"] = shadow_job.campaign_of(PLANNED, SYMBOLS)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(shadow_job, "DAY_SCHEMA", 2)
+        changed["gun semasi"] = shadow_job.campaign_of(PLANNED, SYMBOLS)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(summary, "SUMMARY_SCHEMA", 2)
+        changed["toplam semasi"] = shadow_job.campaign_of(PLANNED, SYMBOLS)
+    with pytest.MonkeyPatch.context() as patch:
+        from tlab.strategies import orb
+
+        patch.setattr(orb.ORBParams, "fingerprint", lambda _self: "baska")
+        changed["strateji"] = shadow_job.campaign_of(PLANNED, SYMBOLS)
+    assert len({base, *changed.values()}) == len(changed) + 1, changed
+
+
+def _thresholds_with(**values: float) -> Any:
+    from tlab.shadow.summary import Thresholds
+
+    original = Thresholds.__init__
+
+    def init(self: Thresholds, *args: Any, **kwargs: Any) -> None:
+        original(self, *args, **{**values, **kwargs})
+
+    return init
+
+
 # --------------------------------------------------------------------------
 # Gec kayit ve toplam
 # --------------------------------------------------------------------------
 
 
-def test_the_late_record_writes_an_incomplete_day(tmp_path: Path) -> None:
+def test_the_late_record_writes_an_incomplete_day(tmp_path: Path, root: Path) -> None:
     out = tmp_path / "day.json"
     code = shadow_job.record_late(
-        {}, clock=SimClock(OPEN + timedelta(minutes=20)), out=out, planned=PLANNED
+        {}, clock=SimClock(OPEN + timedelta(minutes=20)), out=out, root=root, planned=PLANNED
     )
     assert code == 0
     summary = json.loads(out.read_text(encoding="utf-8"))
     assert (summary["status"], summary["reason"]) == (DAY_INCOMPLETE, "gec baslangic")
+    assert summary["campaign"] == shadow_job.campaign_of(PLANNED, SYMBOLS)
+    assert set(summary) == shadow_job.DAY_HEAD
 
 
 @pytest.mark.parametrize("step", ["late", "aggregate"])
@@ -665,7 +731,7 @@ def test_secret_free_steps_refuse_a_secret_environment(
     env = {"ALPACA_PAPER_API_KEY": "x"}
     if step == "late":
         code = shadow_job.record_late(
-            env, clock=SimClock(OPEN), out=tmp_path / "d.json", planned=PLANNED
+            env, clock=SimClock(OPEN), out=tmp_path / "d.json", root=root, planned=PLANNED
         )
     else:
         code = shadow_job.aggregate(
@@ -681,21 +747,22 @@ def test_the_aggregate_builds_the_total_from_day_summaries(
     serve_day(state)
     days = tmp_path / "days"
     days.mkdir()
-    run_observe(base_url, root, tmp_path, start=OPEN - timedelta(minutes=40))
-    (tmp_path / "day.json").rename(days / "2026-01-05.json")
     second = date(2026, 1, 6)
+    planned = (DAY, second, date(2026, 1, 7))
+    run_observe(base_url, root, tmp_path, start=OPEN - timedelta(minutes=40), planned=planned)
+    (tmp_path / "day.json").rename(days / "2026-01-05.json")
     shadow_job.record_late(
         {},
         clock=SimClock(datetime(2026, 1, 6, 15, 0, tzinfo=UTC)),
         out=days / "b.json",
-        planned=(DAY, second),
+        root=root,
+        planned=planned,
     )
     out = tmp_path / "total.json"
-    code = shadow_job.aggregate(
-        {}, days_dir=days, out=out, root=root, planned=(DAY, second, date(2026, 1, 7))
-    )
+    code = shadow_job.aggregate({}, days_dir=days, out=out, root=root, planned=planned)
     assert code == 0
     total = json.loads(out.read_text(encoding="utf-8"))
+    assert total["campaign"] == shadow_job.campaign_of(planned, SYMBOLS)
     assert total["days"] == {"tamam": 1, "eksik": 1, "baslamadi": 0, "bilinmiyor": 1}
     completeness = total["total"]["iex_window_initial"]
     assert (completeness["numerator"], completeness["denominator"]) == (2, 6)
@@ -707,7 +774,11 @@ def test_the_aggregate_refuses_two_summaries_of_one_day(tmp_path: Path, root: Pa
     days.mkdir()
     for name in ("a.json", "b.json"):
         shadow_job.record_late(
-            {}, clock=SimClock(OPEN + timedelta(minutes=20)), out=days / name, planned=PLANNED
+            {},
+            clock=SimClock(OPEN + timedelta(minutes=20)),
+            out=days / name,
+            root=root,
+            planned=PLANNED,
         )
     code = shadow_job.aggregate(
         {}, days_dir=days, out=tmp_path / "t.json", root=root, planned=PLANNED

@@ -1,13 +1,14 @@
 # Golge gozlem toplam isi (#17, docs/designs/shadow-observation.md §6).
 #
-# Son planli gunden sonra BIR kez, elle: gozlem kosularinin fiyatsiz gun
-# ozeti artefaktlarini indirir, denetler ve 20 gunluk toplami kurar. Secret
-# YOK, Alpaca YOK, emir YOK. Tek toplam: daha once basariyla bitmis bir
-# toplam kosusu varsa, yeniden deneme kosusunda ya da son planli gun
-# bitmeden is kirmizi biter ve hicbir sey indirmez (tlab.shadow_job
-# collect). Token yalnizca indirme ve toplam adiminda; ZIP yonlendirmesi
-# elle ve bir kez izlenir, Authorization tasinmaz. Bu sozlesme
-# tests/test_architecture.py tarafindan denetlenir.
+# Son planli gunden sonra, kampanya basina BIR kez, elle: gozlem
+# kosularinin fiyatsiz gun ozeti artefaktlarini secer, indirir, denetler ve
+# 20 gunluk toplami kurar. Secret YOK, Alpaca YOK, emir YOK. Tek toplam: bu
+# kampanyanin toplam artefakti depoda varsa, onceki toplam kosusu bitmediyse,
+# yeniden deneme kosusunda, New York tarihi son planli gunu gecmediyse ya da
+# planli gunun gozlem kosusu suruyorsa is kirmizi biter ve hicbir gozlem
+# artefakti indirmez (tlab.shadow_job collect). Token yalnizca indirme ve
+# toplam adiminda; ZIP yonlendirmesi elle ve bir kez izlenir, Authorization
+# tasinmaz. Bu sozlesme tests/test_architecture.py tarafindan denetlenir.
 name: Shadow aggregate
 
 on:
@@ -42,16 +43,18 @@ jobs:
           python -m pip check
       # Token YALNIZCA bu adimda; basilmaz ve indirme adresine gitmez.
       - name: Indir ve topla
+        id: total
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          PYTHONPATH=src python -m tlab.shadow_job collect --days "$RUNNER_TEMP/shadow-days"
+          PYTHONPATH=src python -m tlab.shadow_job collect --days "$RUNNER_TEMP/shadow-days" --output "$GITHUB_OUTPUT"
           PYTHONPATH=src python -m tlab.shadow_job aggregate --days "$RUNNER_TEMP/shadow-days" --out "$RUNNER_TEMP/shadow-total.json"
-      # Yuklenen TEK dosya: fiyatsiz toplam.
+      # Yuklenen TEK dosya: fiyatsiz toplam. Adi kampanya kimligini tasir;
+      # teklik kaniti budur.
       - name: Toplami yukle
         uses: actions/upload-artifact@v7
         with:
-          name: shadow-total
+          name: shadow-total-${{ steps.total.outputs.campaign }}
           path: ${{ runner.temp }}/shadow-total.json
           if-no-files-found: error
           retention-days: 90
