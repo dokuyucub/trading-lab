@@ -355,6 +355,23 @@ Tercih: **sınırlı schedule**. Kullanıcıya 20 günlük tıklama yüklenmez
     - planlı günlerin sınırlı koşu ve iş üst verisi: her koşunun
       kimliği, oluşturulma anı, kayıt işinin durumu ve sonucu, kayıt
       adımlarının (`Gozle`, `Gec kaydi yaz`) sonucu.
+  - **Toplam işi** (`.github/workflows/shadow-aggregate.yml`, ÖN RAPOR
+    #17/6162408570):
+    - Tetiği yalnızca `workflow_dispatch`. Kullanıcı son planlı günden
+      sonra bir kez tıklar; #17 kararıyla.
+    - **Tek toplam.** Son planlı gün bitmeden, yeniden deneme koşusunda
+      ya da daha önce başarıyla bitmiş bir toplam koşusu varsa iş
+      hiçbir şey indirmeden kırmızı biter.
+    - **İndirme.** API isteği token'lıdır. ZIP yönlendirmesi elle ve bir
+      kez izlenir. İkinci istekte Authorization yoktur. Yalnız `https`;
+      ikinci yönlendirme reddedilir.
+    - **ZIP denetimi.** Tek üye, adı `shadow-day.json`. Boyut sınırlı,
+      biçim/CRC temiz. Şema, gün ve koşunun seans günü denetlenir.
+    - Beklenmeyen artefakt, sayfa ya da biçim **kısmi toplam**
+      yazdırmaz.
+    - Süresi dolmuş artefakt atlanır; o gün aşağıdaki kanıt kuralıyla
+      sınıflanır.
+    - Tek yükleme `shadow-total`, fiyatsız, 90 gün.
   - **Özet yokluğu "başlamadı" kanıtı değildir.** Gözlem başladıktan
     sonra runner kaybı, zaman aşımı ya da yükleme hatası da özet
     bırakmaz. Gün durumu kanıtla belirlenir:

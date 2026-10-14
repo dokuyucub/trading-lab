@@ -984,6 +984,8 @@ JOB_PERMISSION_EXCEPTIONS: dict[tuple[str, str], dict[str, str]] = {
     ("artifact-roundtrip.yml", "verify"): {"contents": "read", "actions": "read"},
     # Golge gozlem kapisi ayni gunun kosu gecmisini okur (teklik); secret'siz.
     ("shadow-observation.yml", "gate"): {"contents": "read", "actions": "read"},
+    # Golge toplam isi gun ozeti artefaktlarini indirir; secret'siz, elle.
+    ("shadow-aggregate.yml", "total"): {"contents": "read", "actions": "read"},
 }
 """Ust duzeyden farkli job izinleri: YALNIZCA bunlar, gozden gecirilmis.
 Gidis-donus dogrulamasi artefakt listesini okumak icin `actions: read`
@@ -1282,6 +1284,52 @@ def test_the_two_shadow_crons_cover_both_seasons_exactly_once() -> None:
         assert len(observing) == 1, f"{day}: pencereye dusen satir {observing}"
 
 
+SHADOW_AGGREGATE = "shadow-aggregate.yml"
+
+
+def test_the_shadow_aggregate_is_manual_secret_free_and_reads_only() -> None:
+    """Golge toplam isi: yalnizca elle, secret yok, token tek adimda,
+    indirme toplamdan once, tek yukleme. Gun ozeti artefaktinin adi ve
+    dosyasi gozlem workflow'unun yuklemesine bagli."""
+    from tlab import shadow_job
+
+    assert shadow_job.AGGREGATE_WORKFLOW_FILE == SHADOW_AGGREGATE
+    workflow = _workflow(SHADOW_AGGREGATE)
+    triggers: dict[str, Any] = workflow["on"] if "on" in workflow else workflow[True]
+    assert set(triggers) == {"workflow_dispatch"}, "schedule, PR ya da baska tetik yok"
+    assert triggers["workflow_dispatch"] is None, "workflow girdi (input) almamali"
+    assert workflow["concurrency"] == {"group": "shadow-aggregate", "cancel-in-progress": False}
+    assert "env" not in workflow
+    assert "secrets." not in yaml.safe_dump(workflow)
+    assert set(workflow["jobs"]) == {"total"}
+    job = workflow["jobs"]["total"]
+    assert job["if"] == "github.ref == 'refs/heads/main'"
+    assert "env" not in job and "continue-on-error" not in job
+    with_token = [step for step in job["steps"] if "github.token" in yaml.safe_dump(step)]
+    assert len(with_token) == 1, "token yalnizca tek adimda"
+    (step,) = with_token
+    assert step["env"] == {"GH_TOKEN": "${{ github.token }}"}
+    run = step["run"]
+    assert run.index("tlab.shadow_job collect") < run.index("tlab.shadow_job aggregate")
+    assert '--days "$RUNNER_TEMP/shadow-days"' in run
+    assert '--out "$RUNNER_TEMP/shadow-total.json"' in run
+    assert not [item for item in job["steps"] if "continue-on-error" in item]
+
+    upload = next(
+        item for item in job["steps"] if str(item.get("uses", "")).startswith(UPLOAD_ACTION)
+    )
+    assert upload["with"]["name"] == "shadow-total"
+    assert "if" not in upload, "toplam yalnizca basarili indirme ve toplamdan sonra yuklenir"
+
+    observation = next(
+        item
+        for item in _workflow(SHADOW)["jobs"][shadow_job.RECORD_JOB]["steps"]
+        if str(item.get("uses", "")).startswith(UPLOAD_ACTION)
+    )
+    assert observation["with"]["name"] == shadow_job.DAY_ARTIFACT
+    assert str(observation["with"]["path"]).endswith("/" + shadow_job.DAY_FILE)
+
+
 @pytest.mark.parametrize(
     "relative",
     ["baseline_diagnostic.py", "feed_comparison.py", "job_io.py", "data/quality_summary.py"],
@@ -1389,6 +1437,8 @@ UPLOAD_RETENTION_DAYS = {
     "artifact-roundtrip.yml": 1,
     # Golge gozlem gun ozeti: 20 planli gunu ve toplam adimini kapsar.
     "shadow-observation.yml": 60,
+    # Golge gozlem toplami: gercek raporlar gibi 90 gun.
+    "shadow-aggregate.yml": 90,
 }
 """Upload adimi olan BUTUN workflow'lar ve saklama sureleri, MEVCUT
 degerleriyle: pilot ozeti 30 gun, uc gercek rapor 90 gun. Yalnizca sentetik

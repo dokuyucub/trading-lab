@@ -1,0 +1,57 @@
+# Golge gozlem toplam isi (#17, docs/designs/shadow-observation.md §6).
+#
+# Son planli gunden sonra BIR kez, elle: gozlem kosularinin fiyatsiz gun
+# ozeti artefaktlarini indirir, denetler ve 20 gunluk toplami kurar. Secret
+# YOK, Alpaca YOK, emir YOK. Tek toplam: daha once basariyla bitmis bir
+# toplam kosusu varsa, yeniden deneme kosusunda ya da son planli gun
+# bitmeden is kirmizi biter ve hicbir sey indirmez (tlab.shadow_job
+# collect). Token yalnizca indirme ve toplam adiminda; ZIP yonlendirmesi
+# elle ve bir kez izlenir, Authorization tasinmaz. Bu sozlesme
+# tests/test_architecture.py tarafindan denetlenir.
+name: Shadow aggregate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shadow-aggregate
+  cancel-in-progress: false
+
+jobs:
+  total:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    # Kosu listesi, artefakt listesi ve ZIP indirme icin yalnizca okuma.
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Kilitli calisma zamani bagimliliklarini kur
+        run: |
+          python -m pip install -r requirements.lock
+          python -m pip check
+      # Token YALNIZCA bu adimda; basilmaz ve indirme adresine gitmez.
+      - name: Indir ve topla
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PYTHONPATH=src python -m tlab.shadow_job collect --days "$RUNNER_TEMP/shadow-days"
+          PYTHONPATH=src python -m tlab.shadow_job aggregate --days "$RUNNER_TEMP/shadow-days" --out "$RUNNER_TEMP/shadow-total.json"
+      # Yuklenen TEK dosya: fiyatsiz toplam.
+      - name: Toplami yukle
+        uses: actions/upload-artifact@v7
+        with:
+          name: shadow-total
+          path: ${{ runner.temp }}/shadow-total.json
+          if-no-files-found: error
+          retention-days: 90
