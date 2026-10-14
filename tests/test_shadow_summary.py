@@ -15,8 +15,11 @@ import pytest
 
 from tlab.shadow.core import (
     RANGE_COMPUTED,
+    RANGE_IEX_INCOMPLETE,
     RANGE_INVALID,
     RANGE_SIP_INCOMPLETE,
+    RANGE_SIP_MISSING,
+    RANGE_UNKNOWN,
     SIGNAL_MATCH,
     SIGNAL_MISMATCH,
     SIGNAL_NONE,
@@ -241,6 +244,52 @@ def test_an_incomplete_sip_window_is_outside_the_range_measure() -> None:
     ]
     assert (rate["numerator"], rate["denominator"], rate["unknown"]) == (7, 7, 0)
     assert rate["sip_window_incomplete"] == 1
+
+
+def test_unobserved_symbol_days_are_unknown_in_the_range_denominator() -> None:
+    """Codex 6158917217 ornegi: 20 gun x 11 sembol; ilk 10 gunun 110 sonucu
+    iyi, kalan 110 sembol-gunun sonucu yok. Aralik 110/220, unknown 110."""
+    days = [date(2026, 11, 2) + timedelta(days=offset) for offset in range(20)]
+    symbols = tuple(f"S{index}" for index in range(11))
+    results = [
+        SymbolDay(day, symbol, replace(GOOD, symbol=symbol), sip_available=True)
+        for day in days[:10]
+        for symbol in symbols
+    ]
+    statuses = [Day(day, DAY_COMPLETE) for day in days[:10]]
+    rate = summarize(days, symbols, statuses, results, Thresholds())["total"]["range_within_bps"]
+    assert (rate["numerator"], rate["denominator"], rate["unknown"]) == (110, 220, 110)
+    assert rate["verdict"] == INCONCLUSIVE
+
+
+def unmeasured(status: str) -> Comparison:
+    return replace(GOOD, or_high_bps=None, or_low_bps=None, range_status=status)
+
+
+@pytest.mark.parametrize(
+    ("comparison", "expected"),
+    [
+        (None, (7, 8, 1, 0)),
+        (unmeasured(RANGE_UNKNOWN), (7, 8, 1, 0)),
+        (unmeasured(RANGE_SIP_MISSING), (7, 8, 1, 0)),
+        (unmeasured(RANGE_IEX_INCOMPLETE), (7, 7, 0, 1)),
+    ],
+)
+def test_only_an_observed_incomplete_window_leaves_the_range_denominator(
+    comparison: Comparison | None, expected: tuple[int, int, int, int]
+) -> None:
+    """Kosulun saglanip saglanmadigi bilinmeyen sembol-gun `unknown`; yalnizca
+    eksikligi gozlenen IEX penceresi kosul disi ve ayri sayilir."""
+    results = [*every()[:-1], result(PLANNED[3], "QQQ", comparison)]
+    rate = summarize(PLANNED, SYMBOLS, complete_days(), results, THRESHOLDS)["total"][
+        "range_within_bps"
+    ]
+    assert (
+        rate["numerator"],
+        rate["denominator"],
+        rate["unknown"],
+        rate["iex_window_incomplete"],
+    ) == expected
 
 
 @pytest.mark.parametrize(("high", "low"), [(6.0, 0.0), (0.0, -6.0)])

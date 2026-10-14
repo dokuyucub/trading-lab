@@ -15,6 +15,10 @@ Kurallar:
   * Asgari destek (bilinen gozlem sayisi, gerekiyorsa farkli gun
     sayisi) saglanmazsa sonuc `belirsiz`tir.
   * Iki tarafta da niyet yoksa bu uyum DEGILDIR; ayri sayilir.
+  * Kosullu olculerde (aralik farki: iki pencere tam) kosulun saglanip
+    saglanmadigi BILINMEYEN sembol-gun paydada `unknown`dur. Yalnizca
+    kosulun saglanmadigi GOZLENEN sembol-gun disarida kalir ve ayri
+    sayacla gorunur (Codex 6158917217).
 
 Esikler burada yalnizca ONERI olarak durur; kalibre edilmis kapi
 degildir ve yurutme kararinda sabitlenir.
@@ -142,6 +146,7 @@ class _Tally:
     intent: Rate = field(default_factory=Rate)
     no_intent: int = 0
     completed_later: int = 0
+    iex_window_incomplete: int = 0
     sip_window_incomplete: int = 0
 
 
@@ -235,14 +240,18 @@ def _count(tally: _Tally, day: date, result: SymbolDay | None, thresholds: Thres
         tally.completed_later += comparison.iex_completed_later
 
     if comparison is None or result is None:
+        # Hic gozlenemedi: kosulun saglanip saglanmadigi da bilinmiyor.
+        tally.range_.add(day, success=None)
         tally.intent.add(day, success=None)
         return
 
     # Aralik farki: iki pencere de tam olan sembol-gunler. Kabul MUTLAK
-    # degerle; isaretli fark yalnizca raporda kalir.
+    # degerle; isaretli fark yalnizca raporda kalir. Bilinen eksik pencere
+    # kosul disidir ve ayri sayilir; bilinmeyen (RANGE_UNKNOWN, SIP yok,
+    # gecersiz payda) paydada `unknown`dur.
     status = comparison.range_status
     if status == RANGE_IEX_INCOMPLETE:
-        pass
+        tally.iex_window_incomplete += 1
     elif status == RANGE_SIP_INCOMPLETE and result.sip_available:
         tally.sip_window_incomplete += 1
     elif status != RANGE_COMPUTED or not result.sip_available:
@@ -275,6 +284,7 @@ def _payload(tally: _Tally, thresholds: Thresholds, *, verdicts: bool = True) ->
         },
         "range_within_bps": {
             **tally.range_.payload(),
+            "iex_window_incomplete": tally.iex_window_incomplete,
             "sip_window_incomplete": tally.sip_window_incomplete,
         },
         "intent_agreement": {**tally.intent.payload(), "no_intent": tally.no_intent},

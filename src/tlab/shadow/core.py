@@ -35,7 +35,7 @@ from tlab.features.context import (
     apply_market_close,
     build_session_state,
 )
-from tlab.features.indicators import opening_range, opening_window_gaps
+from tlab.features.indicators import opening_window_gaps
 from tlab.strategies.base import Strategy
 
 SIGNAL_NONE = "none"
@@ -50,7 +50,12 @@ SIGNAL_UNKNOWN = "unknown"
 RANGE_COMPUTED = "hesaplandi"
 """Iki pencere de o turda tam, payda gecerli: fark hesaplandi."""
 RANGE_IEX_INCOMPLETE = "iex_tamamlanmadi"
-"""IEX penceresi giris penceresi bitmeden hic tamamlanmadi: olcu disi."""
+"""Butun planli dakikalarin turu gozlendi ve IEX penceresi hicbirinde tam
+degildi: kosul (iki pencere tam) SAGLANMADI. Olcu disi; ayri sayilir."""
+RANGE_UNKNOWN = "bilinmiyor"
+"""IEX penceresinin ilk tam oldugu tur bilinemiyor: tur yok ya da ilk tam
+turdan once planli bir dakikanin turu yok veya verisi alinamadi.
+`unknown`; paydada kalir (Codex 6158917217)."""
 RANGE_SIP_MISSING = "sip_yok"
 """O turda SIP gorunumu yok: `unknown`."""
 RANGE_SIP_INCOMPLETE = "sip_eksik"
@@ -237,8 +242,10 @@ class Comparison:
         ya da verisi alinamadiysa `unknown` (None).
       * Gecikmeli tamlik: `t*`'da eksik pencerenin giris penceresi
         bitmeden tamamlanmasi; ayri etiketlidir.
-      * Aralik farki: IEX'in pencereyi ilk tam gordugu tur; SIP ayni tura
-        kesilir.
+      * Aralik farki: planli dakikalarda (acilis araligi ... giris
+        penceresi) IEX'in pencereyi ilk tam gordugu tur; `t*`'dan once de
+        olabilir. SIP ayni tura kesilir. Bu turdan once planli bir dakika
+        kayipsa ilk tam tur bilinemez: `RANGE_UNKNOWN`.
       * Niyet: her tarafin ilk niyeti. Ilk niyetten once planli bir
         dakikanin turu yoksa ya da verisi alinamadiysa o tarafin niyeti
         `unknown`dur; "niyet yok" sayilmaz.
@@ -299,7 +306,7 @@ def compare_symbol_day(
             iex_completed_later=False,
             or_high_bps=None,
             or_low_bps=None,
-            range_status=RANGE_IEX_INCOMPLETE,
+            range_status=RANGE_UNKNOWN,
             signal=SIGNAL_UNKNOWN,
             iex_first_minute=None,
             sip_first_minute=None,
@@ -307,6 +314,15 @@ def compare_symbol_day(
         )
 
     session_open = session_for(iex[0].moment).session_open
+    minutes = range(opening_range_minutes, entry_window_minutes + 1)
+    grid_end = session_open + timedelta(minutes=entry_window_minutes + 1)
+
+    def full(turn: Turn) -> bool:
+        return turn.bars is not None and (
+            _window(turn.bars, session_open, opening_range_minutes, timeframe) == expected
+        )
+
+    # Baslangic tamligi: SAATLE secilen `t*`.
     star_from = session_open + window + T_STAR_DELAY
     star = next(
         (
@@ -318,27 +334,30 @@ def compare_symbol_day(
     )
     iex_present: int | None = None
     sip_present: int | None = None
+    completed_later = False
     if star is not None and iex[star].bars is not None:
         iex_present = _window(iex[star].bars or (), session_open, opening_range_minutes, timeframe)
         sip_bars = sip[star].bars
         if sip_bars is not None:
             sip_present = _window(sip_bars, session_open, opening_range_minutes, timeframe)
+        # Gecikmeli tamlik: `t*`'da eksik, giris penceresi icinde sonra tam.
+        completed_later = iex_present < expected and any(
+            full(turn) for turn in iex[star + 1 :] if turn.moment < grid_end
+        )
 
-    completed_later = False
+    # Aralik farki: IEX penceresinin ILK tam oldugu planli tur.
     high_bps: float | None = None
     low_bps: float | None = None
-    range_status = RANGE_IEX_INCOMPLETE
-    for iex_turn, sip_turn in zip(iex, sip, strict=True):
-        if iex_turn.moment < star_from or iex_turn.bars is None:
-            continue
-        if _window(iex_turn.bars, session_open, opening_range_minutes, timeframe) == expected:
-            completed_later = iex_present is not None and iex_present < expected
-            high_bps, low_bps, range_status = _range_bps(
-                iex_turn.bars, sip_turn.bars, session_open, opening_range_minutes, timeframe
-            )
-            break
+    first_full = _first_full_turn(iex, minutes, session_open, full)
+    if isinstance(first_full, int):
+        high_bps, low_bps, range_status = _range_bps(
+            iex[first_full], sip[first_full], session_open, opening_range_minutes, timeframe
+        )
+    elif first_full is None:
+        range_status = RANGE_IEX_INCOMPLETE
+    else:
+        range_status = RANGE_UNKNOWN
 
-    minutes = range(opening_range_minutes, entry_window_minutes + 1)
     iex_first = _first_intent(symbol, iex, minutes, session_open, session_for, strategy, timeframe)
     sip_first = _first_intent(symbol, sip, minutes, session_open, session_for, strategy, timeframe)
     return Comparison(
@@ -357,6 +376,20 @@ def compare_symbol_day(
     )
 
 
+def _window_bars(
+    bars: tuple[Bar, ...], session_open: datetime, opening_range_minutes: int
+) -> list[Bar]:
+    """Pencere icindeki barlar.
+
+    Olcum turlari planli dakikalardadir (`acilis + acilis araligi`ndan
+    sonra); pencere barlarinin hepsi o anda saatle KAPANMISTIR
+    (`ts + sure <= acilis + pencere <= tur`). Kapanmayi gostermek icin
+    sonraki bar gerekmez.
+    """
+    window_end = session_open + timedelta(minutes=opening_range_minutes)
+    return [bar for bar in bars if session_open <= bar.ts < window_end]
+
+
 def _window(
     bars: tuple[Bar, ...], session_open: datetime, opening_range_minutes: int, timeframe: Timeframe
 ) -> int:
@@ -364,28 +397,73 @@ def _window(
 
     Sonraki barin gelip gelmedigine BAKILMAZ: olcum ani saatle secilir.
     """
-    window_end = session_open + timedelta(minutes=opening_range_minutes)
-    inside = [bar for bar in bars if session_open <= bar.ts < window_end]
+    inside = _window_bars(bars, session_open, opening_range_minutes)
     gaps = opening_window_gaps(inside, session_open, opening_range_minutes, timeframe.duration)
     if gaps is None:  # pragma: no cover - compare_symbol_day bolunmeyi once denetler
         raise ValueError("acilis penceresi bar suresine tam bolunmeli")
     return timedelta(minutes=opening_range_minutes) // timeframe.duration - len(gaps)
 
 
+def _window_extremes(
+    bars: tuple[Bar, ...], session_open: datetime, opening_range_minutes: int, timeframe: Timeframe
+) -> tuple[float, float] | None:
+    """OLCUM icin pencere uclari: bosluksuz pencereden; eksikse None.
+
+    Stratejinin `features.indicators.opening_range`i DEGILDIR. O, pencerenin
+    kapandigini sonraki barin gelisinden anlar; burada olcum turunun ani
+    pencere sonundan sonra oldugu icin kapanma saatle bilinir (Codex
+    6158917217). Strateji davranisi degismez.
+    """
+    inside = _window_bars(bars, session_open, opening_range_minutes)
+    gaps = opening_window_gaps(inside, session_open, opening_range_minutes, timeframe.duration)
+    if gaps is None or gaps:
+        return None
+    return max(bar.high for bar in inside), min(bar.low for bar in inside)
+
+
+def _first_full_turn(
+    turns: Sequence[Turn],
+    minutes: range,
+    session_open: datetime,
+    full: Callable[[Turn], bool],
+) -> int | str | None:
+    """Planli dakikalarda pencerenin ilk tam oldugu turun sirasi.
+
+    Dakikanin turu o dakika icinde kosan ilk turdur. Ilk tam turdan once
+    bir dakikanin turu yoksa ya da verisi alinamadiysa ilk tam tur
+    bilinemez: `unknown`. Butun dakikalar gozlenip pencere hic tam
+    degilse None.
+    """
+    for minute in minutes:
+        index = _minute_turn(turns, session_open, minute)
+        if index is None or turns[index].bars is None:
+            return _UNKNOWN
+        if full(turns[index]):
+            return index
+    return None
+
+
+def _minute_turn(turns: Sequence[Turn], session_open: datetime, minute: int) -> int | None:
+    """Planli dakikanin turu: o dakika icinde kosan ilk tur; yoksa None."""
+    start = session_open + timedelta(minutes=minute)
+    end = start + timedelta(minutes=1)
+    return next((i for i, turn in enumerate(turns) if start <= turn.moment < end), None)
+
+
 def _range_bps(
-    iex: tuple[Bar, ...],
-    sip: tuple[Bar, ...] | None,
+    iex: Turn,
+    sip: Turn,
     session_open: datetime,
     opening_range_minutes: int,
     timeframe: Timeframe,
 ) -> tuple[float | None, float | None, str]:
     """IEX penceresi o turda tam. SIP'in durumuna gore fark ya da sebep."""
-    if sip is None:
+    if sip.bars is None:
         return None, None, RANGE_SIP_MISSING
-    left = opening_range(list(iex), session_open, opening_range_minutes, timeframe.duration)
-    right = opening_range(list(sip), session_open, opening_range_minutes, timeframe.duration)
+    left = _window_extremes(iex.bars or (), session_open, opening_range_minutes, timeframe)
+    right = _window_extremes(sip.bars, session_open, opening_range_minutes, timeframe)
     if left is None:  # pragma: no cover - cagiran IEX penceresinin tamligini denetler
-        return None, None, RANGE_IEX_INCOMPLETE
+        return None, None, RANGE_UNKNOWN
     if right is None:
         return None, None, RANGE_SIP_INCOMPLETE
     high, low = _bps(left[0], right[0]), _bps(left[1], right[1])
@@ -409,11 +487,8 @@ def _first_intent(
     dakikanin turu yoksa ya da verisi alinamadiysa sonuc bilinemez.
     """
     for minute in minutes:
-        start = session_open + timedelta(minutes=minute)
-        turn = next(
-            (item for item in turns if start <= item.moment < start + timedelta(minutes=1)),
-            None,
-        )
+        index = _minute_turn(turns, session_open, minute)
+        turn = turns[index] if index is not None else None
         if turn is None or turn.bars is None:
             return _UNKNOWN
         session = session_for(turn.moment)
