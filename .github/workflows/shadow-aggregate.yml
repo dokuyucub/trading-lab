@@ -7,8 +7,9 @@
 # toplam adimi kostuysa ya da sonucu belirsizse (kanit: is adimlari),
 # yeniden deneme kosusunda, New York tarihi son planli gunu gecmediyse ya da
 # planli gunun gozlem kosusu suruyorsa is kirmizi biter ve hicbir gozlem
-# artefakti indirmez (tlab.shadow_job collect). Yeniden deneme yalnizca
-# koddaki TOTAL_RETRY_AFTER sabitini degistiren ayri bir karar PR'iyla. Token yalnizca indirme ve
+# artefakti indirmez (tlab.shadow_job collect). Onceki kosular kampanyaya
+# baglanir (artefakt adi, zaman, adim kaniti); yeniden deneme yalnizca
+# config/shadow-total-retry.json kaydiyla (ayri karar PR'i, parmak izi disi). Token yalnizca indirme ve
 # toplam adiminda; ZIP yonlendirmesi elle ve bir kez izlenir, Authorization
 # tasinmaz. Bu sozlesme tests/test_architecture.py tarafindan denetlenir.
 name: Shadow aggregate

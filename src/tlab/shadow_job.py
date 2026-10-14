@@ -21,6 +21,10 @@ Sozlesme: docs/designs/shadow-observation.md. Adimlar:
   * `aggregate` (toplam) - secret'siz. Gunluk ozetlerden 20 gunluk
     ozeti kurar.
 
+Toplam kampanya basina birdir: onceki toplam kosulari artefakt adi,
+zaman ve adim kanitiyla kampanyaya baglanir; yeniden deneme yalnizca
+`TOTAL_RETRY_FILE` kaydiyla (parmak izi disinda, kampanya + kesin kosu).
+
 Her gun ozeti ve toplam KAMPANYA KIMLIGINI tasir (`campaign_of`): planli
 tarihler, evren, esikler, strateji surumu, sema surumleri ve uygulama
 parmak izinin (`implementation_fingerprint`) ozeti. Gun ozeti ayrica
@@ -127,6 +131,8 @@ def implementation_fingerprint(root: Path) -> str:
     degisen kod BASKA kampanyadir; gun ozetleri karismaz, toplam ancak
     ayni uygulamayla kurulur (Codex 6172892558). Dondurma boylece kodla
     zorlanir. Eksik dosya hatadir; `_campaign` sabit satirla yakalar.
+    Yeniden deneme kaydi (`TOTAL_RETRY_FILE`, JSON) bilincli olarak
+    DISARIDADIR: yetki olcumu degistirmez.
     """
     entries = [
         (f"tlab/{path.relative_to(PACKAGE_ROOT).as_posix()}", path)
@@ -1313,11 +1319,13 @@ TOTAL_JOB = "total"
 TOTAL_STEPS = ("Indir", "Topla")
 """Toplam isinin indirme ve toplam adimlari (workflow adim adlari; mimari
 test baglar). Sonraki toplam kosusu bunlarin sonucunu kanit olarak okur."""
-TOTAL_RETRY_AFTER = 0
-"""Kimligi bu degerden kucuk ya da esit onceki toplam kosulari kanit
-sayilmaz. Varsayilan 0: hepsi sayilir. Basarisiz bir toplamdan sonra
-yeniden deneme, bu sabiti o kosunun kimligine ceken AYRI bir karar
-PR'idir (#17); yeni dispatch tek basina izin degildir."""
+TOTAL_RETRY_FILE = "config/shadow-total-retry.json"
+"""Yeniden deneme yetkisi kaydi: `{"campaign": <tam kimlik>, "failed_run":
+<kosu kimligi>, "decision": "#17/<yorum>"}`. Parmak izinin BILINCLI olarak
+disindadir (yalnizca `config/*.yaml` girer): bu dosyayi degistiren karar
+PR'i kampanya kimligini degistirmez, mevcut gunlukler gecerli kalir.
+Yetki yalnizca o kampanyanin O basarisiz kosusunu kanit disi birakir;
+baska kampanyanin kaydi isi durdurur (Codex 6177175728)."""
 OBSERVATION_SOURCE = ("main", "schedule", f".github/workflows/{WORKFLOW_FILE}", 1)
 """Gun ozeti alinan kosu: `main` dali, zamanlanmis tetik, gozlem workflow'u,
 ilk deneme (`head_branch`, `event`, `path`, `run_attempt`)."""
@@ -1354,9 +1362,11 @@ def collect(
       * New York tarihi son planli gunden sonra degilse;
       * yeniden deneme kosusunda;
       * bu kosudan once olusturulmus bir toplam kosusu henuz bitmediyse,
-        toplam adimi kostuysa (cikti yok ya da silinmis olsa da) ya da
-        sonucu belirsizse (`_prior_total_blocks`); `Indir`de duran bos,
-        erken ya da reddedilmis kosu engel degildir;
+        BU kampanya icin toplam adimi kostuysa (cikti yok ya da silinmis
+        olsa da) ya da kaynagi belirsizse (`_prior_total_blocks`);
+        `Indir`de duran bos, erken ya da reddedilmis kosu ve kanitli
+        baska kampanyanin kosusu engel degildir; kayitli tekrar yetkisi
+        (`TOTAL_RETRY_FILE`) yalnizca o kosuyu disarida birakir;
       * bu kampanyanin toplam artefakti depoda varsa (suresi dolmus
         olsa da);
       * planli gunun bir gozlem kosusu henuz bitmediyse.
@@ -1393,7 +1403,10 @@ def collect(
             return 1
         campaign, symbols = found.identity, found.symbols
         try:
-            blocker = _prior_total_blocks(api, repo, run_id, token)
+            retry = _retry_authorisation(root, campaign)
+            blocker = _prior_total_blocks(
+                api, repo, run_id, token, campaign=campaign, planned=planned, retry=retry
+            )
             if blocker is not None:
                 print(f"FAIL toplam: {blocker}")
                 return 1
@@ -1416,26 +1429,72 @@ def collect(
         return 0
 
 
-def _prior_total_blocks(api: str, repo: str, run_id: str, token: str) -> str | None:
+def _retry_authorisation(root: Path, campaign: str) -> int | None:
+    """Kayitli tekrar yetkisi: bu kampanyanin kanit disi birakilan kosusu.
+
+    Dosya yoksa None. Biciminde degilse ya da baska kampanyaya aitse
+    `GateError`: eski kayit yeni kampanyada birakilamaz.
+    """
+    path = root / TOTAL_RETRY_FILE
+    if not path.exists():
+        return None
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise GateError("tekrar kaydi beklenen bicimde degil") from None
+    if (
+        not isinstance(record, dict)
+        or set(record) != {"campaign", "failed_run", "decision"}
+        or not isinstance(record["campaign"], str)
+        or not _is_count(record["failed_run"])
+        or record["failed_run"] == 0
+        or not isinstance(record["decision"], str)
+        or not record["decision"]
+    ):
+        raise GateError("tekrar kaydi beklenen bicimde degil")
+    if record["campaign"] != campaign:
+        raise GateError("tekrar kaydi baska kampanyanin")
+    failed_run: int = record["failed_run"]
+    return failed_run
+
+
+def _prior_total_blocks(
+    api: str,
+    repo: str,
+    run_id: str,
+    token: str,
+    *,
+    campaign: str,
+    planned: Sequence[date],
+    retry: int | None,
+) -> str | None:
     """Bu kosudan ONCE olusturulmus toplam kosularinin kaniti; engel sebebi ya da None.
 
-    Durum yetmez, adimlar okunur (Codex 6175607709):
+    Teklik kampanyaya baglidir, workflow omrune degil (Codex 6171961412,
+    6177175728). Bitmis her onceki kosu icin sirayla:
 
-      * kosu ya da `total` isi bitmemis: engel (suruyor);
-      * `total` isi listede yok ya da adimlari okunamiyor: engel (eksik
-        gecmis basari ya da "hic baslamadi" kaniti degildir);
-      * `Topla` kostu (`success`/`failure`): engel; upload hatasi ve
-        silinmis artefakt burada yakalanir;
-      * `Topla` atlandi ve `Indir` `failure`/`skipped`: engel degil (bos,
-        erken, ret ya da indirme hatasi; cikti uretilmedi);
-      * baska her birlesim (iptal, sonucsuz): engel (belirsiz).
-
-    `TOTAL_RETRY_AFTER`dan kucuk ya da esit kimlikler sayilmaz.
+      1. kosu bitmemis: engel (suruyor; eszamanlilik);
+      2. kayitli tekrar yetkisi bu kosuyu gosteriyorsa: kanit disi;
+      3. kosunun `shadow-total-*` artefakti varsa (suresi dolmus dahil):
+         bu kampanyanin onekiyle engel; baska onekle kanit degil;
+      4. artefakti yok ve kosu bu kampanyanin son planli gununden once ya
+         da o gun (New York) olusturulmussa: bu kampanyanin toplami
+         olamaz (`collect` o tarihte reddederdi); kanit degil;
+      5. artefakti yok ve son planli gunden sonra: kaynagi belirsiz, adim
+         kaniti okunur (Codex 6175607709):
+           * `total` isi listede yok ya da adimlari okunamiyor: engel;
+           * `Topla` kostu (`success`/`failure`): engel; upload hatasi ve
+             silinmis artefakt burada yakalanir;
+           * `Topla` atlandi ve `Indir` `failure`/`skipped`: engel degil
+             (bos, erken, ret ya da indirme hatasi; cikti uretilmedi);
+           * baska her birlesim (iptal, sonucsuz): engel (belirsiz).
     """
     try:
         current = int(run_id)
     except ValueError:
         raise GateError("kosu kimligi bicimsiz") from None
+    prefix = total_artifact(campaign)
+    last_day = max(planned)
     runs = _single_page(
         _api_json(
             f"{api}/repos/{repo}/actions/workflows/{AGGREGATE_WORKFLOW_FILE}/runs"
@@ -1449,12 +1508,34 @@ def _prior_total_blocks(api: str, repo: str, run_id: str, token: str) -> str | N
     for run in runs:
         try:
             identifier = int(run["id"])
+            created = datetime.fromisoformat(str(run["created_at"]).replace("Z", "+00:00"))
         except (KeyError, TypeError, ValueError):
             raise GateError("kosu kaydi beklenen bicimde degil") from None
-        if identifier >= current or identifier <= TOTAL_RETRY_AFTER:
+        if identifier >= current:
             continue
         if run.get("status") != "completed":
             return "onceki toplam kosusu suruyor"
+        if identifier == retry:
+            continue  # kayitli tekrar yetkisi: yalnizca bu kosu
+        totals = [
+            str(item.get("name", ""))
+            for item in _single_page(
+                _api_json(
+                    f"{api}/repos/{repo}/actions/runs/{identifier}/artifacts?per_page={PAGE_SIZE}",
+                    token,
+                    "artefakt listesi",
+                ),
+                "artifacts",
+                "artefakt listesi",
+            )
+            if str(item.get("name", "")).startswith(TOTAL_ARTIFACT + "-")
+        ]
+        if totals:
+            if prefix in totals:
+                return "bu kampanyanin toplami daha once uretildi"
+            continue  # kanitli baska kampanya
+        if session_day_of(created) <= last_day:
+            continue  # bu kampanyanin toplami olamaz: son planli gun gecmemisti
         jobs = _single_page(
             _api_json(
                 f"{api}/repos/{repo}/actions/runs/{identifier}/jobs"

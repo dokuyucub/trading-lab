@@ -12,10 +12,12 @@ ZIP adresine 302 ile yonlendirir. Gosterilenler:
     secilir; plan disi gunun kosusu listelenmez; planli gunun bitmemis
     kosusu varsa hicbir sey indirilmez; gun ozetinin kaynagi (run_id,
     run_attempt, code_sha) API kosusuyla eslesmeli;
-  * onceki toplam kosularinin ADIM kaniti okunur: toplam adimi kostuysa
-    (upload hatasi, silinmis cikti) ya da sonucu belirsizse durur; bos,
-    erken ya da reddedilmis kosu engel degil; yeniden deneme yalnizca
-    koddaki `TOTAL_RETRY_AFTER` ile (Codex 6172892558, 6175607709);
+  * onceki toplam kosulari KAMPANYAYA baglanir (artefakt adi, zaman,
+    adim kaniti): bu kampanyanin toplam adimi kostuysa (upload hatasi,
+    silinmis cikti) ya da kaynak belirsizse durur; bos, erken ya da
+    reddedilmis kosu ve kanitli baska kampanya engel degil; yeniden
+    deneme yalnizca `TOTAL_RETRY_FILE` kaydiyla, parmak izi disinda,
+    kampanya + kesin kosu (Codex 6172892558, 6175607709, 6177175728);
   * digest eksikse indirilmez, uyusmazsa kabul edilmez;
   * yonlendirme elle ve bir kez izlenir; indirme istegine Authorization
     gitmez, ikinci yonlendirme okunmaz, https disi adres reddedilir;
@@ -218,9 +220,13 @@ def run(run_id: int, created: str, **overrides: Any) -> dict[str, Any]:
 
 
 def total_run(
-    run_id: int, status: str = "completed", conclusion: str | None = "failure"
+    run_id: int,
+    status: str = "completed",
+    conclusion: str | None = "failure",
+    created: str = "2026-01-07T15:00:00Z",
 ) -> dict[str, Any]:
-    return {"id": run_id, "status": status, "conclusion": conclusion}
+    """Onceki toplam kosusu; varsayilan olarak son planli gunden SONRA (New York 7 Ocak)."""
+    return {"id": run_id, "status": status, "conclusion": conclusion, "created_at": created}
 
 
 def total_job(
@@ -841,7 +847,7 @@ EVIDENCE_CASES: list[tuple[str, dict[str, Any], list[dict[str, Any]] | None, str
     # Suruyor.
     ("kosu-suruyor", total_run(800, status="in_progress", conclusion=None), None, RUNNING),
     ("kosu-kuyrukta", total_run(800, status="queued", conclusion=None), None, RUNNING),
-    ("kosu-durumsuz", {"id": 800}, None, RUNNING),
+    ("kosu-durumsuz", {"id": 800, "created_at": "2026-01-07T15:00:00Z"}, None, RUNNING),
     (
         "is-suruyor",
         total_run(800),
@@ -893,8 +899,9 @@ def test_prior_total_runs_block_by_step_evidence(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Onceki toplam kosusunun durumu yetmez; `total` isinin adimlari okunur
-    (6172892558 kabul ornekleri). Engelde hicbir gozlem artefakti
-    listelenmez ve indirilmez."""
+    (6172892558 kabul ornekleri). Kosular son planli gunden sonra ve
+    artefaktsiz: kaynak belirsiz, kanit okunur. Engelde hicbir gozlem
+    artefakti listelenmez ve indirilmez."""
     state, api_url = api
     blobs, host_url = host
     state.runs = [run(11, "2026-01-05T13:50:03Z")]
@@ -910,8 +917,10 @@ def test_prior_total_runs_block_by_step_evidence(
     assert code == 1
     assert f"FAIL toplam: {reason}" in text
     assert blobs.requests == [] and not days.exists()
-    assert not [path for path in state.paths() if path.endswith("/artifacts")]
+    assert f"/repos/{REPO}/actions/runs/11/artifacts" not in state.paths()
+    assert ARTIFACTS_PATH not in state.paths()
     if jobs is not None:
+        assert f"/repos/{REPO}/actions/runs/800/artifacts" in state.paths(), "once kampanya bagi"
         assert f"/repos/{REPO}/actions/runs/800/jobs" in state.paths()
 
 
@@ -925,27 +934,162 @@ def test_later_total_runs_and_this_run_are_not_evidence(
     assert not [path for path in state.paths() if path.endswith("/jobs")]
 
 
-def test_a_retry_is_authorised_only_by_the_code_constant(
+OTHER_TOTAL = shadow_job.TOTAL_ARTIFACT + "-" + "0" * shadow_job.CAMPAIGN_PREFIX
+BINDING_CASES: list[tuple[str, str | None, str, list[dict[str, Any]] | None, str | None]] = [
+    # A kampanyasi toplamini yukledi (suresi dolmus olsa da): B icin kanit degil, is okunmaz.
+    ("baska-kampanya-artefakti", OTHER_TOTAL, "2026-01-07T15:00:00Z", None, None),
+    # Bu kampanyanin toplami kosunun artefaktindan: durur.
+    (
+        "bu-kampanya-artefakti",
+        "OURS",
+        "2026-01-07T15:00:00Z",
+        None,
+        "bu kampanyanin toplami daha once uretildi",
+    ),
+    # Artefaktsiz ve son planli gunden once (New York 6 Ocak): bu kampanyanin olamaz, is okunmaz.
+    ("son-gunden-once", None, "2026-01-06T20:00:00Z", None, None),
+    # UTC 7 Ocak 04:59 ama New York hala 6 Ocak.
+    ("son-gun-new-york", None, "2026-01-07T04:59:00Z", None, None),
+    # Artefaktsiz, son gunden sonra, Topla kostu: A'nin silinmis ciktisi A icin durur.
+    (
+        "son-gunden-sonra-silinmis",
+        None,
+        "2026-01-07T05:00:00Z",
+        [total_job("success", "success", upload="success")],
+        RAN,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("artifact_name", "created", "jobs", "reason"),
+    [case[1:] for case in BINDING_CASES],
+    ids=[case[0] for case in BINDING_CASES],
+)
+def test_prior_total_runs_are_bound_to_their_campaign(
+    artifact_name: str | None,
+    created: str,
+    jobs: list[dict[str, Any]] | None,
+    reason: str | None,
     api: tuple[Api, str],
+    host: tuple[Host, str],
     tmp_path: Path,
     project_root: Path,
-    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Yeni dispatch izin degildir. `TOTAL_RETRY_AFTER` basarisiz kosunun
-    kimligine cekilirse (ayri karar PR'i) o ve oncekiler kanit sayilmaz;
-    sonrakiler sayilmaya devam eder."""
+    """Teklik kampanyaya bagli, workflow omrune degil (6171961412, 6177175728):
+    A basarili → B'nin ilk toplami gecer; A'nin yeni toplami ve A'nin
+    silinmis ciktisi A icin durur; belirsiz kaynak guvenli durur."""
     state, api_url = api
+    blobs, host_url = host
+    state.runs = [run(11, "2026-01-05T13:50:03Z")]
+    serve(state, blobs, host_url, 11, day_zip(project_root, D1))
+    state.totals = [total_run(800, conclusion="success", created=created)]
+    if artifact_name is not None:
+        name = (
+            shadow_job.total_artifact(campaign(project_root, PLANNED))
+            if artifact_name == "OURS"
+            else artifact_name
+        )
+        state.artifacts["800"] = [{"id": 1, "name": name, "expired": True}]
+    if jobs is not None:
+        state.jobs["800"] = jobs
+    code, days = collect(env(api_url), tmp_path, project_root)
+    text = capsys.readouterr().out
+    if reason is None:
+        assert code == 0 and written(days) == ["11.json"]
+        assert f"/repos/{REPO}/actions/runs/800/jobs" not in state.paths(), "kanit gerekmedi"
+        return
+    assert code == 1
+    assert f"FAIL toplam: {reason}" in text
+    assert blobs.requests == [] and not days.exists()
+
+
+def retry_record(root: Path, campaign_id: str, failed_run: Any, decision: Any = "#17/1") -> Path:
+    path = root / shadow_job.TOTAL_RETRY_FILE
+    path.write_text(
+        json.dumps({"campaign": campaign_id, "failed_run": failed_run, "decision": decision}),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_a_recorded_retry_keeps_the_campaign_and_unblocks_only_that_run(
+    api: tuple[Api, str],
+    host: tuple[Host, str],
+    tmp_path: Path,
+    project_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """6177175728 kabul ornegi, gercek dosyayla: eski gunlukler → yalniz
+    tekrar kaydi degisir → parmak izi ve kampanya kimligi ayni, gunlukler
+    gecerli, yalnizca kayitli kosu kanit disi, toplam kurulur. Olcum
+    dosyasi degisince kimlik degisir ve eski gunlukler reddedilir."""
+    state, api_url = api
+    blobs, host_url = host
+    before = campaign(project_root, PLANNED)
+    fingerprint = shadow_job.implementation_fingerprint(project_root)
+    state.runs = [run(11, "2026-01-05T13:50:03Z")]
+    serve(state, blobs, host_url, 11, day_zip(project_root, D1))
     state.totals = [total_run(800), total_run(801)]
     state.jobs["800"] = [total_job("success", "success", upload="failure")]
     state.jobs["801"] = [total_job("success", "success", upload="failure")]
-    assert shadow_job.TOTAL_RETRY_AFTER == 0
-    assert collect(env(api_url), tmp_path, project_root)[0] == 1
-    monkeypatch.setattr(shadow_job, "TOTAL_RETRY_AFTER", 800)
-    assert collect(env(api_url), tmp_path / "ikinci", project_root)[0] == 1
+    assert collect(env(api_url), tmp_path / "r0", project_root)[0] == 1
+
+    record = retry_record(project_root, before, 800)
+    assert shadow_job.implementation_fingerprint(project_root) == fingerprint
+    assert campaign(project_root, PLANNED) == before, "tekrar kaydi kimligi degistirmez"
+    assert collect(env(api_url), tmp_path / "r1", project_root)[0] == 1, "801 hala engel"
     assert RAN in capsys.readouterr().out
-    monkeypatch.setattr(shadow_job, "TOTAL_RETRY_AFTER", 801)
-    assert collect(env(api_url), tmp_path / "ucuncu", project_root)[0] == 0
+    state.totals = [total_run(800)]
+    code, days = collect(env(api_url), tmp_path / "r2", project_root)
+    assert code == 0 and written(days) == ["11.json"]
+    out = tmp_path / "total.json"
+    assert (
+        shadow_job.aggregate(
+            env(api_url), days_dir=days, out=out, root=project_root, planned=PLANNED
+        )
+        == 0
+    )
+    assert json.loads(out.read_text(encoding="utf-8"))["campaign"] == before
+
+    # Yanlis kosu: yetki yalnizca kayitli kosuya.
+    retry_record(project_root, before, 801)
+    assert collect(env(api_url), tmp_path / "r3", project_root)[0] == 1
+    assert RAN in capsys.readouterr().out
+
+    # Baska kampanyanin kaydi: is durur, hic istek yok.
+    retry_record(project_root, "0" * 64, 800)
+    requests_before = len(state.requests)
+    assert collect(env(api_url), tmp_path / "r4", project_root)[0] == 1
+    assert "FAIL toplam: tekrar kaydi baska kampanyanin" in capsys.readouterr().out
+    assert len(state.requests) == requests_before
+
+    # Bicimsiz kayit: durur.
+    for index, bad in enumerate(
+        [
+            "{",
+            "[]",
+            json.dumps({"campaign": before, "failed_run": 0, "decision": "#17/1"}),
+            json.dumps({"campaign": before, "failed_run": "800", "decision": "#17/1"}),
+            json.dumps({"campaign": before, "failed_run": True, "decision": "#17/1"}),
+            json.dumps({"campaign": before, "failed_run": 800}),
+            json.dumps({"campaign": before, "failed_run": 800, "decision": ""}),
+            json.dumps({"campaign": before, "failed_run": 800, "decision": "#17/1", "x": 1}),
+        ]
+    ):
+        record.write_text(bad, encoding="utf-8")
+        assert collect(env(api_url), tmp_path / f"bad{index}", project_root)[0] == 1
+        assert "FAIL toplam: tekrar kaydi beklenen bicimde degil" in capsys.readouterr().out
+
+    # Olcum dosyasi degisince kimlik degisir; kayit ve eski gunlukler baska kampanyanin olur.
+    record.unlink()
+    state.totals = []
+    base = project_root / "config" / "base.yaml"
+    base.write_text(base.read_text(encoding="utf-8") + "\n# olcum degisti\n", encoding="utf-8")
+    assert campaign(project_root, PLANNED) != before
+    assert collect(env(api_url), tmp_path / "r5", project_root)[0] == 1
+    assert "gun ozeti baska kampanyanin" in capsys.readouterr().out
 
 
 def test_an_unwritable_step_output_fails(

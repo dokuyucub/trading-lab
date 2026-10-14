@@ -24,7 +24,11 @@ Tarih: 2026-10-13. Koordinasyon: #17. Kayıtlar:
 - Codex 6172892558 ve BULGU 6175607709 (#53, `632fbee`): önceki toplam
   koşusunun adım kanıtı, kodla temsil edilen yeniden deneme yetkisi,
   gün özetinde koşu/kod kimliği, uygulama parmak izi kampanyada, sabit
-  stratejiden türeyen sayaç ve pencere tutarlılığı.
+  stratejiden türeyen sayaç ve pencere tutarlılığı;
+- Codex BULGU 6177175728 (#53, `93fefc5`): yeniden deneme yetkisi parmak
+  izinin dışında ayrı kayıt dosyasında (kampanya + kesin koşu); önceki
+  toplam koşusunun kampanyası artefakt adı, zaman ve adım kanıtıyla
+  bağlı.
 
 Bu belge tasarımdır. Kod, workflow ya da gerçek koşu teslim edildiği
 anlamına gelmez. Yürütme yetkisi de değildir: o, ayrı ve kayıtlı bir
@@ -393,33 +397,47 @@ Tercih: **sınırlı schedule**. Kullanıcıya 20 günlük tıklama yüklenmez
     - Tetiği yalnızca `workflow_dispatch`. Kullanıcı son planlı günden
       sonra bir kez tıklar; #17 kararıyla. Hata sonrası tekrar ayrı #17
       kararıdır; otomatik tekrar yok.
-    - **Tek toplam, kampanya başına; iki kanıt.** (1) Gerçek çıktı:
-      yükleme adı `shadow-total-<kimliğin ilk 16 hanesi>` (ad yalnız
-      arama anahtarı; gün özetlerinde tam kimlik karşılaştırılır).
-      Depoda bu adda artefakt varsa (süresi dolmuş olsa da) gözlem
-      artefaktı indirilmez, yeni toplam üretilmez. (2) Önceki toplam
-      koşularının **adım kanıtı**: iş iki adımdır, `Indir` (`collect`)
-      ve `Topla` (`aggregate`, yalnız `Indir` başarılıysa). Bu koşudan
-      önce oluşturulmuş her toplam koşusu için `total` işinin adımları
-      okunur:
+    - **Tek toplam, kampanya başına; teklik workflow ömrüne değil
+      kampanyaya bağlı.** (1) Gerçek çıktı: yükleme adı
+      `shadow-total-<kimliğin ilk 16 hanesi>` (ad yalnız arama anahtarı;
+      gün özetlerinde tam kimlik karşılaştırılır). Depoda bu adda
+      artefakt varsa (süresi dolmuş olsa da) gözlem artefaktı
+      indirilmez, yeni toplam üretilmez. (2) Önceki toplam koşuları
+      **kampanyaya bağlanır** ve gerekiyorsa **adım kanıtı** okunur. İş
+      iki adımdır: `Indir` (`collect`) ve `Topla` (`aggregate`, yalnız
+      `Indir` başarılıysa). Bu koşudan önce oluşturulmuş her toplam
+      koşusu için sırayla:
 
       | Önceki koşu | Karar |
       |---|---|
-      | koşu ya da `total` işi bitmemiş | durur (sürüyor) |
-      | `total` işi listede yok ya da adımları okunamıyor | durur (eksik geçmiş başarı ya da "hiç başlamadı" kanıtı değildir) |
-      | `Topla` `success` ya da `failure` | durur: toplam adımı koştu; upload hatası ve silinmiş artefakt burada yakalanır |
-      | `Topla` atlandı, `Indir` `failure`/`skipped` | engel değil: boş, erken, ret ya da indirme hatası; çıktı üretilmedi |
-      | başka birleşim (iptal, sonuçsuz) | durur (belirsiz) |
+      | koşu bitmemiş | durur (sürüyor; eşzamanlılık) |
+      | kayıtlı tekrar yetkisi bu koşuyu gösteriyor | kanıt dışı (aşağıda) |
+      | `shadow-total-*` artefaktı var (süresi dolmuş dahil), öneki bu kampanyanın | durur: toplam üretildi |
+      | artefaktı var, öneki başka kampanyanın | engel değil: kanıtlı başka kampanya |
+      | artefaktı yok, koşu bu kampanyanın son planlı gününden önce ya da o gün (New York) oluşturulmuş | engel değil: bu kampanyanın toplamı olamaz, `collect` o tarihte reddederdi |
+      | artefaktı yok, son planlı günden sonra; `total` işi listede yok ya da adımları okunamıyor | durur (eksik geçmiş başarı ya da "hiç başlamadı" kanıtı değildir) |
+      | … `Topla` `success` ya da `failure` | durur: toplam adımı koştu; upload hatası ve silinmiş artefakt burada yakalanır |
+      | … `Topla` atlandı, `Indir` `failure`/`skipped` | engel değil: boş, erken, ret ya da indirme hatası; çıktı üretilmedi |
+      | … başka birleşim (iptal, sonuçsuz) | durur (belirsiz kaynak güvenli tarafta) |
 
+      Böylece A kampanyasının başarılı ya da yarım toplamı, tarihleri
+      sonraki B kampanyasının ilk toplamını engellemez; A'nın yeni
+      toplamı ve A'nın upload hatası/silinmiş çıktısı A için durur.
       Başarıyla biten ama çıktı bırakmayan koşu (boş ya da erken
       `PLANNED_DAYS`) `Indir`de durur; kanıt değildir ve geleceği
       kapatmaz.
-    - **Yeniden deneme yetkisi kodda.** `TOTAL_RETRY_AFTER` sabiti:
-      kimliği bu değerden küçük ya da eşit önceki koşular kanıt
-      sayılmaz; varsayılan 0. Başarısız bir toplamdan sonra tekrar, bu
-      sabiti o koşunun kimliğine çeken ayrı bir karar PR'ıdır (#17).
-      Yeni dispatch, yeni `run_id` ya da `run_attempt = 1` tek başına
-      izin değildir.
+    - **Yeniden deneme yetkisi: parmak izinin dışında, dar ve bağlı.**
+      Kayıt dosyası `config/shadow-total-retry.json`: `{"campaign":
+      <tam kimlik>, "failed_run": <koşu kimliği>, "decision":
+      "#17/<yorum>"}`. Parmak izi `config/*.yaml` ve paket `.py`
+      dosyalarını kapsar; bu JSON bilinçli olarak dışarıdadır. Yalnız bu
+      dosyayı değiştiren karar PR'ı kampanya kimliğini değiştirmez,
+      mevcut günlükler geçerli kalır; ölçüm kodu/ayar değişimi hâlâ
+      kimliği değiştirir. Yetki yalnız o kampanyanın **o** başarısız
+      koşusunu kanıt dışı bırakır. Dosya başka kampanyaya aitse ya da
+      biçimsizse iş durur; eski kayıt yeni kampanyada bırakılamaz. Yeni
+      dispatch, yeni `run_id` ya da `run_attempt = 1` tek başına izin
+      değildir.
     - **Eşzamanlılık.** Workflow düzeyinde `concurrency:
       shadow-aggregate`, `cancel-in-progress: false`; iki dispatch
       kapıyı aynı anda geçemez.
@@ -529,7 +547,10 @@ Tercih: **sınırlı schedule**. Kullanıcıya 20 günlük tıklama yüklenmez
     çıktısız başarılı toplam koşusu; hesaplama sonrası upload hatası;
     silinmiş toplam artefaktı ile adım kanıtı; yanlış kaynak SHA, koşu
     ya da deneme; sıfır ya da azaltılmış beklenen tur; yanlış
-    `params_version`; `TOTAL_RETRY_AFTER` ile yetkili tekrar;
+    `params_version`; kayıt dosyasıyla yetkili tekrar (kimlik
+    değişmeden); başka kampanyanın başarılı toplamı engel değil;
+    son günden önceki koşu engel değil; başka kampanyanın tekrar kaydı
+    durdurur;
   - 401/403, 429 ve 5xx;
   - eksik IEX ya da eksik SIP barı;
   - sıfır niyet.
