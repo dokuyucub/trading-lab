@@ -1313,8 +1313,12 @@ doğrulanmış manifestten `data_feed` olarak taşır. Ayarlanmış feed'den
 farklıysa rapora kalıcı bir uyarı eklenir. Ölçümün her backtest koşusu
 journal'a manifest feed'ini yazar
 (`docs/designs/baseline-measurement-execution.md`). **Canlı CLI yolunun**
-journal'a yazdığı feed çalışma anında hâlâ doğrulanmadı. Paper dolum
-kaynağı da doğrulanmamış kalıyor.
+journal'a yazdığı feed 2026-10-15'ten beri testte doğrulanıyor
+(`tests/test_cli_run.py`): `run --once --dry-run` sahte broker, sahte veri
+kaynağı ve sahte saatle koşar; `runs.data_feed`, veri istemcisinin kurulduğu
+feed ve config feed'i aynı çıkar (`iex` ve `sip` ile), dry-run emir
+göndermez, koşu kapatılır. Bu gerçek Alpaca'ya karşı çalışma anı gözlemi
+değildir. Paper dolum kaynağı doğrulanmamış kalıyor.
 
 ### 11.5 SIP ana ölçüm onayı ve dondurma — #17, 2026-10-08
 
