@@ -698,8 +698,8 @@ def test_the_planned_days_are_the_execution_decision() -> None:
 
     Hafta ici, tatil ve erken kapanis disi, tekrarsiz ve sirali, tek mevsim
     (acilis UTC saati her gun ayni), ucretsiz SIP gecikmesi ve kayit isi
-    zaman asimi icin pay birakan tek kampanya. Kimlik sabitlenmez: kampanya
-    kimligi birlestirme commit'inin agacindan hesaplanir (tasarim §7).
+    zaman asimi icin pay birakan tek kampanya. Kimlik asagidaki testte
+    sabitlenir ve birlestirme agacinda yeniden dogrulanir (tasarim §7).
     """
     from tlab.shadow.schedule import regular_open
 
@@ -718,6 +718,33 @@ def test_the_planned_days_are_the_execution_decision() -> None:
         if day.weekday() < 5 and day not in NYSE_HOLIDAYS and day not in NYSE_EARLY_CLOSES
     ]
     assert list(planned) == expected[:20], "ardisik seanslar, atlanan yalnizca tatil/erken kapanis"
+
+
+CAMPAIGN_FINGERPRINT = "7f9f1fed22ee12f06141bb174a4bd28be7e9c29dcd8b6b9580b240deef93826d"
+"""(d) dalinin son uygulama agaci (Codex 6181551003): paketin `.py` dosyalari,
+`config/*.yaml`, `requirements.lock` ve iki golge workflow'u."""
+
+CAMPAIGN_ID = "4a096c7e97ea4f7393a4c32eda233fa9fb0843c6c187299f0be28337f32bada7"
+"""2 Kasim – 1 Aralik 2026 kampanyasinin kimligi; toplam artefakti
+`shadow-total-4a096c7e97ea4f73`."""
+
+
+def test_the_campaign_identity_is_pinned_to_the_implementation_tree() -> None:
+    """Kimlik, depodaki gercek agactan hesaplanir ve sabitle karsilastirilir.
+
+    Bu dosya parmak izinin disindadir; sabiti yazmak kimligi degistirmez.
+    Kirmizi olmasi su demektir: parmak izi kapsamindaki bir dosya (d)
+    kararindan sonra degisti. Kampanya suresince bu dondurma ihlalidir;
+    kampanya bittikten sonra sabitler yeni kararla guncellenir (tasarim §7).
+    """
+    from tlab.config import load_config
+
+    repo = Path(__file__).resolve().parents[1]
+    symbols = tuple(load_config(repo).symbols)
+    assert len(symbols) == 11
+    assert shadow_job.implementation_fingerprint(repo) == CAMPAIGN_FINGERPRINT
+    assert shadow_job.campaign_of(shadow_job.PLANNED_DAYS, symbols, repo) == CAMPAIGN_ID
+    assert shadow_job.total_artifact(CAMPAIGN_ID) == "shadow-total-4a096c7e97ea4f73"
 
 
 def test_an_unreadable_configuration_writes_no_summary(
