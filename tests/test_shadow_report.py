@@ -123,6 +123,8 @@ def test_a_passing_campaign_renders_the_three_answers(report: ModuleType) -> Non
     assert "| 2026-11-02 | tamam | — |" in text
     assert "| SPY | 3/3 (bilinmeyen 0) | 3/3 (bilinmeyen 0) | 3/3 (bilinmeyen 0) |" in text
     assert "ÖNERİ" in text and "- range_bps: 5" in text
+    assert "SIP referans verisiyle" in text and "eksiksiz" not in text
+    assert "en az 1 bilinen gözlem ve 1 farklı gün; destek yoksa" in text
 
 
 def test_a_failing_campaign_says_so(report: ModuleType) -> None:
@@ -198,6 +200,8 @@ def test_a_field_that_breaks_the_schema_is_refused(
 MEASURE_CASES: list[tuple[str, dict[str, Any], str]] = [
     ("sonuc-tanimsiz", {"verdict": "evet"}, "iex_window_initial sonucu tanimsiz"),
     ("sonuc-yok", {"verdict": None}, "iex_window_initial sonucu tanimsiz"),
+    ("sonuc-liste", {"verdict": []}, "iex_window_initial sonucu tanimsiz"),
+    ("sonuc-sozluk", {"verdict": {}}, "iex_window_initial sonucu tanimsiz"),
     ("pay-bool", {"numerator": True}, "iex_window_initial beklenen bicimde degil"),
     ("pay-negatif", {"numerator": -1}, "iex_window_initial beklenen bicimde degil"),
     ("gun-negatif", {"distinct_days": -1}, "iex_window_initial beklenen bicimde degil"),
@@ -243,6 +247,35 @@ def test_a_day_whose_status_and_reason_disagree_is_refused(
         report.render(summary)
 
 
+DAY_LIST_CASES: list[tuple[str, dict[str, Any], str]] = [
+    ("durum-liste", {"status": []}, "gun listesi beklenen bicimde degil"),
+    ("durum-sozluk", {"status": {}}, "gun listesi beklenen bicimde degil"),
+    ("tarih-bicim", {"day": "2026/11/02"}, "gun listesi beklenen bicimde degil"),
+    ("tarih-kisa", {"day": "2026-11-2"}, "gun listesi beklenen bicimde degil"),
+    ("tarih-gercek-degil", {"day": "2026-11-31"}, "gun listesi beklenen bicimde degil"),
+    ("tarih-tekrar", {"day": "2026-11-03"}, "gun listesi beklenen bicimde degil"),
+    (
+        "sayimla-celisen-durum",
+        {"status": "eksik", "reason": "gec baslangic"},
+        "gun listesi ile gun sayimlari uyusmuyor",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("overrides", "reason"), [c[1:] for c in DAY_LIST_CASES], ids=[c[0] for c in DAY_LIST_CASES]
+)
+def test_a_day_list_that_contradicts_the_counts_or_the_calendar_is_refused(
+    overrides: dict[str, Any], reason: str, report: ModuleType
+) -> None:
+    """Gun sayimlari ile gun listesi ayni seyi soylemeli; tarihler gercek ve
+    tekrarsiz olmali. Bozuk JSON turu sabit hatayla durur, traceback ile degil."""
+    summary = passing()
+    summary["day_list"][0].update(overrides)
+    with pytest.raises(report.ReportError, match=reason):
+        report.render(summary)
+
+
 def test_per_symbol_measures_carry_no_verdict_and_must_cover_the_universe(
     report: ModuleType,
 ) -> None:
@@ -275,5 +308,17 @@ def test_the_cli_writes_once_and_refuses_bad_input(
     source.write_text(json.dumps({**passing(), "summary_schema": 9}), encoding="utf-8")
     assert report.main(["--summary", str(source)]) == 1
     assert "HATA: toplam ozeti semasi tanimsiz" in capsys.readouterr().err
+    broken = passing()
+    broken["total"]["iex_window_initial"]["verdict"] = []
+    source.write_text(json.dumps(broken), encoding="utf-8")
+    assert report.main(["--summary", str(source)]) == 1
+    err = capsys.readouterr().err
+    assert "HATA: iex_window_initial sonucu tanimsiz" in err and "Traceback" not in err
+    broken = passing()
+    broken["day_list"][0]["status"] = []
+    source.write_text(json.dumps(broken), encoding="utf-8")
+    assert report.main(["--summary", str(source)]) == 1
+    err = capsys.readouterr().err
+    assert "HATA: gun listesi beklenen bicimde degil" in err and "Traceback" not in err
     assert report.main(["--summary", str(tmp_path / "yok.json")]) == 1
     assert "HATA: toplam ozeti okunamadi (FileNotFoundError)" in capsys.readouterr().err

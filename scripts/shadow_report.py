@@ -19,6 +19,7 @@ import math
 import re
 import sys
 from collections.abc import Mapping, Sequence
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -59,7 +60,7 @@ TOP_KEYS = frozenset(
 )
 MEASURES = (
     ("iex_window_initial", "Ücretsiz canlı veri açılış penceresini tam veriyor mu?"),
-    ("range_within_bps", "Açılış aralığı eksiksiz veriyle aynı çıkıyor mu?"),
+    ("range_within_bps", "Açılış aralığı SIP referans verisiyle aynı çıkıyor mu?"),
     ("intent_agreement", "Strateji iki veriyle aynı kararı veriyor mu?"),
 )
 MEASURE_EXTRAS = {
@@ -81,6 +82,16 @@ def _is_number(value: Any) -> bool:
     return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
 
 
+def _is_iso_day(value: Any) -> bool:
+    """Tam `YYYY-AA-GG` bicimli gercek bir tarih."""
+    if not isinstance(value, str):
+        return False
+    try:
+        return date.fromisoformat(value).isoformat() == value
+    except ValueError:
+        return False
+
+
 def _rate(payload: Any, name: str, *, verdict: bool) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ReportError(f"{name} beklenen bicimde degil")
@@ -91,7 +102,7 @@ def _rate(payload: Any, name: str, *, verdict: bool) -> dict[str, Any]:
         raise ReportError(f"{name} beklenen bicimde degil")
     if payload["numerator"] + payload["unknown"] > payload["denominator"]:
         raise ReportError(f"{name} sayaclari tutarsiz")
-    if verdict and payload["verdict"] not in VERDICTS:
+    if verdict and not (isinstance(payload["verdict"], str) and payload["verdict"] in VERDICTS):
         raise ReportError(f"{name} sonucu tanimsiz")
     return payload
 
@@ -145,7 +156,6 @@ def validate(summary: Any) -> dict[str, Any]:
         not isinstance(days, dict)
         or set(days) != set(DAY_STATUSES)
         or not all(_is_count(value) for value in days.values())
-        or sum(days.values()) != summary["planned_days"]
     ):
         raise ReportError("gun sayimlari beklenen bicimde degil")
     day_list = summary["day_list"]
@@ -155,12 +165,18 @@ def validate(summary: Any) -> dict[str, Any]:
         if (
             not isinstance(item, dict)
             or set(item) != {"day", "status", "reason"}
-            or not isinstance(item["day"], str)
-            or item["status"] not in DAY_STATUSES
+            or not _is_iso_day(item["day"])
+            or not (isinstance(item["status"], str) and item["status"] in DAY_STATUSES)
             or not (item["reason"] is None or isinstance(item["reason"], str))
             or (item["status"] == "tamam") != (item["reason"] is None)
         ):
             raise ReportError("gun listesi beklenen bicimde degil")
+    listed = [item["day"] for item in day_list]
+    if len(set(listed)) != len(listed):
+        raise ReportError("gun listesi beklenen bicimde degil")
+    counted = {status: sum(1 for item in day_list if item["status"] == status) for status in days}
+    if counted != days:
+        raise ReportError("gun listesi ile gun sayimlari uyusmuyor")
     if summary["thresholds_are_proposals"] is not True:
         raise ReportError("esikler oneri olarak isaretli degil")
     thresholds = summary["thresholds"]
@@ -224,7 +240,13 @@ def render(summary: Mapping[str, Any]) -> str:
         "Bu rapor yorum eklemez. Eşikler tasarımdaki ÖNERİLERDİR; sonuç, bilinmeyen "
         "gözlemler iki yöne de sayılarak verilir: hepsi başarısız sayılsa bile eşik "
         "aşılıyorsa GEÇTİ, hepsi başarılı sayılsa bile aşılamıyorsa KALDI, arası "
-        "BELİRSİZ. Fiyat ya da ham veri içermez.",
+        "BELİRSİZ. GEÇTİ ya da KALDI demeden önce yeterli destek aranır: açılış "
+        f"aralığı için en az {thresholds['range_min_support']:g} bilinen gözlem, "
+        f"strateji kararı için en az {thresholds['intent_min_support']:g} bilinen "
+        f"gözlem ve {thresholds['intent_min_days']:g} farklı gün; destek yoksa "
+        "yüzde ne olursa olsun sonuç BELİRSİZ'dir. SIP referans verisi de eksik "
+        "olabilir; eksik olduğu gözlemler bilinmeyen sayılır. Fiyat ya da ham "
+        "veri içermez.",
         "",
         "## Üç soru",
         "",
@@ -247,7 +269,7 @@ def render(summary: Mapping[str, Any]) -> str:
         f"tamamlanan sembol-gün: {delayed['completed_later']} "
         f"(ilk bakışta eksik: {delayed['incomplete_at_t_star']}).",
         f"- Aralık farkı ölçülemeyen sembol-gün: canlı pencere hiç tamamlanmadı "
-        f"{rng['iex_window_incomplete']}, eksiksiz pencere eksikti "
+        f"{rng['iex_window_incomplete']}, SIP referans penceresi eksikti "
         f"{rng['sip_window_incomplete']} (ölçü dışı, ayrı sayılır).",
         f"- İki tarafta da işlem niyeti olmayan sembol-gün: {intent['no_intent']} "
         "(uyum sayılmaz, ayrı sayılır).",
