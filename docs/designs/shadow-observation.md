@@ -318,8 +318,16 @@ Tercih: **sınırlı schedule**. Kullanıcıya 20 günlük tıklama yüklenmez
 
     Gözlem ve kayıt işleri bu izni almaz. Alpaca secret'ları yalnızca
     gözlem adımında bulunur.
-  - `workflow_dispatch` yok. Elle yeniden başlatma zaten geç başlangıç
-    olur.
+  - `workflow_dispatch` (girdisiz) dış başlatıcı içindir
+    (`scheduler-alternatives.md` A; Codex 6196548874). Kapı tetik türüne
+    bakmaz: aynı gün cron + dispatch, iki dispatch ya da elle tıklama
+    gelirse ikincisi "gün zaten kaydedildi" ile boş geçer; pencere
+    dışındaki tetik geç kayıt yazar. Eşzamanlılık grubu en fazla bir
+    bekleyen koşu tutar: üçüncü tetik bekleyeni iptal eder ve iptal
+    edilen koşu durum tablosuna göre günü kapatır (gevşetilmez). Bu
+    yüzden başlatıcı bir günde en fazla bir kez ve o günün koşusu
+    varken hiç dispatch etmez; teklik kanıtı `concurrency` değil koşu
+    geçmişidir.
   - Planlı gün listesi boşken her koşu kapıda "plan dışı gün" der ve
     API'ye gitmez. Schedule satırlarının merge ile hafta içi günde iki
     kez boş koşu başlatması bu yüzden zararsızdır. Yine de (c)'nin
@@ -450,9 +458,11 @@ Tercih: **sınırlı schedule**. Kullanıcıya 20 günlük tıklama yüklenmez
     - Yeniden deneme koşusunda ve secret'lı ortamda iş hiçbir istek
       yapmadan kırmızı biter.
     - **Koşu seçimi.** Ad yetmez. Gün özeti yalnızca şu koşudan alınır:
-      `head_branch = main`, `event = schedule`, `path =
-      .github/workflows/shadow-observation.yml`, `run_attempt = 1`
-      (`OBSERVATION_SOURCE`). Seans günü planlı olmalı; plan dışı günün
+      `head_branch = main`, `event` ∈ {`schedule`, `workflow_dispatch`}
+      (`OBSERVATION_EVENTS`; workflow'un tetik kümesiyle aynı, mimari
+      test), `path = .github/workflows/shadow-observation.yml`,
+      `run_attempt = 1` (`OBSERVATION_SOURCE`); başka tetik, dal, yol ya
+      da deneme seçilmez. Seans günü planlı olmalı; plan dışı günün
       koşusu listelenmez. Seçilmeyen koşu sabit satırla atlanır; o gün
       kanıt kuralıyla sınıflanır. Aynı günün iki seçilmiş özeti işi
       durdurur.

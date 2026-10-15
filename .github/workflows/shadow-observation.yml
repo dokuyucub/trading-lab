@@ -17,6 +17,11 @@ on:
     # gecer (tlab.shadow.schedule).
     - cron: '50 12 * * 1-5'
     - cron: '50 13 * * 1-5'
+  # Dis baslatici (docs/designs/scheduler-alternatives.md A; Codex
+  # 6196548874): girdisiz. Kapi tetik turune bakmaz; ayni gun ikinci
+  # tetik "gun zaten kaydedildi" ile bos gecer, pencere disindaki tetik
+  # gec kayit yazar. Elle tiklama da ayni kapidan gecer.
+  workflow_dispatch:
 
 permissions:
   contents: read

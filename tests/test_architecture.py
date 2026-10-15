@@ -1182,11 +1182,14 @@ def test_the_baseline_workflow_separates_secrets_from_measurement() -> None:
 SHADOW = "shadow-observation.yml"
 
 
-def test_the_shadow_workflow_contains_secrets_and_runs_only_on_schedule() -> None:
-    """Golge gozlem: sinirli schedule, secret'siz kapi, secret tek adimda.
+def test_the_shadow_workflow_contains_secrets_and_runs_only_on_schedule_or_dispatch() -> None:
+    """Golge gozlem: sinirli schedule + girdisiz dis baslatici, secret'siz
+    kapi, secret tek adimda.
 
     Her madde docs/designs/shadow-observation.md §5-§6'daki bir sarta
-    karsilik geliyor; biri gevserse bu test kirilir.
+    karsilik geliyor; biri gevserse bu test kirilir. Tetik kumesi gun
+    ozeti alinabilen tetiklerle (`OBSERVATION_EVENTS`) ayni: baska tetik
+    (push, PR, workflow_run) ne workflow'da ne secimde var.
     """
     from tlab import shadow_job
 
@@ -1195,7 +1198,9 @@ def test_the_shadow_workflow_contains_secrets_and_runs_only_on_schedule() -> Non
     dumped = yaml.safe_dump(workflow)
     # PyYAML (YAML 1.1) `on` anahtarini True olarak okur.
     triggers: dict[str, Any] = workflow["on"] if "on" in workflow else workflow[True]
-    assert set(triggers) == {"schedule"}, "elle tetik ve PR tetigi yok"
+    assert set(triggers) == {"schedule", "workflow_dispatch"}, "PR, push ya da baska tetik yok"
+    assert set(triggers) == set(shadow_job.OBSERVATION_EVENTS)
+    assert triggers["workflow_dispatch"] is None, "dis baslatici girdi (input) gecirmez"
     assert [item["cron"] for item in triggers["schedule"]] == ["50 12 * * 1-5", "50 13 * * 1-5"]
     assert workflow["permissions"] == {"contents": "read"}
     assert workflow["concurrency"] == {"group": "shadow-observation", "cancel-in-progress": False}
@@ -1346,9 +1351,10 @@ def test_the_shadow_aggregate_is_manual_secret_free_and_reads_only() -> None:
     assert str(observation["with"]["path"]).endswith("/" + shadow_job.DAY_FILE)
     shadow = _workflow(SHADOW)
     shadow_triggers: dict[str, Any] = shadow["on"] if "on" in shadow else shadow[True]
-    branch, event, path, attempt = shadow_job.OBSERVATION_SOURCE
-    assert (branch, path, attempt) == ("main", ".github/workflows/" + SHADOW, 1)
-    assert set(shadow_triggers) == {event}, "gun ozeti yalnizca zamanlanmis kosudan gelir"
+    assert shadow_job.OBSERVATION_SOURCE == ("main", ".github/workflows/" + SHADOW, 1)
+    assert set(shadow_triggers) == set(shadow_job.OBSERVATION_EVENTS), (
+        "gun ozeti yalnizca workflow'un kendi tetiklerinden gelir"
+    )
 
 
 @pytest.mark.parametrize(
