@@ -1284,6 +1284,51 @@ def test_the_two_shadow_crons_cover_both_seasons_exactly_once() -> None:
         assert len(observing) == 1, f"{day}: pencereye dusen satir {observing}"
 
 
+STARTER = REPO / "infra" / "shadow-starter"
+
+
+def test_the_shadow_starter_matches_the_observation_contract() -> None:
+    """Dis baslatici (Cloudflare Worker; docs/designs/scheduler-alternatives.md
+    A, Codex 6196548874) gozlem sozlesmesine bagli: cron satirlari gozlem
+    workflow'uyla ayni; sabitler Python sozlesmesiyle ayni (workflow
+    dosyasi, `main`, pencere dakikalari, API adresi); dispatch girdisiz;
+    genel HTTP uc noktasi yok; yapilandirmada hesap kimligi, secret ya da
+    degisken yok; log tek satir. Davranis Node testlerinde (CI `starter`
+    isi, setup-node'suz)."""
+    import tomllib
+
+    from tlab import shadow_job
+    from tlab.shadow.schedule import WINDOW_FIRST, WINDOW_LAST
+
+    config = tomllib.loads((STARTER / "wrangler.toml").read_text("utf-8"))
+    workflow = _workflow(SHADOW)
+    triggers: dict[str, Any] = workflow["on"] if "on" in workflow else workflow[True]
+    assert config["triggers"]["crons"] == [item["cron"] for item in triggers["schedule"]]
+    assert config["main"] == "worker.js"
+    assert config["workers_dev"] is False, "genel HTTP adresi yok"
+    assert not {"account_id", "vars", "secrets", "routes", "route", "env"} & set(config)
+
+    source = (STARTER / "worker.js").read_text("utf-8")
+    assert f'WORKFLOW_FILE = "{shadow_job.WORKFLOW_FILE}";' in source
+    assert 'REF = "main";' in source
+    assert 'REPO = "dokuyucub/trading-lab";' in source
+    assert 'API = "https://api.github.com";' in source
+    assert f"WINDOW_FIRST_MINUTES = {int(WINDOW_FIRST.total_seconds() // 60)};" in source
+    assert f"WINDOW_LAST_MINUTES = {int(WINDOW_LAST.total_seconds() // 60)};" in source
+    assert "JSON.stringify({ ref: REF })" in source, "dispatch govdesi yalnizca ref"
+    assert "inputs" not in source, "dispatch girdi gecirmez"
+    assert "status: 404" in source, "fetch isleyicisi 404"
+    assert source.count("console.log(") == 1 and "console.log(JSON.stringify(line))" in source
+    assert "Authorization: `Bearer ${token}`" in source
+    assert (STARTER / "README.md").exists() and (STARTER / "worker.test.js").exists()
+
+    starter = _workflow("ci.yml")["jobs"]["starter"]
+    assert starter["if"] == "github.event_name != 'schedule'"
+    commands = " ".join(step.get("run", "") for step in starter["steps"])
+    assert "node --test infra/shadow-starter/worker.test.js" in commands
+    assert not [step for step in starter["steps"] if "setup-node" in str(step.get("uses", ""))]
+
+
 SHADOW_AGGREGATE = "shadow-aggregate.yml"
 
 
