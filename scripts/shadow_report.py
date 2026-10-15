@@ -244,9 +244,10 @@ def render(summary: Mapping[str, Any]) -> str:
         f"aralığı için en az {thresholds['range_min_support']:g} bilinen gözlem, "
         f"strateji kararı için en az {thresholds['intent_min_support']:g} bilinen "
         f"gözlem ve {thresholds['intent_min_days']:g} farklı gün; destek yoksa "
-        "yüzde ne olursa olsun sonuç BELİRSİZ'dir. SIP referans verisi de eksik "
-        "olabilir; eksik olduğu gözlemler bilinmeyen sayılır. Fiyat ya da ham "
-        "veri içermez.",
+        "yüzde ne olursa olsun sonuç BELİRSİZ'dir. SIP hakkında kanıt yoksa gözlem "
+        "bilinmeyen sayılır; SIP penceresinin eksik olduğu kanıtlanan sembol-günler "
+        "aralık ölçüsünün dışında, ek sayımlarda ayrı tutulur. Fiyat ya da ham veri "
+        "içermez.",
         "",
         "## Üç soru",
         "",

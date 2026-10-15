@@ -125,6 +125,8 @@ def test_a_passing_campaign_renders_the_three_answers(report: ModuleType) -> Non
     assert "ÖNERİ" in text and "- range_bps: 5" in text
     assert "SIP referans verisiyle" in text and "eksiksiz" not in text
     assert "en az 1 bilinen gözlem ve 1 farklı gün; destek yoksa" in text
+    assert "SIP hakkında kanıt yoksa gözlem bilinmeyen sayılır" in text
+    assert "aralık ölçüsünün dışında, ek sayımlarda ayrı tutulur" in text
 
 
 def test_a_failing_campaign_says_so(report: ModuleType) -> None:
