@@ -687,8 +687,37 @@ def test_the_day_summary_is_never_overwritten(
     assert out.read_text(encoding="utf-8") == "{}"
 
 
-def test_the_planned_days_are_empty_until_the_execution_decision() -> None:
-    assert shadow_job.PLANNED_DAYS == ()
+NYSE_HOLIDAYS = {date(2026, 11, 26), date(2026, 12, 25), date(2027, 1, 1), date(2027, 1, 18)}
+"""NYSE 2026-2027 tam kapanislari (resmi duyuru, 23 Aralik 2025)."""
+NYSE_EARLY_CLOSES = {date(2026, 11, 27), date(2026, 12, 24)}
+"""13:00 erken kapanislar; kampanya disinda birakilir."""
+
+
+def test_the_planned_days_are_the_execution_decision() -> None:
+    """(d) karari #17/6181557402: 2026-11-02 .. 2026-12-01, 20 seans.
+
+    Hafta ici, tatil ve erken kapanis disi, tekrarsiz ve sirali, tek mevsim
+    (acilis UTC saati her gun ayni), ucretsiz SIP gecikmesi ve kayit isi
+    zaman asimi icin pay birakan tek kampanya. Kimlik sabitlenmez: kampanya
+    kimligi birlestirme commit'inin agacindan hesaplanir (tasarim §7).
+    """
+    from tlab.shadow.schedule import regular_open
+
+    planned = shadow_job.PLANNED_DAYS
+    assert len(planned) == 20
+    assert list(planned) == sorted(set(planned))
+    assert planned[0] == date(2026, 11, 2)
+    assert planned[-1] == date(2026, 12, 1)
+    assert all(day.weekday() < 5 for day in planned)
+    assert not set(planned) & NYSE_HOLIDAYS
+    assert not set(planned) & NYSE_EARLY_CLOSES
+    assert len({regular_open(day).hour for day in planned}) == 1, "tek mevsim"
+    expected = [
+        day
+        for day in (planned[0] + timedelta(days=i) for i in range(60))
+        if day.weekday() < 5 and day not in NYSE_HOLIDAYS and day not in NYSE_EARLY_CLOSES
+    ]
+    assert list(planned) == expected[:20], "ardisik seanslar, atlanan yalnizca tatil/erken kapanis"
 
 
 def test_an_unreadable_configuration_writes_no_summary(

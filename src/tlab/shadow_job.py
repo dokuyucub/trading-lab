@@ -38,8 +38,9 @@ yuzdeyle loglar; bu yuzden butun adimlar boyunca `logging` kapatilir
 Ham bar, mutlak fiyat ve hesap degeri disari cikmaz; gorulen kayit ve
 journal gecici calisma dizinindedir ve her durumda silinir.
 
-`PLANNED_DAYS` bos: tarihler yurutme kararinda (d) sabitlenir. Bos
-listeyle her gun plan disidir ve is hicbir sey yapmaz.
+`PLANNED_DAYS` yurutme kararinda (d) sabitlendi: 2026-11-02 ..
+2026-12-01, 20 seans (#17/6181557402). Plan disi gunde is
+hicbir sey yapmaz.
 """
 
 from __future__ import annotations
@@ -75,8 +76,31 @@ from tlab.shadow.schedule import (
     session_day_of,
 )
 
-PLANNED_DAYS: tuple[date, ...] = ()
-"""Yurutme kararinda (d) sabitlenir. Bos: is hicbir gun calismaz."""
+PLANNED_DAYS: tuple[date, ...] = (
+    date(2026, 11, 2),
+    date(2026, 11, 3),
+    date(2026, 11, 4),
+    date(2026, 11, 5),
+    date(2026, 11, 6),
+    date(2026, 11, 9),
+    date(2026, 11, 10),
+    date(2026, 11, 11),
+    date(2026, 11, 12),
+    date(2026, 11, 13),
+    date(2026, 11, 16),
+    date(2026, 11, 17),
+    date(2026, 11, 18),
+    date(2026, 11, 19),
+    date(2026, 11, 20),
+    date(2026, 11, 23),
+    date(2026, 11, 24),
+    date(2026, 11, 25),
+    date(2026, 11, 30),
+    date(2026, 12, 1),
+)
+"""Yurutme karari (d): #17/6181557402. 2026-11-02 .. 2026-12-01,
+20 seans; tatil ve erken kapanis disarida. Kampanya kimligi birlestirme
+commit'inin agacindan hesaplanir ve #17'ye yazilir (tasarim §7)."""
 
 KEY_ENV = (
     "ALPACA_PAPER_API_KEY",

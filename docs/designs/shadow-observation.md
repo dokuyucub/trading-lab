@@ -578,6 +578,17 @@ Tercih: **sınırlı schedule**. Kullanıcıya 20 günlük tıklama yüklenmez
 | (e) | Toplam işi: kampanya kimliği, koşu seçimi, digest, gün özeti sözleşmesi, indirme ve toplam | Kod PR'ı, bağımsız inceleme; (d)'den önce |
 | (d) | Yürütme kararı: 20 planlı tarih, eşikler, kesin commit ve o commit'in main CI'sı | Ayrı Codex kararı ve kullanıcı onayı |
 
-Mevcut durum: (b) #51 ve (c) #52 ile birleşti. (e) ayrı kod PR'ıyla
-geliyor. (d) ayrı karar bekler; o karar verilene kadar `PLANNED_DAYS`
-boştur ve iş hiçbir gün çalışmaz.
+Mevcut durum: (b) #51, (c) #52 ve (e) #53 ile birleşti. (d) kararı
+aşağıda, §7'de kayıtlı.
+
+## 7. Yürütme kaydı (d)
+
+- **Karar:** #17/6181557402 (kullanıcı yetkisiyle Claude; Codex SHA bağlı ONAY'ı (d) PR'ında); kullanıcı onayı: #17/6181470236 (bu oturumdan olduğu gibi aktarıldı; karar kullanıcı yetkisiyle 6181557402).
+- **Planlı günler (20 seans):** 2 Kasım, 3 Kasım, 4 Kasım, 5 Kasım, 6 Kasım, 9 Kasım, 10 Kasım, 11 Kasım, 12 Kasım, 13 Kasım, 16 Kasım, 17 Kasım, 18 Kasım, 19 Kasım, 20 Kasım, 23 Kasım, 24 Kasım, 25 Kasım, 30 Kasım, 1 Aralık. Dışarıda: NYSE tam kapanışlar ve 13:00 erken kapanışlar (testte liste).
+- **Evren:** `config/universe.yaml` (11 sembol). **Eşikler:** `Thresholds` varsayılanları. **Strateji:** `orb-7b32942a`. **Şemalar:** gün 1, toplam 1.
+- **Kaynak:** schedule main'in o anki commit'ini kullanır; her gün özeti gerçek `code_sha`, `run_id`, `run_attempt` yazar ve toplam işi bunu API koşusuyla doğrular. Bağ SHA sabiti değil uygulama parmak izidir.
+- **Kampanya kimliği ve parmak izi:** bu PR'ın birleştirme commit'inin ağacından hesaplanır ve birleşmeden hemen sonra #17'ye yazılır (`campaign_of`, `implementation_fingerprint`); ilk planlı günün özetindeki `campaign` ve toplam artefaktının adı bununla doğrulanır. Kimlik koda sabitlenmez.
+- **Dondurma:** bu PR'ın birleşmesinden son toplamın doğrulanmasına kadar parmak izinin kapsamı (`src/tlab/**`, `config/*.yaml`, `requirements.lock`, iki gölge workflow'u) main'e girmez; Dependabot lock PR'ları bekler. Dokunan bir merge kimliği değiştirir ve toplamı durdurur.
+- **İlk gün denetimi:** ilk planlı günün seansından sonra kayıt işi log'unun sabit satırları #17'ye yazılır. Sistematik hata → #17 kararıyla durdurma; iptal edilen kampanyanın eksik günleri ve sebebi bu bölümde kayıtta kalır; yeni tarihler yeni kampanyadır.
+- **Toplama:** en erken son planlı günün ertesi New York günü ve bütün koşular bitince; kullanıcının tek `workflow_dispatch` tıklaması ayrı #17 kararıyla. Tekrar yalnız `config/shadow-total-retry.json` kaydıyla.
+- **Tekillik:** bu kampanya için gün özetlerinde tam kimlik, toplam artefaktında `shadow-total-<ilk 16 hane>`.
