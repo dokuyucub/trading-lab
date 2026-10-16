@@ -254,6 +254,43 @@ def test_a_rerun_never_runs(api: Api, api_url: str, tmp_path: Path) -> None:
     assert api.requests == []
 
 
+@pytest.mark.parametrize(
+    ("event", "conclusion", "expected"),
+    [
+        ("schedule", "success", GATE_SKIP),
+        ("workflow_dispatch", "success", GATE_SKIP),
+        ("workflow_dispatch", "failure", GATE_SKIP),
+        ("workflow_dispatch", "skipped", GATE_OBSERVE),
+    ],
+    ids=["cron-kaydetti", "dispatch-kaydetti", "dispatch-basarisiz", "dispatch-bos-gecti"],
+)
+def test_the_trigger_kind_does_not_change_uniqueness(
+    event: str, conclusion: str, expected: str, api: Api, api_url: str, tmp_path: Path
+) -> None:
+    """Cron ya da dis baslatici (Codex 6197450956): kapi tetik turune
+    bakmaz. Kayit yazmis onceki kosu gunu kapatir, bos gecen kosu
+    kapatmaz; kosu kaydi gercek Actions kaydinin seklinde (ek alanlar
+    yok sayilir)."""
+    api.runs = [
+        {
+            "id": 90,
+            "event": event,
+            "head_branch": "main",
+            "path": f".github/workflows/{shadow_job.WORKFLOW_FILE}",
+            "run_attempt": 1,
+            "status": "completed",
+            "conclusion": "success",
+            "created_at": "2026-01-05T12:50:03Z",
+            "run_started_at": "2026-01-05T12:50:03Z",
+            "head_sha": "55eb8659c30c89016bf77de46e45b70a3c979d9b",
+            "display_title": "Shadow observation",
+        }
+    ]
+    api.jobs = {"90": [record_job("completed", conclusion)]}
+    _, out = run(env(api_url), tmp_path, IN_WINDOW)
+    assert out["action"] == expected
+
+
 # --------------------------------------------------------------------------
 # Hata yollari ve token
 # --------------------------------------------------------------------------

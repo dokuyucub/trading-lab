@@ -564,8 +564,12 @@ def test_more_than_one_page_of_runs_fails(
 @pytest.mark.parametrize(
     "overrides",
     [
-        {"event": "workflow_dispatch"},
         {"event": "push"},
+        {"event": "pull_request"},
+        {"event": "workflow_run"},
+        {"event": "SCHEDULE"},
+        {"event": None},
+        {"event": ["schedule"]},
         {"head_branch": "feature"},
         {"head_branch": None},
         {"path": ".github/workflows/baska.yml"},
@@ -573,9 +577,22 @@ def test_more_than_one_page_of_runs_fails(
         {"run_attempt": True},
         {"run_attempt": "1"},
     ],
-    ids=["dispatch", "push", "dal", "dal-yok", "yol", "deneme-2", "deneme-bool", "deneme-metin"],
+    ids=[
+        "push",
+        "pr",
+        "workflow-run",
+        "buyuk-harf",
+        "tetik-yok",
+        "tetik-liste",
+        "dal",
+        "dal-yok",
+        "yol",
+        "deneme-2",
+        "deneme-bool",
+        "deneme-metin",
+    ],
 )
-def test_only_a_scheduled_first_attempt_main_run_is_selected(
+def test_only_a_first_attempt_main_run_of_an_allowed_trigger_is_selected(
     overrides: dict[str, Any],
     api: tuple[Api, str],
     host: tuple[Host, str],
@@ -593,6 +610,124 @@ def test_only_a_scheduled_first_attempt_main_run_is_selected(
     assert written(days) == ["11.json"]
     assert f"/repos/{REPO}/actions/runs/12/artifacts" not in state.paths()
     assert f"UYARI toplam: {D2.isoformat()} kosusu secilmedi" in capsys.readouterr().out
+
+
+REAL_RUNS: dict[str, dict[str, Any]] = {
+    # Gercek Actions kayitlarindan kopya (alan kumesi ve degerler oldugu
+    # gibi): bir cron kosusu (15 Ekim 2026, main 55eb865; kapi "plan disi",
+    # kayit atlandi) ve bir dis tetik kosusu (SIP ana olcumu, 13 Ekim
+    # 2026). Testler kimlik, zaman, yol ve kod SHA'sini kendi degerleriyle
+    # ezer; kodun okumadigi ek alanlar (conclusion, run_started_at,
+    # display_title) oldugu gibi kalir ve yok sayilmali.
+    "schedule": {
+        "id": 38776981653,
+        "event": "schedule",
+        "head_branch": "main",
+        "path": ".github/workflows/shadow-observation.yml",
+        "run_attempt": 1,
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-10-15T17:23:49Z",
+        "run_started_at": "2026-10-15T17:23:49Z",
+        "head_sha": "55eb8659c30c89016bf77de46e45b70a3c979d9b",
+        "display_title": "Shadow observation",
+    },
+    "workflow_dispatch": {
+        "id": 38418157122,
+        "event": "workflow_dispatch",
+        "head_branch": "main",
+        "path": ".github/workflows/alpaca-baseline-measure.yml",
+        "run_attempt": 1,
+        "status": "completed",
+        "conclusion": "success",
+        "created_at": "2026-10-13T14:59:32Z",
+        "run_started_at": "2026-10-13T14:59:32Z",
+        "head_sha": "01f0d8a817a61cd93c08d7c23a30f9ee761e57eb",
+        "display_title": "Alpaca baseline measure",
+    },
+}
+
+
+def real_run(event: str, run_id: int, created: str, **overrides: Any) -> dict[str, Any]:
+    """Gercek kayit seklinde gozlem kosusu: yol gozlem workflow'u, kod
+    `CODE_SHA` (gun ozeti fixture'inin yazdigi kaynak), kimlik ve zaman
+    testin."""
+    record = dict(REAL_RUNS[event])
+    record.update(
+        id=run_id,
+        created_at=created,
+        run_started_at=created,
+        path=f".github/workflows/{shadow_job.WORKFLOW_FILE}",
+        head_sha=CODE_SHA,
+    )
+    record.update(overrides)
+    return record
+
+
+def test_a_dispatched_first_attempt_main_run_is_selected(
+    api: tuple[Api, str], host: tuple[Host, str], tmp_path: Path, project_root: Path
+) -> None:
+    """Dis baslaticinin kosusu (`workflow_dispatch`) cron kosusuyla ayni
+    sekilde secilir (Codex 6197450956); gercek kayit seklindeki ek alanlar
+    secimi degistirmez."""
+    state, api_url = api
+    blobs, host_url = host
+    state.runs = [
+        real_run("schedule", 11, "2026-01-05T13:50:03Z"),
+        real_run("workflow_dispatch", 12, "2026-01-06T13:50:03Z"),
+    ]
+    serve(state, blobs, host_url, 11, day_zip(project_root, D1))
+    serve(state, blobs, host_url, 12, day_zip(project_root, D2, run_id=12))
+    code, days = collect(env(api_url), tmp_path, project_root)
+    assert code == 0
+    assert written(days) == ["11.json", "12.json"]
+
+
+@pytest.mark.parametrize("second", ["schedule", "workflow_dispatch"])
+def test_two_recorded_runs_of_one_day_fail_whatever_their_triggers(
+    second: str,
+    api: tuple[Api, str],
+    host: tuple[Host, str],
+    tmp_path: Path,
+    project_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Ayni gun dispatch + cron ya da iki dispatch, ikisi de kayit yazdiysa
+    toplam durur: kapi tekligi bozulmus demektir; biri sessizce secilmez."""
+    state, api_url = api
+    blobs, host_url = host
+    state.runs = [
+        real_run("workflow_dispatch", 11, "2026-01-05T12:50:03Z"),
+        real_run(second, 12, "2026-01-05T13:50:03Z"),
+    ]
+    serve(state, blobs, host_url, 11, day_zip(project_root, D1))
+    serve(state, blobs, host_url, 12, day_zip(project_root, D1, run_id=12))
+    assert collect(env(api_url), tmp_path, project_root)[0] == 1
+    assert "ayni gunun iki gun ozeti var" in capsys.readouterr().out
+
+
+def test_a_skipped_dispatch_run_neither_blocks_nor_supplies_a_summary(
+    api: tuple[Api, str],
+    host: tuple[Host, str],
+    tmp_path: Path,
+    project_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Kapinin "gun zaten kaydedildi" ile bos gecirdigi dispatch kosusunun
+    artefakti yoktur: gun cron kosusunun ozetiyle toplanir, bos kosu engel
+    degildir ve kaynak uyarisi yazilmaz (kosu secildi, artefakti yok)."""
+    state, api_url = api
+    blobs, host_url = host
+    state.runs = [
+        real_run("schedule", 11, "2026-01-05T12:50:03Z"),
+        real_run("workflow_dispatch", 12, "2026-01-05T13:50:03Z"),
+    ]
+    serve(state, blobs, host_url, 11, day_zip(project_root, D1))
+    code, days = collect(env(api_url), tmp_path, project_root)
+    assert code == 0
+    assert written(days) == ["11.json"]
+    assert f"/repos/{REPO}/actions/runs/12/artifacts" in state.paths()
+    assert "kosusu secilmedi" not in capsys.readouterr().out
 
 
 def test_an_unplanned_day_run_is_not_listed(

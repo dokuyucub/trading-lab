@@ -83,7 +83,7 @@ python_version = "3.12"
 # broker ve veri kaynagi, protokollere yapisal olarak uyduklari icin
 # calisiyor. Protokol degisip de sahteler geride kalirsa bunu
 # calisma aninda degil, tip denetiminde gormek istiyoruz.
-files = ["src/tlab", "tests", "scripts/artifact_roundtrip/verify.py"]
+files = ["src/tlab", "tests", "scripts/artifact_roundtrip/verify.py", "scripts/shadow_report.py"]
 mypy_path = "src"
 strict = true
 warn_unreachable = true
