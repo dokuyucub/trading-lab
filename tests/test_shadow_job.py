@@ -720,13 +720,14 @@ def test_the_planned_days_are_the_execution_decision() -> None:
     assert list(planned) == expected[:20], "ardisik seanslar, atlanan yalnizca tatil/erken kapanis"
 
 
-CAMPAIGN_FINGERPRINT = "7f9f1fed22ee12f06141bb174a4bd28be7e9c29dcd8b6b9580b240deef93826d"
-"""(d) dalinin son uygulama agaci (Codex 6181551003): paketin `.py` dosyalari,
+CAMPAIGN_FINGERPRINT = "40db894c91c99172ee03e7817e7009c599e26e4a43ab4b6cafa15bc6a02729c5"
+"""(d) dalinin son uygulama agaci (Codex 6181551003; #59 dispatch sozlesmesi
+birlestikten sonra yeniden hesaplandi): paketin `.py` dosyalari,
 `config/*.yaml`, `requirements.lock` ve iki golge workflow'u."""
 
-CAMPAIGN_ID = "4a096c7e97ea4f7393a4c32eda233fa9fb0843c6c187299f0be28337f32bada7"
+CAMPAIGN_ID = "0610f86a0a8f7d13a6eddadd9e11dad2e617b00bb96646cfaabd248add2ec74d"
 """2 Kasim – 1 Aralik 2026 kampanyasinin kimligi; toplam artefakti
-`shadow-total-4a096c7e97ea4f73`."""
+`shadow-total-0610f86a0a8f7d13`."""
 
 
 def test_the_campaign_identity_is_pinned_to_the_implementation_tree() -> None:
@@ -744,7 +745,7 @@ def test_the_campaign_identity_is_pinned_to_the_implementation_tree() -> None:
     assert len(symbols) == 11
     assert shadow_job.implementation_fingerprint(repo) == CAMPAIGN_FINGERPRINT
     assert shadow_job.campaign_of(shadow_job.PLANNED_DAYS, symbols, repo) == CAMPAIGN_ID
-    assert shadow_job.total_artifact(CAMPAIGN_ID) == "shadow-total-4a096c7e97ea4f73"
+    assert shadow_job.total_artifact(CAMPAIGN_ID) == "shadow-total-0610f86a0a8f7d13"
 
 
 def test_an_unreadable_configuration_writes_no_summary(
