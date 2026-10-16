@@ -1326,9 +1326,15 @@ disindadir (yalnizca `config/*.yaml` girer): bu dosyayi degistiren karar
 PR'i kampanya kimligini degistirmez, mevcut gunlukler gecerli kalir.
 Yetki yalnizca o kampanyanin O basarisiz kosusunu kanit disi birakir;
 baska kampanyanin kaydi isi durdurur (Codex 6177175728)."""
-OBSERVATION_SOURCE = ("main", "schedule", f".github/workflows/{WORKFLOW_FILE}", 1)
-"""Gun ozeti alinan kosu: `main` dali, zamanlanmis tetik, gozlem workflow'u,
-ilk deneme (`head_branch`, `event`, `path`, `run_attempt`)."""
+OBSERVATION_EVENTS = frozenset({"schedule", "workflow_dispatch"})
+"""Gun ozeti alinabilen tetikler: GitHub cron'u ve dis baslaticinin
+`workflow_dispatch`'i (docs/designs/scheduler-alternatives.md A; Codex
+6196548874). Baska tetik (push, pull_request, workflow_run...) secilmez;
+mimari test bu kumeyi workflow'un tetikleriyle esitler."""
+OBSERVATION_SOURCE = ("main", f".github/workflows/{WORKFLOW_FILE}", 1)
+"""Gun ozeti alinan kosu: `main` dali, gozlem workflow'u, ilk deneme
+(`head_branch`, `path`, `run_attempt`); tetigi ayrica `OBSERVATION_EVENTS`
+icinde olmali."""
 DAY_ARTIFACT = "shadow-day"
 DAY_FILE = "shadow-day.json"
 """Kayit isinin yukledigi TEK dosya (workflow `Gun ozetini yukle`)."""
@@ -1597,8 +1603,9 @@ def _download_days(
     """Planli gunlerin gozlem kosularindan gun ozetlerini indirir.
 
     Once BUTUN kosular okunur: planli gunun bitmemis kosusu varsa hicbir
-    sey indirilmez. Plan disi gunun kosusu listelenmez. Kaynagi
-    `OBSERVATION_SOURCE` olmayan kosu sabit satirla atlanir.
+    sey indirilmez. Plan disi gunun kosusu listelenmez. Tetigi
+    `OBSERVATION_EVENTS` disinda ya da kaynagi `OBSERVATION_SOURCE`
+    olmayan kosu sabit satirla atlanir.
     """
     selected: list[tuple[int, date, str]] = []
     for run in _observation_runs(api, repo, token, planned):
@@ -1612,8 +1619,13 @@ def _download_days(
             continue
         if run.get("status") != "completed":
             raise GateError("planli gunun gozlem kosusu henuz bitmedi")
-        source = tuple(run.get(key) for key in ("head_branch", "event", "path", "run_attempt"))
-        if source != OBSERVATION_SOURCE or not _typed(source[-1], int):
+        event = run.get("event")
+        source = tuple(run.get(key) for key in ("head_branch", "path", "run_attempt"))
+        if (
+            not (isinstance(event, str) and event in OBSERVATION_EVENTS)
+            or source != OBSERVATION_SOURCE
+            or not _typed(source[-1], int)
+        ):
             print(f"UYARI toplam: {day.isoformat()} kosusu secilmedi (kaynak ya da deneme)")
             continue
         head_sha = run.get("head_sha")
