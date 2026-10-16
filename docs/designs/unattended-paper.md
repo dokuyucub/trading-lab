@@ -3,7 +3,8 @@
 Durum: **taslak, karar değil**; ÖN RAPOR #17/6182224516, Codex görüşü 6182905717 işlendi. Bu belge **kod değiştirmez ve hiçbir
 yetki vermez**: emir, tetik, holdout, ücretli abonelik ya da canlı para bu
 belgenin kapsamı dışındadır. Gölge gözlem kampanyası (tasarım
-`shadow-observation.md`, kimlik `4a096c7e…`) bitip toplam doğrulanmadan
+`shadow-observation.md`; kampanya kimliği taslaktır, nihai kimlik #54'te
+yeniden hesaplanır) bitip toplam doğrulanmadan
 burada yazılan hiçbir adım başlamaz.
 
 ## Amaç ve sınır
@@ -82,7 +83,12 @@ Seçeneklerin ayrıntısı:
 - Daraltılmış biçim: job 09:25–15:20 çalışır, 15:10'da **kendi** kapanışını
   yapar (pozisyon kapat, emir iptal). ORB stratejisi için seansın son 40
   dakikası zaten işlem açılmayan bölüm; kayıp yalnızca "15:50'ye kadar
-  tutma" fırsatıdır. Bu bir **strateji davranışı değişikliği** değildir;
+  tutma" fırsatıdır. Strateji fonksiyonu aynı kalabilir, ama bu **ölçülen
+  davranışın değişmesidir** (Codex #57/6225592912): pozisyon taşıma süresi,
+  gerçekleşmeler ve sonuç değişir. Bu yüzden 15:10 kapanışı ayrı bir
+  config/yürütme kararı ister ve değerlendirme aynı kapanış ayarıyla
+  yapılmış bir baseline ile karşılaştırılır; mevcut SIP baseline'ı (16:00
+  kapanış) doğrudan karşılaştırma ölçütü değildir.
   `flatten_before_close_minutes` ayarıyla ifade edilebilir mi, kodda
   bakılır (Aralık'ta).
 
@@ -133,8 +139,21 @@ kullanıcı isterse.
   tek tıklaması; gölge kampanyası schedule'ın güvenilirliğini gösterecek.
 - **Kill-switch:** günlük zarar sınırı aşıldığında hesap genelinde iptal ve
   kapatma (§3.5a) job içinde; job yoksa koruma bacakları borsada. "Bugün
-  bir daha açma" kararı job içinde yaşar; Actions'ta kalıcı değildir — A
-  seçeneğinde zaten gün tek job'dır.
+  bir daha açma" kararının **gün içi kalıcılığı çözülmüş değildir**
+  (Codex #57/6225592912): job'un yeniden denenmesi, elle yeniden
+  başlatılması ya da süreç çökmesinde karar kaybolursa ikinci süreç aynı
+  gün yeniden işlem açabilir. "Gün zaten tek job" bu riski kapatmaz. Bu
+  çözülmeden hiçbir seçenek gözetimsiz paper için kabul edilmez.
+  **Gereksinim (tasarım, kod yok):**
+  - Kalıcı journal: kill-switch kaydı (seans günü, sebep, zaman) süreç
+    dışında, yeniden başlatmada okunabilir bir yerde; A/B için Actions
+    dışında ya da broker'dan türetilebilir bir kanıt (ör. o gün kill-switch
+    sonrası açılmış emir yok ve günlük zarar sınırı aşılmış).
+  - Gün içi kilit: başlangıçta önce kilit/kayıt okunur; kayıt okunamıyorsa
+    ya da belirsizse yeni giriş **yok** (fail-closed), yalnız koruma ve
+    kapanış.
+  - Testler: kill-switch sonrası yeniden başlatma, ikinci deneme, elle
+    başlatma ve okunamayan kayıt senaryoları sentetik olarak.
 - **Başlangıç yetkisi:** Codex SHA bağlı ONAY + kullanıcı onayı + kayıtlı
   yürütme kararı (kesin commit, main CI, yöntem, tarih aralığı). Gölge
   (d) deseniyle aynı.

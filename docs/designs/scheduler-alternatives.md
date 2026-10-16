@@ -62,15 +62,21 @@ doğrulamasını da kapsamalı (aşağıda). Dönüş sorumluluğu kullanıcıda
 bitiş tarihi #17'ye yazılır, günlük kontrol görevi 14 gün kala hatırlatır.
 
 **Teklik.** Üç katman, hiçbiri tek başına kanıt değil:
-1. Başlatıcı, dispatch'ten önce o seans gününün koşu listesini okur;
-   koşu varsa dispatch etmez (aynı gün ikinci dispatch, zaman aşımı
-   sonrası tekrar ve geç cron için).
+1. Başlatıcı, dispatch'ten önce o seans gününün koşularını ve her
+   koşunun iş listesini okur (Codex #58/6225592708 P1). Kapının durum
+   tablosuyla aynı kural: kayıt işi **kanıtla atlanmış** koşu (örneğin
+   pencereden önce koşan cron; kapı "erken") engel değildir. Kayıt işi
+   listede yoksa, kuyrukta ya da sürüyorsa, ya da başarılı, başarısız
+   veya iptal bittiyse dispatch etmez (aynı gün ikinci dispatch, zaman
+   aşımı sonrası tekrar ve geç cron için). Koşu ya da iş listesi
+   okunamazsa dispatch yok (fail-closed).
 2. Kapı koşu geçmişine bakar (tasarım §5): aynı seans tarihinde kayıt
    işi atlanmamış bir koşu varsa durur. Tetik türüne bakmaz.
 3. `concurrency` aynı anda iki koşuyu önler; en fazla **bir** bekleyen
    koşu tutar, üçüncü tetik bekleyeni iptal eder ve iptal edilen koşu
-   durum tablosuna göre günü kapatır (gevşetilmez). Bu yüzden başlatıcı
-   günde en fazla bir kez dispatch eder.
+   durum tablosuna göre günü kapatır (gevşetilmez). Başlatıcının yalnız
+   bir cron satırı pencereye düşer ve o satır ön kontrolden geçmeden
+   dispatch etmez; böylece günde en fazla bir başarılı dispatch olur.
 
 **Son başlama saati.** Değişmez: `açılış − 1 dk`. Başlatıcı yalnız
 pencere içinde (`[açılış − 60 dk, açılış − 1 dk]`) dispatch eder;
@@ -83,13 +89,20 @@ saklanmaz.
 **Çalışmama alarmı.** 16:40 NY kontrolü gün sonu denetimidir, erken
 alarm değildir. Erken alarm: Claude Code zamanlı görevi her hafta içi
 **09:05 America/New_York** (açılıştan 25 dk önce, dispatch'ten 15 dk
-sonra) o günün `shadow-observation` koşu listesini okur. Planlı günde
-koşu yoksa #17'ye **BULGU** yazar: "koşu yok; manuel yedek: Actions →
-Shadow observation → Run workflow (main), en geç 09:20 NY". Alıcı ve
+sonra) o günün `shadow-observation` koşularını ve iş/adım kayıtlarını
+okur. Koşunun **varlığı yetmez** (Codex #57/6225592912): erken cron'un
+boş koşusu, kapısı başarısız ya da hâlâ kuyrukta olan koşu gözlemin
+başladığını göstermez. Planlı günde sessiz kalmanın tek koşulu: kapısı
+`success` ile bitmiş ve kayıt işinin `Gozle` adımı başlamış (sürüyor)
+bir koşu. Başka her durumda #17'ye **BULGU** yazar ve durumu adlandırır
+(koşu yok; yalnız kayıt işi atlanmış koşular; kapı başarısız; kapı ya da
+kayıt kuyrukta; `Gec kaydi yaz` çalıştı; okunamadı): "manuel yedek:
+Actions → Shadow observation → Run workflow (main), en geç 09:20 NY".
+Alıcı ve
 kanal: kullanıcının #17 için GitHub bildirimi (e-posta/mobil, kullanıcının
 GitHub bildirim ayarına bağlı; kurulum provasında doğrulanır; yeni bir
-mesaj kanalı kurulmuş sayılmaz). Planlı olmayan günde ve koşu varken
-sessizdir; ilk çalışmasında bir kez "erken kontrol çalıştı" kaydı yazar
+mesaj kanalı kurulmuş sayılmaz). Planlı olmayan günde sessizdir; ilk
+çalışmasında bir kez "erken kontrol çalıştı" kaydı yazar
 (mekanizma kanıtı). Görev çalışmazsa Codex ya da kullanıcı aynı bilgiyi
 Actions sayfasından okur. Worker'ın kendi hatası (dispatch 204 dönmedi)
 Worker log'unda görünür; log saklama süresi kısa olduğundan prova günü
@@ -140,23 +153,31 @@ ve kampanya boyunca ölçülür. Tek başarılı provadan güvenilirlik garantis
   gözlem çalışmaz. Böyle bir prova gerçek piyasa gözleminin kanıtı
   sayılmaz.
 - **Teklik ön kontrolü.** `GET .../workflows/shadow-observation.yml/runs?created=>=<gün−1>`
-  (tek sayfa); seans günü bugün olan koşu varsa dispatch yok, sabit satır.
-  Liste okunamazsa dispatch **yok** (fail-closed; gün erken alarma düşer).
+  (tek sayfa) ve seans günü bugün olan her koşu için
+  `GET .../actions/runs/<id>/jobs?filter=all` (tek sayfa). Kayıt işi
+  bütün denemelerde `completed` + `skipped` olan koşu engel değildir;
+  başka her durumdaki koşu varsa dispatch yok, sabit satır. Liste ya da
+  iş listesi okunamazsa dispatch **yok** (fail-closed; gün erken alarma
+  düşer).
 - **Dispatch.** `POST .../dispatches` gövde `{"ref":"main"}`; sabit
   `Authorization: Bearer <secret>`, `User-Agent`, `X-GitHub-Api-Version`.
   Beklenen 204.
 - **Hata politikası.** 401/403/404: tekrar yok, sabit neden satırı
   (token/izin/yol sorunu; alarm erken kontrolde görünür). 429/5xx/ağ
-  zaman aşımı: en fazla 3 deneme, 30 sn aralıkla; `Retry-After` varsa
-  uyulur ama pencerenin son dakikasını aşan deneme yapılmaz. Her
+  zaman aşımı: en fazla 3 deneme; bekleme liste, iş listesi ve dispatch
+  için aynı hesapla: en az 30 sn, `Retry-After` (tam saniye ya da HTTP
+  tarihi) daha uzunsa o; anlaşılmayan `Retry-After` tekrar etmeden durur;
+  pencerenin son dakikasını aşan deneme yapılmaz. Her
   denemeden önce teklik ön kontrolü yinelenir (zaman aşımına uğrayan
   istek koşuyu oluşturmuş olabilir). Yanıt gövdesi ve token hiçbir log
   satırına girmez.
 - **Yüzey.** Yalnız `scheduled` işleyicisi; `fetch` işleyicisi her
   isteğe 404 döner (genel HTTP tetik uç noktası yok). Ortam: tek secret
-  `GITHUB_TOKEN`; depo/workflow/ref kodda sabit.
+  `STARTER_GITHUB_PAT` (Actions'ın `GITHUB_TOKEN`'ıyla karışmasın);
+  depo/workflow/ref kodda sabit.
 - **Log satırı.** Tek satır JSON: `scheduled`, `started`, `window`
-  (`icinde`/`disinda`), `existing_run` (varsa kimlik), `attempts`,
+  (`icinde`/`disinda`), `existing_run` (engelleyen koşu), `skipped_runs`,
+  `attempts`,
   `status` (HTTP kodu ya da `timeout`), `result`. Fiyat, hesap, token,
   gövde yok. Ücretsiz planda log saklama kısadır (belgede: günlük olay
   sınırı ve birkaç gün); prova günü satır #17'ye kopyalanır.
