@@ -588,6 +588,19 @@ Tercih: **sınırlı schedule**. Kullanıcıya 20 günlük tıklama yüklenmez
 | (e) | Toplam işi: kampanya kimliği, koşu seçimi, digest, gün özeti sözleşmesi, indirme ve toplam | Kod PR'ı, bağımsız inceleme; (d)'den önce |
 | (d) | Yürütme kararı: 20 planlı tarih, eşikler, kesin commit ve o commit'in main CI'sı | Ayrı Codex kararı ve kullanıcı onayı |
 
-Mevcut durum: (b) #51 ve (c) #52 ile birleşti. (e) ayrı kod PR'ıyla
-geliyor. (d) ayrı karar bekler; o karar verilene kadar `PLANNED_DAYS`
-boştur ve iş hiçbir gün çalışmaz.
+Mevcut durum: (b) #51, (c) #52 ve (e) #53 ile birleşti. (d) kararı
+aşağıda, §7'de kayıtlı.
+
+## 7. Yürütme kaydı (d)
+
+- **Karar:** #17/6181557402 (kullanıcı yetkisiyle Claude; Codex SHA bağlı ONAY'ı (d) PR'ında); kullanıcı onayı: #17/6181470236 (bu oturumdan olduğu gibi aktarıldı; karar kullanıcı yetkisiyle 6181557402).
+- **Planlı günler (20 seans):** 2 Kasım, 3 Kasım, 4 Kasım, 5 Kasım, 6 Kasım, 9 Kasım, 10 Kasım, 11 Kasım, 12 Kasım, 13 Kasım, 16 Kasım, 17 Kasım, 18 Kasım, 19 Kasım, 20 Kasım, 23 Kasım, 24 Kasım, 25 Kasım, 30 Kasım, 1 Aralık. Dışarıda: NYSE tam kapanışlar ve 13:00 erken kapanışlar (testte liste).
+- **Evren:** `config/universe.yaml` (11 sembol). **Eşikler:** `Thresholds` varsayılanları. **Strateji:** `orb-7b32942a`. **Şemalar:** gün 1, toplam 1.
+- **Kaynak:** gözlem koşusu `schedule` ya da dış başlatıcının `workflow_dispatch`'i (`OBSERVATION_EVENTS`, #59) ile `main`'in o anki commit'ini kullanır; her gün özeti gerçek `code_sha`, `run_id`, `run_attempt` yazar ve toplam işi bunu API koşusuyla doğrular. Bağ SHA sabiti değil uygulama parmak izidir.
+- **Kampanya kimliği ve parmak izi (Codex 6181551003):** (d) dalının son uygulama ağacından hesaplandı ve parmak izinin dışındaki testte sabitlendi (`test_the_campaign_identity_is_pinned_to_the_implementation_tree`): parmak izi `40db894c91c99172ee03e7817e7009c599e26e4a43ab4b6cafa15bc6a02729c5`, kampanya kimliği `0610f86a0a8f7d13a6eddadd9e11dad2e617b00bb96646cfaabd248add2ec74d`, toplam artefaktı `shadow-total-0610f86a0a8f7d13`. Önceki değerler (`7f9f1fed…`, `4a096c7e…`) #59 (`workflow_dispatch` ve tetik allowlist'i; parmak izindeki `shadow-observation.yml` ve `shadow_job.py` değişti) birleşmeden önceki ağaçtandı; kullanılmadı. Birleştirme ağacında yeniden doğrulanır: main CI'da aynı test ve birleşmeden hemen sonra #17'ye yazılan kayıt; ilk planlı günün özetindeki `campaign` ve toplam artefaktının adı bununla karşılaştırılır. Parmak izi kapsamındaki bir dosya değişirse test kırmızıya döner.
+- **Hazırlık payı:** ana dal birleşmesi ve başarılı main CI en geç **27 Ekim 2026 16:00 America/New_York**; böylece 28–30 Ekim üç tam seans kalır. Yetişmezse yedek pencere 9 Kasım – 8 Aralık, ayrı tarih/kimlik PR'ı ve aynı inceleme kapılarıyla; örtük tarih değişikliği yok.
+- **Takip yöntemi:** Claude'un oturumu, Claude Code zamanlı görevi ile her planlı günün seansından sonra (en geç 21:30Z) o günün `shadow-observation` koşusunu Actions API'den okur: koşu, iş ve adım sonuçları, `Gozle` adımının sabit log satırları (gün özeti durumu, istek sayıları; fiyat yok); bulguyu #17'ye yazar. Bu zamanlı görev bir iddia değil, çalıştırılan bir mekanizmadır; çalışmazsa Codex ya da kullanıcı aynı bilgiyi Actions sayfasından (workflow `shadow-observation`, o günün koşusu) okur. Boş schedule kanıtı: ilk planlı günden önceki cron koşuları (12:50Z/13:50Z) yalnız "plan disi gun" demeli; kanıt (koşu kimlikleri) (d) PR'ında.
+- **Dondurma:** bu PR'ın birleşmesinden son toplamın doğrulanmasına kadar parmak izinin kapsamı (`src/tlab/**`, `config/*.yaml`, `requirements.lock`, iki gölge workflow'u) main'e girmez; Dependabot lock PR'ları bekler. Dokunan bir merge kimliği değiştirir ve toplamı durdurur.
+- **İlk gün denetimi:** ilk planlı günün seansından sonra kayıt işi log'unun sabit satırları #17'ye yazılır. Sistematik hata → #17 kararıyla durdurma; iptal edilen kampanyanın eksik günleri ve sebebi bu bölümde kayıtta kalır; yeni tarihler yeni kampanyadır.
+- **Toplama:** en erken son planlı günün ertesi New York günü ve bütün koşular bitince; kullanıcının tek `workflow_dispatch` tıklaması ayrı #17 kararıyla. Tekrar yalnız `config/shadow-total-retry.json` kaydıyla.
+- **Tekillik:** bu kampanya için gün özetlerinde tam kimlik, toplam artefaktında `shadow-total-<ilk 16 hane>`.

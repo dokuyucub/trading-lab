@@ -687,8 +687,65 @@ def test_the_day_summary_is_never_overwritten(
     assert out.read_text(encoding="utf-8") == "{}"
 
 
-def test_the_planned_days_are_empty_until_the_execution_decision() -> None:
-    assert shadow_job.PLANNED_DAYS == ()
+NYSE_HOLIDAYS = {date(2026, 11, 26), date(2026, 12, 25), date(2027, 1, 1), date(2027, 1, 18)}
+"""NYSE 2026-2027 tam kapanislari (resmi duyuru, 23 Aralik 2025)."""
+NYSE_EARLY_CLOSES = {date(2026, 11, 27), date(2026, 12, 24)}
+"""13:00 erken kapanislar; kampanya disinda birakilir."""
+
+
+def test_the_planned_days_are_the_execution_decision() -> None:
+    """(d) karari #17/6181557402: 2026-11-02 .. 2026-12-01, 20 seans.
+
+    Hafta ici, tatil ve erken kapanis disi, tekrarsiz ve sirali, tek mevsim
+    (acilis UTC saati her gun ayni), ucretsiz SIP gecikmesi ve kayit isi
+    zaman asimi icin pay birakan tek kampanya. Kimlik asagidaki testte
+    sabitlenir ve birlestirme agacinda yeniden dogrulanir (tasarim §7).
+    """
+    from tlab.shadow.schedule import regular_open
+
+    planned = shadow_job.PLANNED_DAYS
+    assert len(planned) == 20
+    assert list(planned) == sorted(set(planned))
+    assert planned[0] == date(2026, 11, 2)
+    assert planned[-1] == date(2026, 12, 1)
+    assert all(day.weekday() < 5 for day in planned)
+    assert not set(planned) & NYSE_HOLIDAYS
+    assert not set(planned) & NYSE_EARLY_CLOSES
+    assert len({regular_open(day).hour for day in planned}) == 1, "tek mevsim"
+    expected = [
+        day
+        for day in (planned[0] + timedelta(days=i) for i in range(60))
+        if day.weekday() < 5 and day not in NYSE_HOLIDAYS and day not in NYSE_EARLY_CLOSES
+    ]
+    assert list(planned) == expected[:20], "ardisik seanslar, atlanan yalnizca tatil/erken kapanis"
+
+
+CAMPAIGN_FINGERPRINT = "40db894c91c99172ee03e7817e7009c599e26e4a43ab4b6cafa15bc6a02729c5"
+"""(d) dalinin son uygulama agaci (Codex 6181551003; #59 dispatch sozlesmesi
+birlestikten sonra yeniden hesaplandi): paketin `.py` dosyalari,
+`config/*.yaml`, `requirements.lock` ve iki golge workflow'u."""
+
+CAMPAIGN_ID = "0610f86a0a8f7d13a6eddadd9e11dad2e617b00bb96646cfaabd248add2ec74d"
+"""2 Kasim – 1 Aralik 2026 kampanyasinin kimligi; toplam artefakti
+`shadow-total-0610f86a0a8f7d13`."""
+
+
+def test_the_campaign_identity_is_pinned_to_the_implementation_tree() -> None:
+    """Kimlik, depodaki gercek agactan hesaplanir ve sabitle karsilastirilir.
+
+    Bu dosya parmak izinin disindadir; sabiti yazmak kimligi degistirmez.
+    Kirmizi olmasi su demektir: parmak izi kapsamindaki bir dosya (d)
+    kararindan sonra degisti. Kampanya suresince bu dondurma ihlalidir;
+    kampanya bittikten sonra sabitler yeni kararla guncellenir (tasarim §7).
+    """
+    from tlab.config import load_config
+
+    repo = Path(__file__).resolve().parents[1]
+    symbols = tuple(load_config(repo).symbols)
+    assert len(symbols) == 11
+    assert shadow_job.implementation_fingerprint(repo) == CAMPAIGN_FINGERPRINT
+    assert shadow_job.campaign_of(shadow_job.PLANNED_DAYS, symbols, repo) == CAMPAIGN_ID
+    assert shadow_job.total_artifact(CAMPAIGN_ID) == "shadow-total-0610f86a0a8f7d13"
 
 
 def test_an_unreadable_configuration_writes_no_summary(
