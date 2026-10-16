@@ -12,16 +12,24 @@ aynı) uyanır; **gerçek saate** göre New York seans gününü ve açılışı
 hesaplar; yalnız başlangıç penceresinde (`[açılış − 60 dk, açılış − 1 dk]`,
 `tlab.shadow.schedule` ile aynı) çalışır. Pencere içindeyse:
 
-1. o seans gününün `shadow-observation` koşu listesini okur; koşu varsa
-   **dispatch etmez** (geç cron, ikinci dispatch, zaman aşımı sonrası
-   tekrar); liste okunamaz, biçimsiz ya da tek sayfayı aşarsa dispatch
-   **yok** (fail-closed);
+1. o seans gününün `shadow-observation` koşu listesini ve her koşunun iş
+   listesini okur (Codex 6225592708 P1). Kapının durum tablosuyla aynı
+   kural: kayıt işi **kanıtla atlanmış** koşu (bütün denemelerde
+   `completed` + `skipped`; örneğin pencereden önce koşan cron, kapı
+   "erken") günü tüketmez ve dispatch'i engellemez. Kayıt işi listede
+   yoksa, kuyrukta ya da sürüyorsa, ya da başarılı, başarısız veya iptal
+   bittiyse **dispatch etmez** (geç cron, ikinci dispatch, zaman aşımı
+   sonrası tekrar). Koşu ya da iş listesi okunamaz, biçimsiz ya da tek
+   sayfayı aşarsa dispatch **yok** (fail-closed);
 2. `POST /repos/dokuyucub/trading-lab/actions/workflows/shadow-observation.yml/dispatches`
    gövde `{"ref":"main"}`; girdi yok; 204 beklenir.
 
-Hata politikası: 401/403/404/422 ve diğer 4xx → tek deneme, sabit sonuç
-`red`. 429/5xx/zaman aşımı/ağ → en fazla 3 deneme, 30 sn arayla
-(`Retry-After` daha uzunsa ona uyulur), her denemeden önce liste yinelenir,
+Hata politikası: 401/403/404/422 ve diğer 4xx → tek deneme (dispatch'te
+sonuç `red`, liste ya da iş listesinde `liste-okunamadi`). 429/5xx/zaman
+aşımı/ağ → en fazla 3 deneme; bekleme liste, iş listesi ve dispatch için
+**aynı** hesapla: en az 30 sn, `Retry-After` (tam saniye ya da HTTP tarihi)
+daha uzunsa o; anlaşılmayan `Retry-After` → `retry-after-belirsiz`, tekrar
+yok (Codex 6225592708 P2). Her denemeden önce ön kontrol yinelenir;
 pencerenin son dakikasını aşacak bekleme yapılmaz.
 
 ## Ne yapmaz
@@ -38,9 +46,11 @@ pencerenin son dakikasını aşacak bekleme yapılmaz.
 
 Tek satır JSON: `scheduled` (cron'un planladığı an), `cron`, `started`
 (gerçek başlangıç), `session_day`, `open`, `window` (`icinde`/`disinda`),
-`existing_run`, `attempts`, `status` (HTTP kodu, `timeout`, `network`),
-`result` (`pencere-disi`, `secret-yok`, `liste-okunamadi`, `kosu-var`,
-`dispatch`, `red`, `pencere-kapandi`, `son-dakika`, `vazgecildi`).
+`existing_run` (dispatch'i engelleyen koşu), `skipped_runs` (kayıt işi
+kanıtla atlanmış koşu sayısı), `attempts`, `status` (son isteğin HTTP
+kodu, `timeout`, `network`), `result` (`pencere-disi`, `secret-yok`,
+`liste-okunamadi`, `kosu-var`, `dispatch`, `red`, `pencere-kapandi`,
+`son-dakika`, `retry-after-belirsiz`, `vazgecildi`).
 
 ## Kimlik bilgisi (PAT) — kapsamın gerçeği
 

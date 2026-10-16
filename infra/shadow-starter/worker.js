@@ -30,6 +30,8 @@ export const RETRY_DELAY_MS = 30_000;
 export const TIMEOUT_MS = 20_000;
 /** Kosu listesi tek sayfa; asarsa dispatch YOK (fail-closed). */
 export const PAGE_SIZE = 100;
+/** Gozlem workflow'unun kayit isi (tlab.shadow_job.RECORD_JOB ile ayni). */
+export const RECORD_JOB = "record";
 
 const EXCHANGE_TZ = "America/New_York";
 const OPEN = { hour: 9, minute: 30 };
@@ -118,6 +120,58 @@ export function runsOfDay(payload, day) {
   return ids;
 }
 
+/**
+ * Bir kosunun is listesi: kayit isi KANITLA atlandi mi (tasarim §5, kapinin
+ * durum tablosu: tests/test_shadow_gate.py). Yalnizca kayit isi listede var
+ * ve butun denemelerde `completed` + `skipped` ise kosu gunu tuketmemistir
+ * (ornegin pencereden once kosan cron: kapi "erken", kayit atlandi). Kayit
+ * isi yoksa, kuyrukta/suruyorsa ya da basarili/basarisiz/iptal bittiyse
+ * kosu gunu tutar: dispatch YOK (fail-closed). Sekil bozuk ya da liste tek
+ * sayfayi asiyorsa hata.
+ */
+export function recordSkipped(payload) {
+  if (!payload || typeof payload !== "object" || !Array.isArray(payload.jobs)) {
+    throw new Error("is listesi beklenen bicimde degil");
+  }
+  if (!Number.isInteger(payload.total_count) || payload.total_count > PAGE_SIZE) {
+    throw new Error("is listesi tek sayfayi asti");
+  }
+  if (!payload.jobs.every((job) => job && typeof job === "object")) {
+    throw new Error("is kaydi beklenen bicimde degil");
+  }
+  const record = payload.jobs.filter((job) => job.name === RECORD_JOB);
+  return (
+    record.length > 0 &&
+    record.every((job) => job.status === "completed" && job.conclusion === "skipped")
+  );
+}
+
+/**
+ * `Retry-After` bekleme suresi (ms): yok ise 0; tam saniye ya da HTTP
+ * tarihi; anlasilmayan deger NaN (cagiran fail-closed durur, sessizce
+ * 30 sn'ye dusmez).
+ */
+export function retryAfterMs(response, nowMs) {
+  const raw =
+    response && response.headers && typeof response.headers.get === "function"
+      ? response.headers.get("retry-after")
+      : null;
+  if (raw === null) return 0;
+  const value = raw.trim();
+  if (/^\d+$/.test(value)) return Number(value) * 1000;
+  if (/^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(value)) {
+    const at = Date.parse(value);
+    if (!Number.isNaN(at)) return Math.max(0, at - nowMs);
+  }
+  return NaN;
+}
+
+/** Tekrardan once bekleme: en az RETRY_DELAY_MS, `Retry-After` daha uzunsa o. */
+export function retryDelayMs(response, nowMs) {
+  const asked = retryAfterMs(response, nowMs);
+  return Number.isNaN(asked) ? NaN : Math.max(RETRY_DELAY_MS, asked);
+}
+
 function headersFor(token) {
   return {
     Authorization: `Bearer ${token}`,
@@ -137,31 +191,69 @@ async function request(fetchImpl, url, init) {
   }
 }
 
-function retryAfterMs(response) {
-  const value =
-    response.headers && typeof response.headers.get === "function"
-      ? response.headers.get("retry-after")
-      : null;
-  const seconds = value === null || value === "" ? NaN : Number(value);
-  return Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : 0;
-}
-
 function defaultSleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**
+ * Teklik on kontrolu: o seans gununun kosulari ve her birinin kayit isi.
+ * Sonuc: { kind: "ok" } | { kind: "block", id } | { kind: "retry", response }
+ * | { kind: "fail" }. `line.status` son istegin durumunu, `line.skipped_runs`
+ * kayit isi kanitla atlanmis kosu sayisini tasir.
+ */
+async function precheck(fetchImpl, listUrl, runsBase, headers, sessionDayValue, line) {
+  const listed = await request(fetchImpl, listUrl, { method: "GET", headers });
+  line.status = listed.status;
+  if (listed.status !== 200) {
+    return classify(listed.status) === "retry" ? { kind: "retry", response: listed } : { kind: "fail" };
+  }
+  let ids;
+  try {
+    ids = runsOfDay(await listed.json(), sessionDayValue);
+  } catch {
+    return { kind: "fail" };
+  }
+  let skipped = 0;
+  for (const id of ids) {
+    const jobs = await request(fetchImpl, `${runsBase}/${id}/jobs?filter=all&per_page=${PAGE_SIZE}`, {
+      method: "GET",
+      headers,
+    });
+    line.status = jobs.status;
+    if (jobs.status !== 200) {
+      return classify(jobs.status) === "retry" ? { kind: "retry", response: jobs } : { kind: "fail" };
+    }
+    let free;
+    try {
+      free = recordSkipped(await jobs.json());
+    } catch {
+      return { kind: "fail" };
+    }
+    if (!free) {
+      line.skipped_runs = skipped;
+      return { kind: "block", id };
+    }
+    skipped += 1;
+  }
+  line.skipped_runs = skipped;
+  return { kind: "ok" };
+}
+
+/**
  * Baslaticinin tek calismasi. Log satirini DONDURUR; satirda token, yanit
  * govdesi, fiyat ya da hesap bilgisi yoktur. Sonuclar:
- *   pencere-disi   gercek saat pencere disinda; hic istek yok
- *   secret-yok     ortamda PAT yok; hic istek yok
- *   liste-okunamadi kosu listesi alinamadi/bicimsiz/tek sayfayi asti; dispatch yok
- *   kosu-var       seans gununun kosusu zaten var; dispatch yok
- *   dispatch       204 alindi (gozlemin basladigi anlamina GELMEZ; kanit Actions'ta)
- *   red            401/403/404/422 ya da baska 4xx; tekrar yok
- *   pencere-kapandi tekrar beklerken pencere gecti
- *   son-dakika     bekleme pencerenin son dakikasini asacakti; tekrar yok
- *   vazgecildi     en fazla deneme sayisi doldu
+ *   pencere-disi         gercek saat pencere disinda; hic istek yok
+ *   secret-yok           ortamda PAT yok; hic istek yok
+ *   liste-okunamadi      kosu ya da is listesi alinamadi/bicimsiz/tek sayfayi
+ *                        asti; dispatch yok
+ *   kosu-var             seans gununun kayit isi atlanmamis (ya da belirsiz)
+ *                        bir kosusu var; dispatch yok
+ *   dispatch             204 alindi (gozlemin basladigi anlamina GELMEZ)
+ *   red                  401/403/404/422 ya da baska 4xx; tekrar yok
+ *   pencere-kapandi      tekrar beklerken pencere gecti
+ *   son-dakika           bekleme pencerenin son dakikasini asacakti
+ *   retry-after-belirsiz `Retry-After` anlasilamadi; tekrar yok
+ *   vazgecildi           en fazla deneme sayisi doldu
  */
 export async function start({
   env,
@@ -181,6 +273,7 @@ export async function start({
     open: new Date(window.open).toISOString(),
     window: window.inside ? "icinde" : "disinda",
     existing_run: null,
+    skipped_runs: 0,
     attempts: 0,
     status: null,
     result: null,
@@ -190,49 +283,50 @@ export async function start({
   if (!token) return { ...line, result: "secret-yok" };
 
   const base = `${API}/repos/${REPO}/actions/workflows/${WORKFLOW_FILE}`;
+  const runsBase = `${API}/repos/${REPO}/actions/runs`;
   const [year, month, day] = window.sessionDay.split("-").map(Number);
   const since = new Date(Date.UTC(year, month - 1, day) - DAY).toISOString().slice(0, 10);
   const listUrl = `${base}/runs?created=${encodeURIComponent(`>=${since}`)}&per_page=${PAGE_SIZE}`;
   const headers = headersFor(token);
 
+  // Tekrar bekleyisi, GET ve POST icin ayni: Retry-After, alt sinir ve
+  // pencerenin son dakikasi. null = bekle ve devam; aksi halde sonuc.
+  const waitOrStop = async (response) => {
+    const delay = retryDelayMs(response, now());
+    if (Number.isNaN(delay)) return "retry-after-belirsiz";
+    if (now() + delay > window.last) return "son-dakika";
+    await sleep(delay);
+    return null;
+  };
+
   for (;;) {
     line.attempts += 1;
     // 1. Teklik on kontrolu, HER denemede: zaman asimina ugrayan bir istek
     //    kosuyu olusturmus olabilir; cron da ayni gun gelmis olabilir.
-    const listed = await request(fetchImpl, listUrl, { method: "GET", headers });
-    line.status = listed.status;
-    if (listed.status !== 200) {
-      if (classify(listed.status) !== "retry" || line.attempts >= MAX_ATTEMPTS) {
-        return { ...line, result: "liste-okunamadi" };
-      }
-    } else {
-      let runs;
-      try {
-        runs = runsOfDay(await listed.json(), window.sessionDay);
-      } catch {
-        return { ...line, result: "liste-okunamadi" };
-      }
-      if (runs.length > 0) return { ...line, existing_run: runs[0], result: "kosu-var" };
-      // 2. Pencere yeniden, gercek saatle (gec uyanis, uzun bekleme).
-      if (now() > window.last) return { ...line, result: "pencere-kapandi" };
-      // 3. Dispatch: sabit depo, workflow ve ref; girdi yok.
-      const response = await request(fetchImpl, `${base}/dispatches`, {
-        method: "POST",
-        headers: { ...headers, "Content-Type": "application/json" },
-        body: JSON.stringify({ ref: REF }),
-      });
-      line.status = response.status;
-      const kind = classify(response.status);
-      if (kind === "ok") return { ...line, result: "dispatch" };
-      if (kind === "fatal") return { ...line, result: "red" };
-      if (line.attempts >= MAX_ATTEMPTS) return { ...line, result: "vazgecildi" };
-      const delay = Math.max(RETRY_DELAY_MS, retryAfterMs(response));
-      if (now() + delay > window.last) return { ...line, result: "son-dakika" };
-      await sleep(delay);
+    const check = await precheck(fetchImpl, listUrl, runsBase, headers, window.sessionDay, line);
+    if (check.kind === "fail") return { ...line, result: "liste-okunamadi" };
+    if (check.kind === "block") return { ...line, existing_run: check.id, result: "kosu-var" };
+    if (check.kind === "retry") {
+      if (line.attempts >= MAX_ATTEMPTS) return { ...line, result: "liste-okunamadi" };
+      const stop = await waitOrStop(check.response);
+      if (stop) return { ...line, result: stop };
       continue;
     }
-    if (now() + RETRY_DELAY_MS > window.last) return { ...line, result: "son-dakika" };
-    await sleep(RETRY_DELAY_MS);
+    // 2. Pencere yeniden, gercek saatle (gec uyanis, uzun bekleme).
+    if (now() > window.last) return { ...line, result: "pencere-kapandi" };
+    // 3. Dispatch: sabit depo, workflow ve ref; girdi yok.
+    const response = await request(fetchImpl, `${base}/dispatches`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ ref: REF }),
+    });
+    line.status = response.status;
+    const kind = classify(response.status);
+    if (kind === "ok") return { ...line, result: "dispatch" };
+    if (kind === "fatal") return { ...line, result: "red" };
+    if (line.attempts >= MAX_ATTEMPTS) return { ...line, result: "vazgecildi" };
+    const stop = await waitOrStop(response);
+    if (stop) return { ...line, result: stop };
   }
 }
 

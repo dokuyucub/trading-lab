@@ -7,10 +7,13 @@ import worker, {
   MAX_ATTEMPTS,
   PAGE_SIZE,
   REF,
+  RECORD_JOB,
   RETRY_DELAY_MS,
   WORKFLOW_FILE,
   classify,
+  recordSkipped,
   regularOpen,
+  retryAfterMs,
   runsOfDay,
   sessionDay,
   start,
@@ -36,6 +39,13 @@ function reply(status, headers = {}) {
 
 function listing(runs) {
   return json({ total_count: runs.length, workflow_runs: runs });
+}
+
+/** Bir kosunun is listesi: kapi bitti, kayit isi verilen durumda. */
+function jobs(status = "completed", conclusion = "skipped", extra = []) {
+  const list = [{ name: "gate", status: "completed", conclusion: "success" }];
+  if (status !== null) list.push({ name: RECORD_JOB, status, conclusion });
+  return json({ total_count: list.length + extra.length, jobs: [...list, ...extra] });
 }
 
 function run(id, created) {
@@ -196,12 +206,97 @@ test("temiz gun: once liste, sonra tek dispatch; sabit depo/workflow/ref, girdi 
   assert.deepEqual(h.sleeps, []);
 });
 
-test("seans gununun kosusu varsa dispatch yok (cron geldi, ikinci dispatch, tekrar)", async () => {
-  const h = harness([listing([run(40, "2026-01-05T13:23:49Z"), run(41, "2026-01-05T13:40:00Z")])]);
+test("kayit isi atlanmamis kosu varsa dispatch yok (cron gozluyor, ikinci dispatch, tekrar)", async () => {
+  const h = harness([
+    listing([run(40, "2026-01-05T13:23:49Z"), run(41, "2026-01-05T13:40:00Z")]),
+    jobs("in_progress", null),
+  ]);
   const line = await go(h);
   assert.equal(line.result, "kosu-var");
   assert.equal(line.existing_run, 40);
   assert.equal(posts(h).length, 0);
+  assert.equal(
+    gets(h)[1].url,
+    `https://api.github.com/repos/dokuyucub/trading-lab/actions/runs/40/jobs?filter=all&per_page=${PAGE_SIZE}`,
+  );
+});
+
+test("Codex 6225592708 P1: erken cron kosusu (kayit atlandi) pencere icindeki dispatch'i susturmaz", async () => {
+  // Kis: 12:50Z cron zamaninda kosar, kapi "erken" der, kayit atlanir.
+  // 13:50Z Worker bu bos kosuyu gorur ama dispatch eder.
+  const h = harness([listing([run(40, "2026-01-05T12:50:05Z")]), jobs("completed", "skipped"), reply(204)]);
+  const line = await go(h);
+  assert.equal(line.result, "dispatch");
+  assert.equal(line.skipped_runs, 1);
+  assert.equal(line.existing_run, null);
+  assert.equal(posts(h).length, 1);
+});
+
+test("kapinin durum tablosu: yalniz kanitli atlanmis kayit isi engel degildir", async () => {
+  const blocking = [
+    ["completed", "success"],
+    ["completed", "failure"],
+    ["completed", "cancelled"],
+    ["queued", null],
+    ["in_progress", null],
+    ["waiting", null],
+    [null, null], // kayit isi listede yok (kosu yeni olusmus)
+  ];
+  for (const [status, conclusion] of blocking) {
+    const h = harness([listing([run(40, "2026-01-05T12:50:05Z")]), jobs(status, conclusion)]);
+    const line = await go(h);
+    assert.equal(line.result, "kosu-var", `${status}/${conclusion}`);
+    assert.equal(posts(h).length, 0);
+  }
+  // Iki deneme: biri atlanmis, biri basarili -> engel.
+  const mixed = harness([
+    listing([run(40, "2026-01-05T12:50:05Z")]),
+    jobs("completed", "skipped", [{ name: RECORD_JOB, status: "completed", conclusion: "success" }]),
+  ]);
+  assert.equal((await go(mixed)).result, "kosu-var");
+  // Atlanmis bir kosu ve sonra kayit isi suren bir kosu -> engel (ikincisi).
+  const second = harness([
+    listing([run(40, "2026-01-05T12:50:05Z"), run(41, "2026-01-05T13:50:05Z")]),
+    jobs("completed", "skipped"),
+    jobs("in_progress", null),
+  ]);
+  const line = await go(second);
+  assert.equal(line.result, "kosu-var");
+  assert.equal(line.existing_run, 41);
+  assert.equal(line.skipped_runs, 1);
+});
+
+test("recordSkipped: sekil denetimi", () => {
+  assert.throws(() => recordSkipped(null), /bicimde/);
+  assert.throws(() => recordSkipped({ total_count: 1, jobs: {} }), /bicimde/);
+  assert.throws(() => recordSkipped({ jobs: [] }), /tek sayfayi/);
+  assert.throws(() => recordSkipped({ total_count: PAGE_SIZE + 1, jobs: [] }), /tek sayfayi/);
+  assert.throws(() => recordSkipped({ total_count: 1, jobs: [null] }), /is kaydi/);
+  assert.equal(recordSkipped({ total_count: 0, jobs: [] }), false);
+  assert.equal(
+    recordSkipped({ total_count: 1, jobs: [{ name: RECORD_JOB, status: "completed", conclusion: "skipped" }] }),
+    true,
+  );
+});
+
+test("is listesi okunamazsa dispatch yok; 5xx sinirli tekrar", async () => {
+  for (const bad of [reply(403), reply(404), json({ jobs: "yok" }), json({ total_count: PAGE_SIZE + 1, jobs: [] })]) {
+    const h = harness([listing([run(40, "2026-01-05T12:50:05Z")]), bad]);
+    assert.equal((await go(h)).result, "liste-okunamadi");
+    assert.equal(posts(h).length, 0);
+    assert.equal(h.calls.length, 2, "4xx ya da bicimsiz is listesi tekrar edilmez");
+    assert.deepEqual(h.sleeps, []);
+  }
+  const flaky = harness([
+    listing([run(40, "2026-01-05T12:50:05Z")]),
+    reply(503),
+    listing([run(40, "2026-01-05T12:50:05Z")]),
+    jobs("completed", "skipped"),
+    reply(204),
+  ]);
+  const line = await go(flaky);
+  assert.equal(line.result, "dispatch");
+  assert.deepEqual(flaky.sleeps, [RETRY_DELAY_MS]);
 });
 
 test("onceki gunun gec kosusu bugunun kosusu sayilmaz", async () => {
@@ -261,7 +356,7 @@ test("5xx: en fazla uc deneme, 30 sn arayla", async () => {
 
 test("zaman asimina ugrayan dispatch kosuyu olusturmus olabilir: tekrar once listeye bakar", async () => {
   const timeout = Object.assign(new Error("zaman asimi"), { name: "TimeoutError" });
-  const h = harness([listing([]), timeout, listing([run(50, "2026-01-05T13:50:10Z")])]);
+  const h = harness([listing([]), timeout, listing([run(50, "2026-01-05T13:50:10Z")]), jobs("queued", null)]);
   const line = await go(h);
   assert.equal(line.result, "kosu-var");
   assert.equal(line.existing_run, 50);
@@ -324,7 +419,8 @@ test("scheduled isleyicisi tek satir JSON log yazar; fetch isleyicisi 404 doner"
   const originalFetch = globalThis.fetch;
   const originalLog = console.log;
   const logged = [];
-  globalThis.fetch = async () => listing([run(60, "2026-01-05T13:50:03Z")]);
+  globalThis.fetch = async (url) =>
+    String(url).includes("/jobs") ? jobs("in_progress", null) : listing([run(60, "2026-01-05T13:50:03Z")]);
   console.log = (text) => logged.push(text);
   try {
     // Gercek saat pencere disinda olabilir: bu test yalnizca log satirini ve
@@ -341,4 +437,64 @@ test("scheduled isleyicisi tek satir JSON log yazar; fetch isleyicisi 404 doner"
   assert.ok(!logged[0].includes(TOKEN));
   const response = await worker.fetch(new Request("https://example.invalid/"));
   assert.equal(response.status, 404);
+});
+
+// --------------------------------------------------------------------------
+// Retry-After: liste ve dispatch icin ortak (Codex 6225592708 P2)
+// --------------------------------------------------------------------------
+
+test("retryAfterMs: saniye, HTTP tarihi, yok ve anlasilmayan", () => {
+  const at = Date.UTC(2026, 0, 5, 13, 50, 0);
+  const h = (v) => ({ headers: new Headers(v === undefined ? {} : { "retry-after": v }) });
+  assert.equal(retryAfterMs(h(undefined), at), 0);
+  assert.equal(retryAfterMs(h("120"), at), 120_000);
+  assert.equal(retryAfterMs(h("Mon, 05 Jan 2026 13:52:00 GMT"), at), 120_000);
+  assert.equal(retryAfterMs(h("Mon, 05 Jan 2026 13:40:00 GMT"), at), 0);
+  for (const bad of ["", "soon", "-5", "1.5", "2026-01-05T13:52:00Z"]) {
+    assert.ok(Number.isNaN(retryAfterMs(h(bad), at)), bad);
+  }
+});
+
+test("liste 429 Retry-After 120: 120 sn beklenir, sonra dispatch", async () => {
+  const h = harness([reply(429, { "retry-after": "120" }), listing([]), reply(204)]);
+  const line = await go(h);
+  assert.equal(line.result, "dispatch");
+  assert.deepEqual(h.sleeps, [120_000]);
+});
+
+test("liste 503 HTTP tarihli Retry-After'a uyulur", async () => {
+  const h = harness([reply(503, { "retry-after": "Mon, 05 Jan 2026 13:52:03 GMT" }), listing([]), reply(204)]);
+  const line = await go(h);
+  assert.equal(line.result, "dispatch");
+  assert.deepEqual(h.sleeps, [120_000]);
+});
+
+test("liste Retry-After pencereyi asarsa durulur; dispatch yok", async () => {
+  const h = harness([reply(503, { "retry-after": "3600" })]);
+  const line = await go(h);
+  assert.equal(line.result, "son-dakika");
+  assert.deepEqual(h.sleeps, []);
+  assert.equal(posts(h).length, 0);
+});
+
+test("anlasilmayan Retry-After fail-closed: sessizce 30 sn'ye dusmez", async () => {
+  for (const queue of [[reply(429, { "retry-after": "soon" })], [listing([]), reply(503, { "retry-after": "yakinda" })]]) {
+    const h = harness(queue);
+    const line = await go(h);
+    assert.equal(line.result, "retry-after-belirsiz");
+    assert.deepEqual(h.sleeps, []);
+  }
+});
+
+test("is listesi 429 Retry-After'a da uyulur", async () => {
+  const h = harness([
+    listing([run(40, "2026-01-05T12:50:05Z")]),
+    reply(429, { "retry-after": "90" }),
+    listing([run(40, "2026-01-05T12:50:05Z")]),
+    jobs("completed", "skipped"),
+    reply(204),
+  ]);
+  const line = await go(h);
+  assert.equal(line.result, "dispatch");
+  assert.deepEqual(h.sleeps, [90_000]);
 });
