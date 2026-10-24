@@ -1,0 +1,20 @@
+# Golge gozlem dis baslaticisi (docs/designs/scheduler-alternatives.md, A).
+# Hesap kimligi, secret ya da degisken YOK: PAT yalnizca
+# `wrangler secret put STARTER_GITHUB_PAT` ile girilir, bu dosyaya yazilmaz.
+name = "trading-lab-shadow-starter"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+# workers.dev adresi kapali: Worker'in genel HTTP uc noktasi yok (fetch 404).
+workers_dev = false
+
+[triggers]
+# .github/workflows/shadow-observation.yml ile AYNI iki satir (UTC):
+# yaz (EDT, acilis 13:30Z) ve kis (EST, acilis 14:30Z) icin acilistan 40 dk
+# once. Mevsim disi satir pencere disinda kalir ve hicbir istek yapmaz.
+# tests/test_architecture.py esitligi denetler.
+crons = ["50 12 * * 1-5", "50 13 * * 1-5"]
+
+[observability]
+# Workers Logs: tek satir JSON (token/govde yok). Ucretsiz planda saklama
+# kisa; prova gunu satir #17'ye kopyalanir.
+enabled = true
