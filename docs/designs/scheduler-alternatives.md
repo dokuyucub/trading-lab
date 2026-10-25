@@ -140,8 +140,11 @@ ve kampanya boyunca ölçülür. Tek başarılı provadan güvenilirlik garantis
 
 ## A'nın somut tasarımı: başlatıcı (PR-2)
 
-- **Tetik.** İki UTC cron satırı, GitHub'dakilerle aynı: `50 12 * * 1-5`
-  ve `50 13 * * 1-5` (yaz/kış). Cloudflare cron UTC çalışır; cron
+- **Tetik.** İki UTC cron satırı, saatleri GitHub'dakilerle aynı:
+  `50 12 * * MON-FRI` ve `50 13 * * MON-FRI` (yaz/kış). Gün alanı adla
+  yazılır: Cloudflare cron'unda 1 = Pazar (GitHub'da 1 = Pazartesi), yani
+  `1-5` orada Pazar-Perşembe olur ve Cuma'yı atlar (kurulumda panonun
+  önizlemesiyle görüldü, #60). Cloudflare cron UTC çalışır; cron
   değişikliklerinin yayılması 15 dk sürebilir. Kaynak:
   <https://developers.cloudflare.com/workers/configuration/cron-triggers/>.
 - **Pencere.** Worker gerçek saatten New York seans gününü ve açılışı
