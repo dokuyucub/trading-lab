@@ -1308,7 +1308,16 @@ def test_the_shadow_starter_matches_the_observation_contract() -> None:
     config = tomllib.loads((STARTER / "wrangler.toml").read_text("utf-8"))
     workflow = _workflow(SHADOW)
     triggers: dict[str, Any] = workflow["on"] if "on" in workflow else workflow[True]
-    assert config["triggers"]["crons"] == [item["cron"] for item in triggers["schedule"]]
+    # Saat ve dakika gozlem workflow'uyla ayni; gun alani ADLA. Cloudflare
+    # cron'unda 1 = Pazar oldugundan GitHub'in `1-5`i orada Pazar-Persembe
+    # olur ve Cuma'yi atlar (25 Ekim 2026 kurulumunda goruldu).
+    github = [item["cron"].split() for item in triggers["schedule"]]
+    starter = [cron.split() for cron in config["triggers"]["crons"]]
+    assert [fields[:4] for fields in starter] == [fields[:4] for fields in github]
+    assert {fields[4] for fields in github} == {"1-5"}, "GitHub: Pazartesi-Cuma"
+    assert [fields[4] for fields in starter] == ["MON-FRI"] * len(starter), (
+        "Cloudflare gun alani adla yazilir; sayi Pazar'dan baslar"
+    )
     assert config["main"] == "worker.js"
     assert config["workers_dev"] is False, "genel HTTP adresi yok"
     assert not {"account_id", "vars", "secrets", "routes", "route", "env"} & set(config)

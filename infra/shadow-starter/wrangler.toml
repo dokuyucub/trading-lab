@@ -8,11 +8,14 @@ compatibility_date = "2026-10-01"
 workers_dev = false
 
 [triggers]
-# .github/workflows/shadow-observation.yml ile AYNI iki satir (UTC):
+# .github/workflows/shadow-observation.yml ile AYNI iki saat (UTC):
 # yaz (EDT, acilis 13:30Z) ve kis (EST, acilis 14:30Z) icin acilistan 40 dk
 # once. Mevsim disi satir pencere disinda kalir ve hicbir istek yapmaz.
-# tests/test_architecture.py esitligi denetler.
-crons = ["50 12 * * 1-5", "50 13 * * 1-5"]
+# GUN ALANI ADLA: Cloudflare cron'unda 1 = Pazar (GitHub'da 1 = Pazartesi);
+# `1-5` burada Pazar-Persembe olur ve Cuma'yi atlar (kurulumda panonun
+# onizlemesiyle goruldu, 25 Ekim 2026). Bu yuzden `MON-FRI`.
+# tests/test_architecture.py saatlerin esitligini ve gun alanini denetler.
+crons = ["50 12 * * MON-FRI", "50 13 * * MON-FRI"]
 
 [observability]
 # Workers Logs: tek satir JSON (token/govde yok). Ucretsiz planda saklama
