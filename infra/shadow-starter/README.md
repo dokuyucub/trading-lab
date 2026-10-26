@@ -7,7 +7,7 @@ ayrı adımıdır (#17 kararıyla).
 
 ## Ne yapar
 
-Hafta içi iki UTC cron satırında (`50 12`, `50 13`; GitHub cron'larıyla
+Hafta içi iki UTC cron satırında (`50 12 * * MON-FRI`, `50 13 * * MON-FRI`; saatler GitHub cron'larıyla
 aynı) uyanır; **gerçek saate** göre New York seans gününü ve açılışı (09:30)
 hesaplar; yalnız başlangıç penceresinde (`[açılış − 60 dk, açılış − 1 dk]`,
 `tlab.shadow.schedule` ile aynı) çalışır. Pencere içindeyse:
