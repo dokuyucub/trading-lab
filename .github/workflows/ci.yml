@@ -119,3 +119,23 @@ jobs:
       - name: Kurulu surumler
         if: always()
         run: pip list --format=freeze
+
+  starter:
+    # Dis baslatici (infra/shadow-starter, docs/designs/scheduler-alternatives.md
+    # A): Node testleri; bagimlilik yok, ag yok. Runner'in kendi Node'u
+    # kullanilir (setup-node YOK: token'i girdi alan action sayisi artmasin);
+    # surum log'a yazilir. tests/test_architecture.py bu isi denetler.
+    name: starter (Node testleri)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Node surumu
+        run: node --version
+
+      - name: Baslatici testleri
+        run: node --test infra/shadow-starter/worker.test.js
