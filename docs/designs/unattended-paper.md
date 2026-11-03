@@ -154,6 +154,24 @@ kullanıcı isterse.
     kapanış.
   - Testler: kill-switch sonrası yeniden başlatma, ikinci deneme, elle
     başlatma ve okunamayan kayıt senaryoları sentetik olarak.
+  - **Durum (3 Kasım 2026, #17 ÖN RAPOR 6605979484):**
+    - **Süreç düzeyi çözülü.** Karar `daily_state`'e yazılır; aynı
+      journal'la yeniden başlayan süreç günü kapalı bilir
+      (`test_runner.py::test_kill_switch_survives_a_process_restart`).
+    - **Ortam düzeyi kısmen çözülü** (`tests/test_kill_switch_durability.py`):
+      - Journal'ı olmayan taze süreç, zarar hesapta hâlâ sınırın
+        altındaysa ilk turda yeniden durur ve kararı yazar.
+      - Gün durumu okunamazsa tur hatayla biter, emir gitmez.
+    - **Açık:** kapanış sınırın hemen üstünde gerçekleşirse (örnek:
+      %−2,1'de tetiklenip %−1,95'te kapanmak) taze süreç zararı sınırın
+      üstünde görür ve aynı gün yeniden işlem açar. Sentetik denemeyle
+      gösterildi.
+    - Düzeltme yönü, broker'dan türeyen ve fail-closed bir kural: bu
+      güne ait journal kaydı yokken broker'da bugün dolum varsa gün
+      "belirsiz" sayılır; yeni giriş yok, yalnız koruma ve kapanış.
+      Bunun üstüne A için gölgedeki gibi "günde tek koşu" kapısı gelir.
+    - Kod `src/` altında olduğu için kampanya dondurması bitince ayrı PR
+      ile gelir.
 - **Başlangıç yetkisi:** Codex SHA bağlı ONAY + kullanıcı onayı + kayıtlı
   yürütme kararı (kesin commit, main CI, yöntem, tarih aralığı). Gölge
   (d) deseniyle aynı.
