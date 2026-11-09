@@ -20,7 +20,7 @@ import logging
 import sqlite3
 import time
 from dataclasses import dataclass, field, replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from tlab.config import Config
 from tlab.core.clock import Clock
@@ -50,7 +50,12 @@ from tlab.features.context import (
     build_session_state,
 )
 from tlab.features.indicators import opening_window_gaps
-from tlab.journal.queries import halt_reason, open_entry_orders, unconfirmed_orders
+from tlab.journal.queries import (
+    halt_reason,
+    open_entry_orders,
+    orders_submitted_since,
+    unconfirmed_orders,
+)
 from tlab.journal.writer import JournalWriter
 from tlab.risk.gate import RiskGate, daily_loss_breached
 from tlab.strategies.base import Strategy
@@ -76,6 +81,8 @@ class LoopResult:
     flattened: int = 0
     cancelled: int = 0
     halted: bool = False
+    entries_blocked: bool = False
+    """Gun durumu bilinmiyor: yeni giris yok, koruma ve kapanis surer."""
     notes: list[str] = field(default_factory=list)
 
     def summary(self) -> str:
@@ -230,6 +237,9 @@ class SessionRunner:
         result.cancelled = self._cancel_stale_entries(open_orders, positions, session)
 
         if not session.can_open_new_positions:
+            return result
+
+        if result.entries_blocked:
             return result
 
         pending = self._pending_symbols(open_orders, positions)
@@ -411,35 +421,96 @@ class SessionRunner:
         session: SessionState,
         result: LoopResult,
     ) -> bool:
-        """Gunluk zarar siniri asildiysa gunu bitirir.
+        """Gunluk zarar siniri asildiysa ya da gun belirsizse gunu bitirir.
 
         Kotu bir gunu erken kapatmak, felakete donusmesini
         beklemekten iyidir. Karar VERITABANINA yaziliyor, bellege
         degil: bellekteki bir bayrak sureci asmaz ve systemd
         yeniden baslattiginda sistem gunu kapatmis oldugunu unutup
         tekrar islem acardi.
+
+        Gun durumu okunamazsa tur burada BITMEZ: yeni giris yapilmaz
+        (`entries_blocked`) ama gun sonu kapanisi ve emir iptali
+        surer. Okuma hatasi korumayi kesmemeli (Codex #61/6694382019).
         """
         today = session.now.date()
-        existing = halt_reason(self.conn, today)
+        try:
+            existing = halt_reason(self.conn, today)
+        except (sqlite3.Error, JournalError):
+            log.exception("Gun durumu okunamadi; yeni giris yok, koruma ve kapanis suruyor")
+            self._block_entries(result, "gun durumu okunamadi")
+            existing = None
+            readable = False
+        else:
+            readable = True
+
         if existing is not None:
             result.halted = True
             result.notes.append(f"gun kapali: {existing}")
             result.flattened = self._flatten_all(positions, ExitReason.KILL_SWITCH)
             return True
 
-        if not daily_loss_breached(account, self.config.risk):
+        reason: str | None = None
+        if daily_loss_breached(account, self.config.risk):
+            reason = (
+                f"gunluk zarar %{account.daily_pl_pct:.2f}, "
+                f"sinir %{self.config.risk.max_daily_loss_pct}"
+            )
+        elif readable:
+            reason = self._unexplained_day(session, result)
+        if reason is None:
             return False
 
-        reason = (
-            f"gunluk zarar %{account.daily_pl_pct:.2f}, "
-            f"sinir %{self.config.risk.max_daily_loss_pct}"
-        )
-        self.writer.record_halt(today, reason, self.run_id)
+        self._record_halt(today, reason, result)
         result.halted = True
         result.flattened = self._flatten_all(positions, ExitReason.KILL_SWITCH)
         result.notes.append(f"KILL-SWITCH: {reason}")
         log.warning("KILL-SWITCH: %s", reason)
         return True
+
+    def _unexplained_day(self, session: SessionState, result: LoopResult) -> str | None:
+        """Journal bu gunu hic bilmiyor ama brokerda bugun dolum var mi?
+
+        Her gun temiz baslayan bir ortamda yeniden baslatilan surec,
+        onceki surecin kill-switch kararini goremez; zarar kapanista
+        sinirin hemen ustunde gerceklestiyse hesaptan da tureyemez.
+        Bu gune ait gonderilmis emir kaydi yokken brokerda bugun
+        gerceklesme varsa gun BELIRSIZ sayilir ve kapatilir
+        (fail-closed). Ayni surec kendi emirlerini gondermeden once
+        yazdigi icin normal gunde bu kural tetiklenmez.
+        """
+        try:
+            if orders_submitted_since(self.conn, session.session_open) > 0:
+                return None
+        except JournalError:
+            log.exception("Bugunku emir kayitlari okunamadi; yeni giris yok")
+            self._block_entries(result, "bugunku emir kayitlari okunamadi")
+            return None
+        try:
+            fills = self.broker.list_fills(session.session_open)
+        except BrokerError:
+            log.exception("Bugunku gerceklesmeler okunamadi; yeni giris yok")
+            self._block_entries(result, "bugunku gerceklesmeler okunamadi")
+            return None
+        if not fills:
+            return None
+        return (
+            f"gun belirsiz: journal'da bugune ait emir yok, brokerda bugun "
+            f"{len(fills)} gerceklesme var"
+        )
+
+    def _record_halt(self, today: date, reason: str, result: LoopResult) -> None:
+        """Karari kalici yazar; yazilamazsa kapatma yine yapilir."""
+        try:
+            self.writer.record_halt(today, reason, self.run_id)
+        except JournalError:
+            log.exception("Kill-switch karari yazilamadi; kapatma yine de yapiliyor")
+            result.notes.append("kill-switch karari journal'a yazilamadi")
+
+    @staticmethod
+    def _block_entries(result: LoopResult, why: str) -> None:
+        result.entries_blocked = True
+        result.notes.append(f"{why}; yeni giris yok, koruma ve kapanis suruyor")
 
     def _flatten_all(self, positions: dict[str, Position], reason: ExitReason) -> int:
         """Tum pozisyonlari kapatir ve bekleyen emirleri iptal eder.

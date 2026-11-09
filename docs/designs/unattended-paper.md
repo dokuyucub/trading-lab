@@ -189,6 +189,23 @@ kullanıcı isterse.
     - Kod `src/` altında olduğu için kampanya dondurması bitince ayrı PR
       ile gelir. Dondurulmuş main'e üretim düzeltmesi girmez.
     - Bu iki açık kapanmadan ortam güvenliği tamamlanmış sayılmaz.
+    - **Düzeltme (dal `claude/killswitch-fix`, #17 ÖN RAPOR 6753982638;
+      kampanya dondurması bitmeden main'e girmez):**
+      - Açık 2: `_check_kill_switch` gün durumu okuma hatasını yakalar ve
+        turu bitirmez. `LoopResult.entries_blocked` yeni girişi engeller;
+        iptal, `must_flatten` ve zarar sınırı kapatması sürer. Karar
+        yazılamazsa kapatma yine yapılır ve not düşülür.
+      - Açık 1: zarar sınırı aşılmamışsa ve bu seans için journal'da
+        gönderilmiş emir yoksa (`orders_submitted_since`), broker'da
+        bugün gerçekleşme varsa gün "belirsiz" sayılır. Karar
+        `daily_state`'e yazılır ve pozisyonlar kapatılır.
+        - Gerçekleşmeler okunamazsa yalnız giriş engellenir.
+        - Süreç kendi emrini göndermeden önce yazdığı için normal gün
+          etkilenmez.
+      - Testler `tests/test_kill_switch_durability.py`'de; eski
+        karakterizasyon testi ters beklentiye çevrildi.
+      - Kalan iş, "günde tek koşu" kapısı. Paper workflow'uyla birlikte
+        gelir.
 - **Başlangıç yetkisi:** Codex SHA bağlı ONAY + kullanıcı onayı + kayıtlı
   yürütme kararı (kesin commit, main CI, yöntem, tarih aralığı). Gölge
   (d) deseniyle aynı.

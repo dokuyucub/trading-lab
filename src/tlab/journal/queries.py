@@ -8,7 +8,7 @@ ogrenme katmani buraya bir suru sorgu ekleyecek).
 from __future__ import annotations
 
 import sqlite3
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 
 from tlab.errors import JournalError
@@ -51,6 +51,24 @@ def unconfirmed_orders(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         msg = f"Kesinlesmemis emirler okunamadi: {exc}"
         raise JournalError(msg) from exc
     return [dict(row) for row in rows]
+
+
+def orders_submitted_since(conn: sqlite3.Connection, since: datetime) -> int:
+    """`since` anindan beri journal'a yazilmis emir sayisi.
+
+    Emir gonderilmeden ONCE yazildigi icin (write-ahead) bu sayi,
+    surecin bugun islem yapip yapmadigini brokerdan bagimsiz soyler.
+    Zaman damgalari UTC ISO metni; ayni bicimle karsilastirilir.
+    """
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM orders WHERE submitted_at >= ?",
+            (since.astimezone(UTC).isoformat(),),
+        ).fetchone()
+    except sqlite3.Error as exc:
+        msg = f"Emir kayitlari okunamadi: {exc}"
+        raise JournalError(msg) from exc
+    return int(row["n"])
 
 
 def halt_reason(conn: sqlite3.Connection, trade_date: date) -> str | None:
