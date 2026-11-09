@@ -154,6 +154,41 @@ kullanıcı isterse.
     kapanış.
   - Testler: kill-switch sonrası yeniden başlatma, ikinci deneme, elle
     başlatma ve okunamayan kayıt senaryoları sentetik olarak.
+  - **Durum (3 Kasım 2026, #17 ÖN RAPOR 6605979484):**
+    - **Süreç düzeyi çözülü.** Karar `daily_state`'e yazılır; aynı
+      journal'la yeniden başlayan süreç günü kapalı bilir
+      (`test_runner.py::test_kill_switch_survives_a_process_restart`).
+    - **Ortam düzeyi kısmen çözülü** (`tests/test_kill_switch_durability.py`):
+      - Journal'ı olmayan taze süreç, zarar hesapta hâlâ sınırın
+        altındaysa ilk turda yeniden durur: bekleyen emirleri iptal
+        eder, pozisyonu kapatır, kararı yazar.
+      - Gün durumu okunamazsa tur hata fırlatır, emir gitmez. Bu
+        "iş kırmızı biter" demek değildir: `run_forever` hatayı
+        yakalar ve sonraki turu dener.
+    - **Açık 1:** kapanış sınırın hemen üstünde gerçekleşirse (örnek:
+      %−2,1'de tetiklenip %−1,95'te kapanmak) taze süreç zararı sınırın
+      üstünde görür ve aynı gün yeniden işlem açar. Sentetik denemeyle
+      gösterildi.
+    - **Açık 2** (Codex #61/6694382019; karakterizasyon testiyle
+      sabitlendi): gün durumu okunamazsa hata gün sonu kapanışının da
+      önüne geçer. Sebebi `run_once` sırası: kill-switch kontrolü
+      `must_flatten`'dan önce geliyor. `run_forever` her turu aynı
+      hatayla bitirir; açık pozisyon kapanmaz, bekleyen emir iptal
+      edilmez, koruma yalnız borsadaki bracket bacaklarıyla sürer.
+      Doğru davranış: okuma hatasında yeni giriş yok, ama iptal,
+      kapanış ve gün sonu kapanışı sürer (fail-closed giriş, fail-open
+      koruma).
+    - Düzeltme yönü:
+      - Açık 1 için broker'dan türeyen, fail-closed bir kural: bu güne
+        ait journal kaydı yokken broker'da bugün dolum varsa gün
+        "belirsiz" sayılır; yeni giriş yok, yalnız koruma ve kapanış.
+        Bunun üstüne A için gölgedeki gibi "günde tek koşu" kapısı gelir.
+      - Açık 2 için gün durumu okuma hatası "gün kapalı" gibi işlenir
+        (giriş yok); iptal, kapanış ve `must_flatten` yolu buna rağmen
+        çalışır. Karakterizasyon testi o zaman yeni beklentiyle değişir.
+    - Kod `src/` altında olduğu için kampanya dondurması bitince ayrı PR
+      ile gelir. Dondurulmuş main'e üretim düzeltmesi girmez.
+    - Bu iki açık kapanmadan ortam güvenliği tamamlanmış sayılmaz.
 - **Başlangıç yetkisi:** Codex SHA bağlı ONAY + kullanıcı onayı + kayıtlı
   yürütme kararı (kesin commit, main CI, yöntem, tarih aralığı). Gölge
   (d) deseniyle aynı.
