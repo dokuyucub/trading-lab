@@ -33,7 +33,7 @@ from conftest import SESSION_OPEN, make_account
 from test_runner import NOW, FakeBroker, FakeMarket, breakout_bars, build_runner, pending_ref
 from tlab.config import Config, load_config
 from tlab.core.types import Fill, Position, Side
-from tlab.errors import BrokerError
+from tlab.errors import BrokerError, JournalError
 from tlab.journal.db import apply_migrations, connect
 from tlab.journal.queries import halt_reason
 
@@ -246,3 +246,89 @@ def test_an_unreadable_day_state_still_honours_a_breached_loss(
     assert broker.closed == ["SPY"]
     assert broker.submitted == []
     assert "kill-switch karari journal'a yazilamadi" in " ".join(result.notes)
+
+
+def test_a_halt_that_failed_to_persist_still_holds_for_the_process(
+    config: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex #63/6772282247: tek seferlik yazma hatasi karari unutturmaz.
+
+    Bu seansta journal'da giris emri var (belirsiz gun kurali devre
+    disi). Zarar -%2,1'de tetiklenir, karar bir kez yazilamaz. Kapanis
+    -%1,95'te kalir; sonraki turda gecerli kirilim sinyali olsa da emir
+    gitmez ve karar bu kez kalici yazilir.
+    """
+    broker = FakeBroker(account=make_account())
+    market = FakeMarket(bars_by_symbol={"SPY": breakout_bars()})
+    conn = fresh_journal(tmp_path, "journal.db")
+    runner = build_runner(config=config, conn=conn, broker=broker, market=market)
+    assert runner.run_once().submitted == 1
+
+    real = runner.writer.record_halt
+    calls: list[str] = []
+
+    def flaky(trade_date, reason, run_id):  # type: ignore[no-untyped-def]
+        calls.append(reason)
+        if len(calls) == 1:
+            msg = "disk dolu"
+            raise JournalError(msg)
+        real(trade_date, reason, run_id)
+
+    monkeypatch.setattr(runner.writer, "record_halt", flaky)
+
+    broker.account = make_account(equity=97_900, last_equity=100_000)
+    first = runner.run_once()
+    assert first.halted
+    assert broker.cancelled == [None]
+    assert "kill-switch karari journal'a yazilamadi" in " ".join(first.notes)
+    assert halt_reason(conn, first.now.date()) is None
+
+    broker.account = make_account(equity=98_050, last_equity=100_000)
+    submitted_before = len(broker.submitted)
+    second = runner.run_once()
+
+    assert second.halted
+    assert len(broker.submitted) == submitted_before
+    assert len(calls) == 2
+    assert halt_reason(conn, second.now.date()) is not None
+
+
+def test_blocked_entries_cancel_fresh_entry_orders(config: Config, tmp_path: Path) -> None:
+    """Gun durumu bilinmiyorken yeni verilmis bekleyen giris de iptal edilir."""
+    broker = FakeBroker(account=make_account())
+    market = FakeMarket(bars_by_symbol={"SPY": breakout_bars()})
+    conn = fresh_journal(tmp_path, "journal.db")
+    assert build_runner(config=config, conn=conn, broker=broker, market=market).run_once().submitted
+    assert [o.symbol for o in broker.open_orders] == ["SPY"]
+    conn.execute("DROP TABLE daily_state")
+
+    result = build_runner(config=config, conn=conn, broker=broker, market=market).run_once()
+
+    assert result.entries_blocked
+    assert broker.cancelled == ["SPY"]
+    assert broker.open_orders == []
+    assert result.cancelled == 1
+    assert len(broker.submitted) == 1
+
+
+def test_blocked_entries_keep_the_protective_legs_of_an_open_position(
+    config: Config, tmp_path: Path
+) -> None:
+    """Pozisyonu olan sembolde iptal yok: sembol bazli iptal koruma bacagini duserdi."""
+    broker = FakeBroker(account=make_account())
+    market = FakeMarket(bars_by_symbol={"SPY": breakout_bars()})
+    conn = fresh_journal(tmp_path, "journal.db")
+    assert build_runner(config=config, conn=conn, broker=broker, market=market).run_once().submitted
+    # Giris kismen doldu: pozisyon var, kalan giris ve koruma bacaklari bekliyor.
+    broker.positions = [
+        Position(symbol="SPY", side=Side.BUY, qty=5, avg_entry_price=100.8, current_price=100.9)
+    ]
+    conn.execute("DROP TABLE daily_state")
+
+    result = build_runner(config=config, conn=conn, broker=broker, market=market).run_once()
+
+    assert result.entries_blocked
+    assert broker.cancelled == []
+    assert [o.symbol for o in broker.open_orders] == ["SPY"]
+    assert broker.closed == []
+    assert len(broker.submitted) == 1

@@ -145,6 +145,13 @@ class SessionRunner:
         self.dry_run = dry_run
         self._gap_noted: set[tuple[str, str]] = set()
         """(seans acilisi, sembol): eksik acilis bari notu yazilmis olanlar."""
+        self._unpersisted_halts: dict[date, str] = {}
+        """Kalici yazilamamis kill-switch kararlari (gun -> sebep).
+
+        Yazma hatasi karari unutturmamali: bu surec gunu kapali bilir
+        ve yazmayi her turda yeniden dener. Surec yeniden baslarsa bu
+        bellek kaybolur; kabul sinirlari unattended-paper.md §4'te.
+        """
 
     # ------------------------------------------------------------------
     # Ana dongu
@@ -234,7 +241,9 @@ class SessionRunner:
             result.notes.append("bekleyen emirler bilinmiyor, yeni giris yapilmadi")
             return result
 
-        result.cancelled = self._cancel_stale_entries(open_orders, positions, session)
+        result.cancelled = self._cancel_stale_entries(
+            open_orders, positions, session, every_age=result.entries_blocked
+        )
 
         if not session.can_open_new_positions:
             return result
@@ -378,6 +387,8 @@ class SessionRunner:
         open_orders: list[OrderRef],
         positions: dict[str, Position],
         session: SessionState,
+        *,
+        every_age: bool = False,
     ) -> int:
         """Dolmayan giris emirlerini belirli sure sonra iptal eder.
 
@@ -387,6 +398,14 @@ class SessionRunner:
         acar. Koruma bacaklari bu kuralin disinda: onlar yalnizca
         acik pozisyonu olmayan sembollerde ve yalnizca bizim
         gonderdigimiz girisler icin iptal ediliyor.
+
+        `every_age`: gun durumu bilinmiyorken (`entries_blocked`) yasina
+        bakmadan butun bekleyen girisler iptal edilir; yeni giris yoksa
+        eski giris de dolmamali. Pozisyonu olan semboller yine disarida:
+        iptal sembol bazinda oldugu icin koruma bacaklarini da duserdi.
+        Kismen dolmus girisin kalan miktari bu yuzden bekler; o miktar
+        risk kapisindan gecmis ilk emrin parcasidir (unattended-paper.md
+        §4: kismi dolumda bacaklarin davranisi ayrica dogrulanacak).
         """
         if self.dry_run:
             return 0
@@ -398,7 +417,7 @@ class SessionRunner:
         for order in open_orders:
             if order.symbol in positions or order.client_order_id not in ours:
                 continue
-            if order.submitted_at.astimezone(UTC) >= deadline:
+            if not every_age and order.submitted_at.astimezone(UTC) >= deadline:
                 continue
             try:
                 self.broker.cancel_open_orders(order.symbol)
@@ -434,6 +453,16 @@ class SessionRunner:
         surer. Okuma hatasi korumayi kesmemeli (Codex #61/6694382019).
         """
         today = session.now.date()
+        unpersisted = self._unpersisted_halts.get(today)
+        if unpersisted is not None:
+            # Onceki turda karar verildi ama yazilamadi: gun bu surec
+            # icin kapali kalir; kalici yazma yeniden denenir.
+            self._record_halt(today, unpersisted, result)
+            result.halted = True
+            result.notes.append(f"gun kapali: {unpersisted}")
+            result.flattened = self._flatten_all(positions, ExitReason.KILL_SWITCH)
+            return True
+
         try:
             existing = halt_reason(self.conn, today)
         except (sqlite3.Error, JournalError):
@@ -500,12 +529,19 @@ class SessionRunner:
         )
 
     def _record_halt(self, today: date, reason: str, result: LoopResult) -> None:
-        """Karari kalici yazar; yazilamazsa kapatma yine yapilir."""
+        """Karari kalici yazar; yazilamazsa bellekte tutar ve sonra yeniden dener.
+
+        Kapatma yazmayi beklemez. Yazilamayan karar bu surecte kaybolmaz:
+        `_unpersisted_halts` sonraki turlarda gunu kapali tutar.
+        """
         try:
             self.writer.record_halt(today, reason, self.run_id)
         except JournalError:
-            log.exception("Kill-switch karari yazilamadi; kapatma yine de yapiliyor")
+            log.exception("Kill-switch karari yazilamadi; gun bellekte kapali, yeniden denenecek")
+            self._unpersisted_halts[today] = reason
             result.notes.append("kill-switch karari journal'a yazilamadi")
+            return
+        self._unpersisted_halts.pop(today, None)
 
     @staticmethod
     def _block_entries(result: LoopResult, why: str) -> None:

@@ -204,6 +204,35 @@ kullanıcı isterse.
           etkilenmez.
       - Testler `tests/test_kill_switch_durability.py`'de; eski
         karakterizasyon testi ters beklentiye çevrildi.
+      - Yazılamayan karar (Codex #63/6772282247 P1): `_record_halt`
+        hata alırsa karar süreç belleğinde (`_unpersisted_halts`) tutulur.
+        Sonraki her turda gün kapalı sayılır, kapanış sürer ve kalıcı yazma
+        yeniden denenir; başarılı olunca bellekten düşer.
+        - **Yeniden başlatma için kabul sınırı:** süreç, yazma başarılı
+          olmadan yeniden başlarsa bellek kaybolur. O durumda koruma şunlara
+          dayanır:
+          - zarar hâlâ sınırın altındaysa zarar kuralı;
+          - journal taze ise belirsiz gün kuralı;
+          - journal hâlâ yazılamıyorsa write-ahead: karar ya da emir
+            yazılamazsa emir gönderilmez (`_evaluate_universe`).
+        - Kabul edilen açık dar: geçici yazma hatası, bir sonraki turdan
+          önce yeniden başlatma, yazmanın düzelmiş olması, zararın sınırın
+          üstüne dönmesi ve journal'da bugünün emri bulunması aynı anda
+          olmalı. Hata ERROR log'u ve tur notuyla görünür kalır. Paper
+          öncesi "günde tek koşu" kapısı bu durumda ikinci süreci zaten
+          başlatmaz.
+      - Gün durumu bilinmiyorken bekleyen giriş (P2): `entries_blocked`
+        iken bizim, pozisyonu olmayan sembollerdeki bütün bekleyen girişler
+        yaşına bakılmadan iptal edilir.
+        - Pozisyonu olan sembolde iptal yapılmaz, çünkü iptal sembol
+          bazındadır ve koruma bacaklarını da düşürür.
+        - Kısmen dolmuş girişin kalan miktarı bu yüzden bekler. Bu miktar
+          risk kapısından geçmiş ilk emrin parçasıdır.
+        - **Doğrulanmadı:** kısmi dolumda bracket bacaklarının dolan
+          miktarı hemen koruyup korumadığı. Broker sözleşmesiyle ve ilk
+          paper günlerinde (§4, emir yaşam döngüsü kabulü) ayrıca
+          gösterilmeli. Tek emir iptali (sembol yerine emir kimliğiyle) bu
+          açığı kapatır; broker arayüzüne eklenmesi ayrı iştir.
       - Kalan iş, "günde tek koşu" kapısı. Paper workflow'uyla birlikte
         gelir.
 - **Başlangıç yetkisi:** Codex SHA bağlı ONAY + kullanıcı onayı + kayıtlı
