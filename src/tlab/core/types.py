@@ -577,6 +577,13 @@ class OrderRef(Frozen):
     side: Side | None = None
     remaining_qty: float | None = Field(default=None, ge=0)
     limit_price: float | None = Field(default=None, gt=0)
+    stop_price: float | None = Field(default=None, gt=0)
+    """Stop emrinin tetik fiyati. Bracket'in stop bacaginda dolu.
+
+    Dolan bir pozisyonun korumasi bu alanla dogrulanir: pozisyona ters
+    yonde, stop fiyati olan acik emirlerin kalan miktari pozisyonu
+    kapsamali (runner `_cancel_entry`).
+    """
 
 
 # --------------------------------------------------------------------------

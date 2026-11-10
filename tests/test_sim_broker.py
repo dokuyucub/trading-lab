@@ -301,6 +301,21 @@ def test_cancel_pending_entry(broker: SimBroker) -> None:
     assert broker.list_open_orders() == []
 
 
+def test_cancel_order_removes_only_that_pending_entry(broker: SimBroker) -> None:
+    ref = broker.submit_bracket(long_order(limit=95.0, stop=94.0, target=97.0))
+    broker.cancel_order(ref.broker_order_id)
+    assert broker.list_open_orders() == []
+
+
+def test_cancel_order_refuses_a_filled_entry_and_its_legs(broker: SimBroker) -> None:
+    """Dolmus girisin ve bacagin kimligi Alpaca'daki gibi reddedilir; bacak durur."""
+    fill_entry(broker)
+    for ref in broker.list_open_orders():
+        with pytest.raises(BrokerError, match="iptal edilemez"):
+            broker.cancel_order(ref.broker_order_id)
+    assert len(broker.list_open_orders()) == 1
+
+
 def test_fills_are_recorded_for_reconciliation(broker: SimBroker) -> None:
     fill_entry(broker)
     broker.advance(bar(open_=100.5, high=102.0, low=100.4, close=101.8, minute=1))

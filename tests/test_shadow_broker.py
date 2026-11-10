@@ -75,7 +75,12 @@ def test_reads_are_synthetic_or_empty() -> None:
 
 @pytest.mark.parametrize(
     ("method", "args"),
-    [("submit_bracket", (object(),)), ("close_position", ("SPY",)), ("cancel_open_orders", ())],
+    [
+        ("submit_bracket", (object(),)),
+        ("close_position", ("SPY",)),
+        ("cancel_open_orders", ()),
+        ("cancel_order", ("emir-1",)),
+    ],
 )
 def test_writes_fail_fast(method: str, args: tuple[Any, ...]) -> None:
     with pytest.raises(BrokerError, match=REFUSAL):
@@ -185,6 +190,10 @@ class Spy(ShadowBroker):
     def cancel_open_orders(self, symbol: str | None = None) -> int:
         self.writes.append("cancel_open_orders")
         return super().cancel_open_orders(symbol)
+
+    def cancel_order(self, broker_order_id: str) -> None:
+        self.writes.append("cancel_order")
+        super().cancel_order(broker_order_id)
 
 
 @pytest.fixture

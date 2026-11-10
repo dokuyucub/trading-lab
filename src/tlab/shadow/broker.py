@@ -86,3 +86,6 @@ class ShadowBroker:
 
     def cancel_open_orders(self, symbol: str | None = None) -> int:  # noqa: ARG002
         raise BrokerError(REFUSAL)
+
+    def cancel_order(self, broker_order_id: str) -> None:  # noqa: ARG002
+        raise BrokerError(REFUSAL)

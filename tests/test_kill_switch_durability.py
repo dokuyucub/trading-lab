@@ -299,13 +299,15 @@ def test_blocked_entries_cancel_fresh_entry_orders(config: Config, tmp_path: Pat
     market = FakeMarket(bars_by_symbol={"SPY": breakout_bars()})
     conn = fresh_journal(tmp_path, "journal.db")
     assert build_runner(config=config, conn=conn, broker=broker, market=market).run_once().submitted
-    assert [o.symbol for o in broker.open_orders] == ["SPY"]
+    [entry] = broker.open_orders
     conn.execute("DROP TABLE daily_state")
 
     result = build_runner(config=config, conn=conn, broker=broker, market=market).run_once()
 
     assert result.entries_blocked
-    assert broker.cancelled == ["SPY"]
+    # Iptal girisin kimligine gider; sembol bazli iptal yok.
+    assert broker.cancelled_ids == [entry.broker_order_id]
+    assert broker.cancelled == []
     assert broker.open_orders == []
     assert result.cancelled == 1
     assert len(broker.submitted) == 1
@@ -314,7 +316,7 @@ def test_blocked_entries_cancel_fresh_entry_orders(config: Config, tmp_path: Pat
 def test_blocked_entries_keep_the_protective_legs_of_an_open_position(
     config: Config, tmp_path: Path
 ) -> None:
-    """Pozisyonu olan sembolde iptal yok: sembol bazli iptal koruma bacagini duserdi."""
+    """Pozisyonu olan sembolde iptal yok: kalan giris bekler, bacaklara dokunulmaz."""
     broker = FakeBroker(account=make_account())
     market = FakeMarket(bars_by_symbol={"SPY": breakout_bars()})
     conn = fresh_journal(tmp_path, "journal.db")
@@ -329,6 +331,7 @@ def test_blocked_entries_keep_the_protective_legs_of_an_open_position(
 
     assert result.entries_blocked
     assert broker.cancelled == []
+    assert broker.cancelled_ids == []
     assert [o.symbol for o in broker.open_orders] == ["SPY"]
     assert broker.closed == []
     assert len(broker.submitted) == 1

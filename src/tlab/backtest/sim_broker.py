@@ -325,6 +325,19 @@ class SimBroker:
                 cancelled += 1
         return cancelled
 
+    def cancel_order(self, broker_order_id: str) -> None:
+        """Bekleyen giris emrini kimligiyle iptal eder.
+
+        Simulasyonda tek tek iptal edilebilen yalnizca bekleyen giris.
+        Dolmus girisin ya da bacagin kimligi Alpaca'daki gibi reddedilir.
+        """
+        for pending in self._pending:
+            if pending.broker_order_id == broker_order_id:
+                self._pending.remove(pending)
+                return
+        msg = f"emir iptal edilemez: {broker_order_id}"
+        raise BrokerError(msg)
+
     # ------------------------------------------------------------------
     # Dolum mantigi
     # ------------------------------------------------------------------

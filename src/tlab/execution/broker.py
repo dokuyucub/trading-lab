@@ -85,3 +85,14 @@ class Broker(Protocol):
     def cancel_open_orders(self, symbol: str | None = None) -> int:
         """Bekleyen emirleri iptal eder, iptal edilen sayiyi dondurur."""
         ...
+
+    def cancel_order(self, broker_order_id: str) -> None:
+        """TEK emri kimligiyle iptal eder; iptal edilemezse BrokerError.
+
+        Sembol bazli iptal, o anda brokerda gorunen her emri duser.
+        Bir giris iptal edilirken dolmussa koruma bacaklari da o
+        listededir. Bayat giris iptali bu yuzden yalnizca girisin
+        kendi kimligine gider. Emir zaten dolmus ya da kapanmissa
+        broker reddeder; cagiran taraf sonucu brokerdan yeniden okur.
+        """
+        ...

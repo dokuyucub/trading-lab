@@ -268,6 +268,14 @@ class AlpacaBroker:
             count += 1
         return count
 
+    def cancel_order(self, broker_order_id: str) -> None:
+        """Tek emri kimligiyle iptal eder."""
+        try:
+            self._client.cancel_order_by_id(broker_order_id)
+        except Exception as exc:
+            msg = f"Emir iptal edilemedi ({broker_order_id}): {exc}"
+            raise BrokerError(msg) from exc
+
     @staticmethod
     def _to_order_ref(raw: Any) -> OrderRef:
         """SDK emir nesnesini cekirdek OrderRef tipine cevirir."""
@@ -281,6 +289,7 @@ class AlpacaBroker:
         side_value = str(getattr(side_raw, "value", side_raw)).lower()
         qty_raw = sdk_field(raw, "qty")
         price = sdk_float(raw, "limit_price")
+        stop = sdk_float(raw, "stop_price")
         return OrderRef(
             side=Side(side_value) if side_value in ("buy", "sell") else None,
             remaining_qty=(
@@ -289,6 +298,7 @@ class AlpacaBroker:
                 else None
             ),
             limit_price=price if price > 0 else None,
+            stop_price=stop if stop > 0 else None,
             broker_order_id=str(sdk_field(raw, "id", "")),
             client_order_id=str(sdk_field(raw, "client_order_id", "")),
             symbol=str(sdk_field(raw, "symbol", "")),

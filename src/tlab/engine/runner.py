@@ -21,6 +21,7 @@ import sqlite3
 import time
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
+from enum import Enum
 
 from tlab.config import Config
 from tlab.core.clock import Clock
@@ -64,6 +65,29 @@ log = logging.getLogger("tlab.runner")
 
 MAX_BACKOFF_FACTOR = 8
 """Ardisik hatalarda beklemenin en fazla kac katina cikacagi."""
+
+
+class CancelOutcome(Enum):
+    """Bayat giris iptalinin brokerdan yeniden okunan sonucu."""
+
+    CANCELED = "canceled"
+    OPEN = "open"
+    FILLED = "filled"
+    UNPROTECTED = "unprotected"
+
+
+def stops_cover(position: Position, orders: list[OrderRef]) -> bool:
+    """Pozisyona ters yonde, stop fiyatli acik emirler miktari kapsiyor mu.
+
+    Kalan miktari bilinmeyen emir kapsam saymaz (fail-closed).
+    """
+    exit_side = Side.SELL if position.side is Side.BUY else Side.BUY
+    covered = sum(
+        order.remaining_qty or 0.0
+        for order in orders
+        if order.side is exit_side and order.stop_price is not None
+    )
+    return covered >= position.qty
 
 
 @dataclass
@@ -242,8 +266,10 @@ class SessionRunner:
             return result
 
         result.cancelled = self._cancel_stale_entries(
-            open_orders, positions, session, every_age=result.entries_blocked
+            open_orders, positions, session, result, every_age=result.entries_blocked
         )
+        if result.halted:
+            return result
 
         if not session.can_open_new_positions:
             return result
@@ -387,6 +413,7 @@ class SessionRunner:
         open_orders: list[OrderRef],
         positions: dict[str, Position],
         session: SessionState,
+        result: LoopResult,
         *,
         every_age: bool = False,
     ) -> int:
@@ -395,17 +422,16 @@ class SessionRunner:
         Kirilim sinyali zamana baglidir: on dakika once gecerli olan
         bir giris fiyati artik gecerli degildir. Emri gun boyu asili
         birakmak, sinyalin ilgisiz kaldigi bir anda dolmasina yol
-        acar. Koruma bacaklari bu kuralin disinda: onlar yalnizca
-        acik pozisyonu olmayan sembollerde ve yalnizca bizim
-        gonderdigimiz girisler icin iptal ediliyor.
+        acar. Yalnizca bizim gonderdigimiz girisler, yalnizca kendi
+        kimlikleriyle ve yalnizca acik pozisyonu olmayan sembollerde
+        iptal edilir; koruma bacaklari hicbir zaman iptal cagrisina
+        girmez (`_cancel_entry`).
 
         `every_age`: gun durumu bilinmiyorken (`entries_blocked`) yasina
         bakmadan butun bekleyen girisler iptal edilir; yeni giris yoksa
         eski giris de dolmamali. Pozisyonu olan semboller yine disarida:
-        iptal sembol bazinda oldugu icin koruma bacaklarini da duserdi.
-        Kismen dolmus girisin kalan miktari bu yuzden bekler; o miktar
-        risk kapisindan gecmis ilk emrin parcasidir (unattended-paper.md
-        §4: kismi dolumda bacaklarin davranisi ayrica dogrulanacak).
+        kismen dolmus girisin kalan miktari bekler, o miktar risk
+        kapisindan gecmis ilk emrin parcasidir (unattended-paper.md §4).
         """
         if self.dry_run:
             return 0
@@ -419,19 +445,93 @@ class SessionRunner:
                 continue
             if not every_age and order.submitted_at.astimezone(UTC) >= deadline:
                 continue
-            try:
-                self.broker.cancel_open_orders(order.symbol)
-            except BrokerError:
-                log.exception("%s icin bayat emir iptal edilemedi", order.symbol)
-                continue
-            self.writer.update_order_status(order.client_order_id, "canceled")
-            cancelled += 1
-            log.info(
-                "Bayat giris emri iptal edildi: %s (%d dk dolmadi)",
-                order.symbol,
-                self.entry_order_ttl_minutes,
-            )
+            outcome = self._cancel_entry(order)
+            if outcome is CancelOutcome.CANCELED:
+                self.writer.update_order_status(order.client_order_id, "canceled")
+                cancelled += 1
+                log.info(
+                    "Bayat giris emri iptal edildi: %s (%d dk dolmadi)",
+                    order.symbol,
+                    self.entry_order_ttl_minutes,
+                )
+            elif outcome is CancelOutcome.FILLED:
+                result.notes.append(
+                    f"{order.symbol} girisi iptal sirasinda doldu; stop bacagi pozisyonu kapsiyor"
+                )
+            elif outcome is CancelOutcome.UNPROTECTED:
+                self._halt_unprotected(order.symbol, positions, session, result)
+                break
         return cancelled
+
+    def _cancel_entry(self, order: OrderRef) -> CancelOutcome:
+        """Tek giris emrini kimligiyle iptal eder, sonucu brokerdan yeniden okur.
+
+        Iptal yalnizca bu emrin `broker_order_id`'sine gider. Sembol
+        bazli iptal, pozisyon okumasi ile iptal arasinda dolan girisin
+        gorunur hale gelen koruma bacaklarini da duserdi (Codex
+        #63/6777889127).
+
+        Iptal ile dolum yarisir: iptal reddedilmis (giris tamamen
+        dolmus) ya da yalnizca kalan miktar icin kabul edilmis
+        (kismen dolmus) olabilir. Sonuc bu yuzden iptal cagrisindan
+        degil, ardindan brokerdan yeniden okunan durumdan cikar:
+          * sembolde pozisyon yok, giris acik listede yok ve iptal
+            kabul edildi -> CANCELED;
+          * pozisyon yok ama giris hala acik ya da iptal reddedildi
+            -> OPEN (sonraki tur yeniden bakar, "canceled" yazilmaz);
+          * pozisyon var ve stop bacaklari dolan miktari kapsiyor
+            -> FILLED (bacaklara dokunulmaz);
+          * pozisyon var ama kapsam dogrulanamiyor ya da broker
+            yeniden okunamiyor -> UNPROTECTED (fail-closed).
+        Sonraki turlarda bu sembol pozisyonlu oldugu icin bu yoldan
+        bir daha gecmez; dogrulama ancak burada yapilabilir.
+        """
+        try:
+            self.broker.cancel_order(order.broker_order_id)
+        except BrokerError:
+            log.exception("%s giris emri iptal edilemedi (%s)", order.symbol, order.broker_order_id)
+            accepted = False
+        else:
+            accepted = True
+
+        try:
+            position = next(
+                (p for p in self.broker.get_positions() if p.symbol == order.symbol), None
+            )
+            symbol_orders = [o for o in self.broker.list_open_orders() if o.symbol == order.symbol]
+        except BrokerError:
+            log.exception("%s iptal sonrasi broker durumu okunamadi", order.symbol)
+            return CancelOutcome.UNPROTECTED
+
+        if position is None:
+            still_open = any(o.broker_order_id == order.broker_order_id for o in symbol_orders)
+            if accepted and not still_open:
+                return CancelOutcome.CANCELED
+            return CancelOutcome.OPEN
+        if stops_cover(position, symbol_orders):
+            log.warning("%s girisi iptal sirasinda doldu; stop bacagi kapsiyor", order.symbol)
+            return CancelOutcome.FILLED
+        return CancelOutcome.UNPROTECTED
+
+    def _halt_unprotected(
+        self,
+        symbol: str,
+        positions: dict[str, Position],
+        session: SessionState,
+        result: LoopResult,
+    ) -> None:
+        """Korumasi dogrulanamayan dolum: gun kill-switch ile kapanir.
+
+        Tek sembolu kapatmak yetmezdi: kapatma, iptal kesinlesmeden
+        gonderilemez ve bu sembol sonraki turlarda bu yoldan gecmez.
+        Kalici gun karari ise her turda `_flatten_all`'u yeniden dener.
+        """
+        reason = f"koruma dogrulanamadi: {symbol} girisi iptal sirasinda doldu"
+        self._record_halt(session.now.date(), reason, result)
+        result.halted = True
+        result.flattened = self._flatten_all(positions, ExitReason.KILL_SWITCH)
+        result.notes.append(f"KILL-SWITCH: {reason}")
+        log.warning("KILL-SWITCH: %s", reason)
 
     def _check_kill_switch(
         self,

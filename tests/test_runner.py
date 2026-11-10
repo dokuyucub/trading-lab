@@ -78,6 +78,7 @@ class FakeBroker:
     open_orders: list[OrderRef] = field(default_factory=list)
     closed: list[str] = field(default_factory=list)
     cancelled: list[str | None] = field(default_factory=list)
+    cancelled_ids: list[str] = field(default_factory=list)
     fail_open_orders: bool = False
     fail_submit: bool = False
     submitted_at: datetime = NOW
@@ -139,6 +140,14 @@ class FakeBroker:
             o for o in self.open_orders if symbol is not None and o.symbol != symbol
         ]
         return before - len(self.open_orders)
+
+    def cancel_order(self, broker_order_id: str) -> None:
+        """Yalnizca o kimlikteki acik emri iptal eder; yoksa Alpaca gibi reddeder."""
+        self.cancelled_ids.append(broker_order_id)
+        if all(o.broker_order_id != broker_order_id for o in self.open_orders):
+            msg = f"emir iptal edilemez: {broker_order_id}"
+            raise BrokerError(msg)
+        self.open_orders = [o for o in self.open_orders if o.broker_order_id != broker_order_id]
 
     def fill_order(self, ref: OrderRef, price: float, at: datetime) -> None:
         """Bekleyen bir emri dolmus gibi isaretler."""
