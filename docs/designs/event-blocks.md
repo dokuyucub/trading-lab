@@ -28,6 +28,12 @@ veya ayrı kapsam kanıtı gerektirebilir; sağlayıcı henüz seçilmedi.
 Her 8-K aynı olay sayılmaz; olay türleri ayrı sınıflanır. Yahoo verisi veya
 haricî paketin broker/emir yolu bu taslağın parçası değildir.
 
+### İlk sürümün kapsamı
+
+Önce, önceki normal seans kapanışından karar anına kadar yayımlanan ve sistemin o anda teslim aldığı şirket açıklamaları incelenir. Bu pencere önceki kapanış sonrası ve bugünkü açılış öncesi açıklamaları kapsar. Gelecek bilanço takvimi ayrı bir sorudur. İlk çalışmanın kapsam ölçümü ileri tarih bilgisini gerekli gösterirse ayrı kaynak kararı alınır. Sağlayıcı incelemesi, kabul zamanının saat dilimini ve hassasiyetini, basın açıklaması ile belgenin sistemimize gelişi arasındaki gecikmeyi ve ilk ORB kararına yetişmeyen açıklamaları ölçer. Item 2.02 ve diğer 8-K türleri ayrı sınıflandırılır.
+
+Politika sekiz şirket hissesine uygulanır. SPY, QQQ ve IWM için ihraççı bilanço filtresi uygulanamaz. Bu, seçimden önce belirlenen araç kapsamıdır ve EMPTY veri kaydı üretmez. Bu üç ETF, bu ölçümün olay paydasına girmez. Bileşen şirket etkileri ve makro açıklamalar ayrı araştırma sorularıdır.
+
 ## Kanıt sözleşmesi
 
 AGENTS §10.1 ve research-v2-selection.md esas alınır; ikinci seçim
@@ -66,7 +72,9 @@ Mevcut 67 işlemli SIP baseline yeniden filtrelenmez; kapalı holdout açılmaz.
 Gölge kampanyası P&L veya bu filtre için bağımsız başarı kanıtı değildir.
 Yeni çalışma başlamadan aday, feed, evren, tarih aralığı, maliyetler,
 blok penceresi, birincil ölçü ve asgari destek kayıtlı kararla sabitlenir.
-Tarih seçimi ve veri alımı bu taslakta yapılmaz.
+Dönem ileriye dönüktür. Başlangıç, sağlayıcı ve kalıcı depolamanın ilk doğrulanabilir yerel alımından önce olamaz. Karar anları ilerledikçe OBSERVED kanıt birikir. Veri görülmeden dönem ve bitiş kuralı kaydedilir.
+
+Süre için duyarlılık örneği: yılda 15–25 engellenen işlem gözlenirse 30 örnek yaklaşık 1,2–2 yıl sürer. Her iki sayı da planlama varsayımıdır. Gerçek sıklık, gerekli destek ve tahmin hassasiyeti henüz ölçülmedi. Tarihsel 67 işlem bu sayımı başlatmaz. Salt maruziyet azaltma politikası ve performans üstünlüğü ayrı karar gerektirir. İlkinde kaçırılabilecek kazanç da maliyettir. İkincisi ileri dönemde eşleştirilmiş ölçüm gerektirir.
 
 Aynı yeni dönemde önceden sabitlenmiş filtresiz aday ve olay filtreli aday
 aynı maliyetlerle eşleştirilir. Net R farkı, işlem sayısı, maruziyet,
