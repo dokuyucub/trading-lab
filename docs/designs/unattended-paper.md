@@ -227,7 +227,8 @@ kullanıcı isterse.
         - Turun başında pozisyonu görünen sembolde iptal yapılmaz.
           Kısmen dolmuş girişin kalan miktarı bekler; bu miktar risk
           kapısından geçmiş ilk emrin parçasıdır.
-      - İptal/dolum yarışı (Codex #63/6777889127, 6840456161, 6844629736):
+      - İptal/dolum yarışı (Codex #63/6777889127, 6840456161, 6844629736,
+        6863854867):
         bayat giriş
         iptali (hem TTL hem `entries_blocked` yolu) yalnız girişin
         `broker_order_id`'sine gider (`Broker.cancel_order`). Sembol bazlı
@@ -254,6 +255,15 @@ kullanıcı isterse.
           kontrollerinden sonra, sembolde pozisyon görünse de çözülür.
           Yeniden başlayan süreç izlemeyi journal'dan devralır. Geç görünen
           dolum böylece koruma kontrolünden düşmez.
+        - **İptal niyeti write-ahead:** iptal çağrısından ÖNCE journal'a
+          `cancel_requested` yazılır, çağrıdan sonra `cancel_pending`.
+          Niyet yazılamazsa iptal gönderilmez; tur `entries_blocked` olur
+          ve not düşülür. Giriş ve bacakları brokerda kalır; gün sonu
+          kapanışı ve zarar sınırı yolu sürer. Yeniden başlayan süreç
+          bellekte olmayan `cancel_requested` satırının iptalini yeniden
+          gönderir (ilk istek hiç gitmemiş ya da sonucu yazılmamış olabilir;
+          ikinci istek yalnız girişin kimliğine gider ve zararsızdır), sonra
+          sonucu çözer. `cancel_pending` satırına ikinci iptal gitmez.
         - **Koruma kuralı:** sembolde çıkış yönünde, `stop_price` taşıyan
           açık emirlerin kalan miktar toplamı ≥ `max(filled_qty, pozisyon
           miktarı)`. Gereken miktar emrin kendi dolumundan gelir; pozisyon

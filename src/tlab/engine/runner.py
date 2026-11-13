@@ -71,8 +71,15 @@ MAX_BACKOFF_FACTOR = 8
 TERMINAL_ORDER_STATUSES = frozenset({"filled", "canceled", "expired", "rejected"})
 """Brokerda bir daha degismeyecek emir durumlari (Alpaca degerleri)."""
 
+CANCEL_REQUESTED = "cancel_requested"
+"""Journal durumu: iptal niyeti yazildi; brokera gidip gitmedigi bilinmiyor.
+
+Iptal cagrisindan ONCE yazilir (write-ahead). Yeniden baslayan surec bu
+satirdaki iptali yeniden gonderir: ilk istek hic gitmemis olabilir.
+"""
+
 CANCEL_PENDING = "cancel_pending"
-"""Journal durumu: iptal istendi, giris henuz terminal durumda degil."""
+"""Journal durumu: iptal brokera gonderildi, giris henuz terminal durumda degil."""
 
 
 class CancelOutcome(Enum):
@@ -474,51 +481,77 @@ class SessionRunner:
                 continue
             if not every_age and order.submitted_at.astimezone(UTC) >= deadline:
                 continue
-            try:
-                self.broker.cancel_order(order.broker_order_id)
-            except BrokerError:
-                # Red tek basina sonuc degil: giris dolmus ya da zaten
-                # kapanmis olabilir. Karari terminal durum verir.
-                log.exception(
-                    "%s giris emri iptal edilemedi (%s)", order.symbol, order.broker_order_id
-                )
             tracked = TrackedCancel(
                 broker_order_id=order.broker_order_id,
                 client_order_id=order.client_order_id,
                 symbol=order.symbol,
             )
+            # Write-ahead: niyet kalici yazilmadan iptal gonderilmez.
+            # Aksi halde iptal ile kayit arasinda yeniden baslayan surec
+            # iptali ve olasi dolumu hic gormez (Codex #63/6863854867).
+            try:
+                self.writer.update_order_status(order.client_order_id, CANCEL_REQUESTED)
+            except JournalError:
+                log.exception("%s iptal niyeti yazilamadi; iptal gonderilmedi", order.symbol)
+                self._block_entries(
+                    result, f"{order.symbol} iptal niyeti yazilamadi; iptal gonderilmedi"
+                )
+                continue
+            self._send_cancel(tracked)
             if not self._settle_cancel(tracked, positions, session, result):
                 return False
         return True
 
+    def _send_cancel(self, item: TrackedCancel) -> None:
+        """Iptali girisin kimligine gonderir ve gonderildigini yazar.
+
+        Red tek basina sonuc degil: giris dolmus ya da zaten kapanmis
+        olabilir. Karari terminal durum verir. `cancel_pending` yazilamazsa
+        satir `cancel_requested` kalir; o da izlenen bir durumdur.
+        """
+        try:
+            self.broker.cancel_order(item.broker_order_id)
+        except BrokerError:
+            log.exception("%s giris emri iptal edilemedi (%s)", item.symbol, item.broker_order_id)
+        self._write_order_status(item, CANCEL_PENDING)
+
     def _resolve_pending_cancels(
         self, positions: dict[str, Position], session: SessionState, result: LoopResult
     ) -> bool:
-        """Bellekte ve journal'da `cancel_pending` olan girisleri cozer.
+        """Bellekte ve journal'da izlenen iptalleri cozer.
+
+        Journal'da `cancel_requested` kalmis ve bu surecin belleginde
+        olmayan satirin iptali once yeniden gonderilir: onceki surec
+        niyeti yazip iptali gondermeden (ya da sonucu yazmadan) kapanmis
+        olabilir. Ikinci istek zararsizdir; yalnizca girisin kimligine
+        gider. `cancel_pending` satirina ikinci iptal gitmez.
 
         Korumasiz dolum yuzunden gun kapandiysa False doner.
         """
         if self.dry_run:
             return True
         tracked = dict(self._pending_cancels)
+        resend: set[str] = set()
         try:
-            rows = orders_with_status(self.conn, CANCEL_PENDING)
+            rows = orders_with_status(self.conn, CANCEL_REQUESTED, CANCEL_PENDING)
         except JournalError:
             log.exception("Izlenen iptaller journal'dan okunamadi")
             self._block_entries(result, "izlenen iptaller journal'dan okunamadi")
             rows = []
         for row in rows:
-            if row["broker_order_id"] is None:
+            client_order_id = str(row["client_order_id"])
+            if row["broker_order_id"] is None or client_order_id in tracked:
                 continue
-            tracked.setdefault(
-                str(row["client_order_id"]),
-                TrackedCancel(
-                    broker_order_id=str(row["broker_order_id"]),
-                    client_order_id=str(row["client_order_id"]),
-                    symbol=str(row["symbol"]),
-                ),
+            tracked[client_order_id] = TrackedCancel(
+                broker_order_id=str(row["broker_order_id"]),
+                client_order_id=client_order_id,
+                symbol=str(row["symbol"]),
             )
+            if row["status"] == CANCEL_REQUESTED:
+                resend.add(client_order_id)
         for item in tracked.values():
+            if item.client_order_id in resend:
+                self._send_cancel(item)
             if not self._settle_cancel(item, positions, session, result):
                 return False
         return True

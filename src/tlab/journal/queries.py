@@ -35,15 +35,18 @@ def open_entry_orders(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
     return {str(row["client_order_id"]): dict(row) for row in rows}
 
 
-def orders_with_status(conn: sqlite3.Connection, status: str) -> list[dict[str, Any]]:
-    """Belirli durumdaki emirlerin kimlikleri ve sembolleri."""
+def orders_with_status(conn: sqlite3.Connection, *statuses: str) -> list[dict[str, Any]]:
+    """Verilen durumlardaki emirlerin kimlikleri, sembolleri ve durumlari."""
+    placeholders = ", ".join("?" for _ in statuses)
     try:
         rows = conn.execute(
-            "SELECT client_order_id, broker_order_id, symbol FROM orders WHERE status = ?",
-            (status,),
+            # Yalnizca "?" yer tutuculari birlestiriliyor; degerler baglaniyor.
+            "SELECT client_order_id, broker_order_id, symbol, status FROM orders"  # noqa: S608
+            f" WHERE status IN ({placeholders})",
+            statuses,
         ).fetchall()
     except sqlite3.Error as exc:
-        msg = f"Emirler okunamadi ({status}): {exc}"
+        msg = f"Emirler okunamadi ({', '.join(statuses)}): {exc}"
         raise JournalError(msg) from exc
     return [dict(row) for row in rows]
 

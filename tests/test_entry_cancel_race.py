@@ -39,11 +39,16 @@ from test_runner import NOW, FakeBroker, FakeMarket, breakout_bars, build_runner
 from tlab.config import Config, load_config
 from tlab.core.types import BracketOrder, OrderRef, Position, Side
 from tlab.engine.runner import SessionRunner
-from tlab.errors import BrokerError
+from tlab.errors import BrokerError, JournalError
 from tlab.journal.db import apply_migrations, connect
 from tlab.journal.queries import halt_reason
 
 PATHS = ["ttl", "blocked"]
+
+
+class Crash(BaseException):
+    """Surecin kesilmesi: `run_once` disina tasinir, hicbir yol yakalamaz."""
+
 
 Hook = Callable[["RacingBroker"], None]
 
@@ -60,11 +65,18 @@ class RacingBroker(FakeBroker):
     on_cancel: Hook | None = None
     hold_cancel: bool = False
     on_list: Hook | None = None
+    crash_after_cancel: bool = False
+    """Broker iptali kabul eder, surec sonucu yazamadan kesilir."""
 
     def cancel_order(self, broker_order_id: str) -> None:
         if self.on_cancel is not None:
             hook, self.on_cancel = self.on_cancel, None
             hook(self)
+        self._cancel(broker_order_id)
+        if self.crash_after_cancel:
+            raise Crash
+
+    def _cancel(self, broker_order_id: str) -> None:
         if not self.hold_cancel:
             super().cancel_order(broker_order_id)
             return
@@ -609,3 +621,100 @@ def test_a_restarted_process_checks_an_unsettled_partial_fill(
 
     assert result.halted
     assert "koruma dogrulanamadi" in " ".join(result.notes)
+
+
+# --------------------------------------------------------------------------
+# Iptal niyeti write-ahead (Codex #63/6863854867)
+# --------------------------------------------------------------------------
+
+
+def crash_during_cancel(s: Setup, point: str) -> None:
+    """Ikinci tur iptal sirasinda kesilir; journal'da yalnizca niyet kalir."""
+    if point == "before_broker":
+
+        def boom(_broker: RacingBroker) -> None:
+            raise Crash
+
+        s.broker.on_cancel = boom
+    else:
+        s.broker.hold_cancel = True
+        s.broker.crash_after_cancel = True
+    with pytest.raises(Crash):
+        s.runner.run_once()
+    s.broker.crash_after_cancel = False
+    assert status_of(s.conn, s.entry) == "cancel_requested"
+    sent = [] if point == "before_broker" else [s.entry.broker_order_id]
+    assert s.broker.cancelled_ids == sent
+
+
+@pytest.mark.parametrize("path", PATHS)
+@pytest.mark.parametrize("point", ["before_broker", "after_broker"])
+def test_a_crash_around_the_cancel_still_checks_an_unprotected_fill(
+    path: str, point: str, config: Config, tmp_path: Path
+) -> None:
+    s = prepare(path, config, tmp_path)
+    crash_during_cancel(s, point)
+    status = "partially_filled" if point == "before_broker" else "pending_cancel"
+    partial_without_settling(s, status=status, filled=5.0, stop_qty=4.0)
+
+    result = s.restart().run_once()
+
+    # Iptal yeniden gonderildi; yalnizca girisin kimligine.
+    assert set(s.broker.cancelled_ids) == {s.entry.broker_order_id}
+    assert len(s.broker.cancelled_ids) == (1 if point == "before_broker" else 2)
+    assert result.halted
+    assert "KILL-SWITCH: koruma dogrulanamadi: SPY" in " ".join(result.notes)
+    assert s.broker.closed == ["SPY"]
+    assert len(s.broker.submitted) == 1
+
+
+@pytest.mark.parametrize("path", PATHS)
+@pytest.mark.parametrize("point", ["before_broker", "after_broker"])
+def test_a_crash_around_the_cancel_keeps_a_covered_fill_tracked(
+    path: str, point: str, config: Config, tmp_path: Path
+) -> None:
+    s = prepare(path, config, tmp_path)
+    crash_during_cancel(s, point)
+    status = "partially_filled" if point == "before_broker" else "pending_cancel"
+    partial_without_settling(s, status=status, filled=5.0, stop_qty=5.0)
+    s.broker.hold_cancel = True
+
+    result = s.restart().run_once()
+
+    assert not result.halted
+    assert result.entries_blocked
+    assert status_of(s.conn, s.entry) == "cancel_pending"
+    assert s.broker.closed == []
+    assert leg_ids(s.broker) == ["leg-stop", "leg-target"]
+    assert len(s.broker.submitted) == 1
+
+    # Sonraki turda iptal artik `cancel_pending`: ikinci kez gonderilmez.
+    sent = len(s.broker.cancelled_ids)
+    assert s.runner.run_once().entries_blocked
+    assert len(s.broker.cancelled_ids) == sent
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_an_unwritable_cancel_intent_sends_no_cancel(
+    path: str, config: Config, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s = prepare(path, config, tmp_path)
+    write = s.runner.writer.update_order_status
+
+    def refuse_intent(
+        client_order_id: str, status: str, broker_order_id: str | None = None
+    ) -> None:
+        if status == "cancel_requested":
+            msg = "journal yazilamadi"
+            raise JournalError(msg)
+        write(client_order_id, status, broker_order_id)
+
+    monkeypatch.setattr(s.runner.writer, "update_order_status", refuse_intent)
+    result = s.runner.run_once()
+
+    assert s.broker.cancelled_ids == []
+    assert result.entries_blocked
+    assert any("iptal niyeti yazilamadi" in note for note in result.notes)
+    assert not result.halted
+    assert [o.broker_order_id for o in s.broker.open_orders] == [s.entry.broker_order_id]
+    assert len(s.broker.submitted) == 1
