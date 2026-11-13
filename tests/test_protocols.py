@@ -154,6 +154,7 @@ def test_broker_protocol_surface_is_complete() -> None:
         "close_position",
         "get_account",
         "get_market_clock",
+        "get_order",
         "get_positions",
         "list_fills",
         "list_open_orders",

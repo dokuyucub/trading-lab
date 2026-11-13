@@ -261,6 +261,8 @@ class StubState:
         self.positions: list[dict[str, Any]] = [dict(p) for p in POSITIONS]
         self.clock: dict[str, Any] = dict(CLOCK)
         self.open_orders: list[dict[str, Any]] = [OPEN_ORDER]
+        self.order_by_id: dict[str, Any] = dict(OPEN_ORDER)
+        """`GET /v2/orders/{id}` yaniti."""
         self.all_orders: list[dict[str, Any]] = [FILLED_BRACKET]
         self.bars: dict[str, Any] = BARS
         self.calendar: list[dict[str, Any]] = [
@@ -388,7 +390,10 @@ def _handler(state: StubState) -> type[BaseHTTPRequestHandler]:
                 else:
                     self._send(state.open_orders)
             elif path.startswith("/v2/orders/"):
-                self._send({}, 204)
+                if method == "GET":
+                    self._send(state.order_by_id)
+                else:
+                    self._send({}, 204)
             elif path == "/v2/stocks/bars":
                 if state.bar_pages is None:
                     self._send(state.bars)

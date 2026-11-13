@@ -57,6 +57,11 @@ class ShadowBroker:
     def list_open_orders(self) -> list[OrderRef]:
         return []
 
+    def get_order(self, broker_order_id: str) -> OrderRef:
+        # Golge broker emir tutmaz; olmayan emir okunamaz.
+        msg = f"golge brokerda emir yok: {broker_order_id}"
+        raise BrokerError(msg)
+
     def list_fills(self, since: datetime) -> list[Fill]:  # noqa: ARG002 - protokol imzasi
         return []
 

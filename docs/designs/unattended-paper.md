@@ -227,41 +227,52 @@ kullanıcı isterse.
         - Turun başında pozisyonu görünen sembolde iptal yapılmaz.
           Kısmen dolmuş girişin kalan miktarı bekler; bu miktar risk
           kapısından geçmiş ilk emrin parçasıdır.
-      - İptal/dolum yarışı (Codex #63/6777889127): bayat giriş iptali
-        (hem TTL hem `entries_blocked` yolu) artık yalnız girişin
+      - İptal/dolum yarışı (Codex #63/6777889127, 6840456161): bayat giriş
+        iptali (hem TTL hem `entries_blocked` yolu) yalnız girişin
         `broker_order_id`'sine gider (`Broker.cancel_order`). Sembol bazlı
-        iptal bu yoldan çıktı. Pozisyon okuması ile iptal arasında giriş
-        dolarsa, o anda görünür olan koruma bacaklarının kimliği iptal
-        çağrısına hiçbir senaryoda girmez.
-        - Sonuç iptal çağrısından değil, ardından broker'dan yeniden
-          okunan pozisyon ve açık emirlerden çıkar:
-          - pozisyon yok, giriş açık değil, iptal kabul edildi → "canceled";
-          - pozisyon yok ama iptal reddedildi ya da giriş hâlâ açık → durum
-            yazılmaz, sonraki tur yeniden bakar;
-          - pozisyon var → giriş tam ya da kısmen doldu; dolan miktarın
-            koruması doğrulanır.
-        - **Koruma kuralı:** sembolde pozisyona ters yönde, `stop_price`
-          taşıyan açık emirlerin kalan miktar toplamı ≥ pozisyon miktarı.
-          Kalan miktarı bilinmeyen emir kapsam sayılmaz.
-        - Kural sağlanırsa bacaklara dokunulmaz. Sağlanmazsa ya da yeniden
-          okuma hata verirse gün kill-switch ile kapanır (fail-closed).
-          Gün kararı her turda kapatmayı yeniden dener; yazılamazsa
-          bellekteki kilit geçerlidir.
-        - Testler `tests/test_entry_cancel_race.py`'de. Sıralı sahte broker
-          dolumu iptal çağrısının içinde, iptalden önce üretir. Senaryolar:
-          kısmi dolum, tam dolum (iptal reddi), bacaksız ve eksik bacaklı
-          dolum, okunamayan broker, dolumsuz red ve temiz iptal. Her biri
-          iki yolda koşar.
-        - **Doğrulanmadı:**
-          - Alpaca'da kısmi dolum ve ebeveyn iptalinden sonra bacak
-            miktarının dolan miktara inip inmediği.
-          - Bacakların düz açık emir listesinde (`status=open`, iç içe
-            değil) görünüp görünmediği.
-
-          Bu iki nokta ilk paper günlerinde (§4, emir yaşam döngüsü
-          kabulü) gösterilmeli. Kural iki durumda da güvenli: bacaklar
-          görünür ve kapsıyorsa dokunulmaz; görünmüyorsa gün kapanır.
-          Yarış nadir olduğu için bunun bedeli nadir bir kapalı gündür.
+        iptal bu yoldan çıktı; koruma bacaklarının kimliği iptal çağrısına
+        hiçbir senaryoda girmez.
+        - Sonuç iptal isteğinin kabulünden ya da girişin açık listeden
+          kaybolmasından çıkarılmaz. İptal asenkron kesinleşir; giriş iki
+          okuma arasında dolabilir. Karar yalnız girişin kendi durumundan
+          (`Broker.get_order`: `status`, `filled_qty`) verilir:
+          - terminal değil (`pending_cancel`, `new`, `partially_filled` …)
+            → izlemede: journal'da `cancel_pending`, süreçte bellek; o
+            turda yeni giriş yok (`entries_blocked`). İzlemedeki girişe
+            ikinci iptal gitmez;
+          - terminal (`canceled`/`expired`/`rejected`) ve dolum sıfır →
+            "canceled";
+          - terminal ve dolum var (`filled` dahil) ya da dolum bilinmiyor
+            → "filled" ve koruma kontrolü;
+          - `get_order` okunamazsa → izlemede, giriş engeli sürer.
+        - İzlemedeki iptaller her turda, kill-switch ve gün sonu
+          kontrollerinden sonra, sembolde pozisyon görünse de çözülür.
+          Yeniden başlayan süreç izlemeyi journal'dan devralır. Geç görünen
+          dolum böylece koruma kontrolünden düşmez.
+        - **Koruma kuralı:** sembolde çıkış yönünde, `stop_price` taşıyan
+          açık emirlerin kalan miktar toplamı ≥ `max(filled_qty, pozisyon
+          miktarı)`. Gereken miktar emrin kendi dolumundan gelir; pozisyon
+          okuması dolumu henüz göstermese de kontrol yapılır. Kalan
+          miktarı bilinmeyen emir kapsam sayılmaz.
+        - Kural sağlanırsa bacaklara dokunulmaz. Sağlanmazsa ya da
+          pozisyon/emir okunamazsa gün kill-switch ile kapanır
+          (fail-closed). Gün kararı her turda kapatmayı yeniden dener;
+          yazılamazsa bellekteki kilit geçerlidir.
+        - Testler `tests/test_entry_cancel_race.py`'de, iki yolda:
+          dolum iptal çağrısının içinde (kısmi, tam, bacaksız, eksik
+          bacak, okunamayan broker) ve iptal kabul edilip `pending_cancel`
+          kalırken dolumun sonraki turda pozisyon okumasından sonra, açık
+          emirler okunurken olması (tam kapsam, bacaksız, eksik bacak,
+          pozisyonu henüz görünmeyen dolum, dolumsuz kesinleşme, izlemenin
+          sürmesi, yeniden başlatma, okunamayan giriş).
+        - **Doğrulanmadı:** Alpaca'da kısmi dolum + ebeveyn iptalinden
+          sonra bacak miktarının dolan miktara inip inmediği ve bacakların
+          düz `status=open` listesinde görünüp görünmediği. İlk paper
+          günlerinde (§4, emir yaşam döngüsü kabulü) gösterilmeli. Kural
+          iki durumda da güvenli: bacaklar görünür ve kapsıyorsa dokunulmaz,
+          görünmüyorsa gün kapanır. `done_for_day` gibi terminal sayılmayan
+          bir durum izlemeyi gün sonuna kadar uzatır; o sürede yeni giriş
+          yoktur. Yarış nadir olduğu için bedeli nadir bir kapalı gündür.
       - Kalan iş, "günde tek koşu" kapısı. Paper workflow'uyla birlikte
         gelir.
 - **Başlangıç yetkisi:** Codex SHA bağlı ONAY + kullanıcı onayı + kayıtlı

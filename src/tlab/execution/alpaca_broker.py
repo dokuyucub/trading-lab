@@ -193,6 +193,15 @@ class AlpacaBroker:
 
         return [self._to_order_ref(raw) for raw in raw_orders]
 
+    def get_order(self, broker_order_id: str) -> OrderRef:
+        """Tek emrin son durumu."""
+        try:
+            raw: Any = self._client.get_order_by_id(broker_order_id)
+        except Exception as exc:
+            msg = f"Emir okunamadi ({broker_order_id}): {exc}"
+            raise BrokerError(msg) from exc
+        return self._to_order_ref(raw)
+
     def submit_bracket(self, order: BracketOrder) -> OrderRef:
         """Giris + stop + hedefi tek paket halinde gonderir."""
         from alpaca.trading.enums import OrderClass, OrderSide
@@ -299,6 +308,9 @@ class AlpacaBroker:
             ),
             limit_price=price if price > 0 else None,
             stop_price=stop if stop > 0 else None,
+            filled_qty=(
+                sdk_float(raw, "filled_qty") if sdk_field(raw, "filled_qty") is not None else None
+            ),
             broker_order_id=str(sdk_field(raw, "id", "")),
             client_order_id=str(sdk_field(raw, "client_order_id", "")),
             symbol=str(sdk_field(raw, "symbol", "")),

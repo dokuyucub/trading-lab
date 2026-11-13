@@ -79,6 +79,9 @@ class FakeBroker:
     closed: list[str] = field(default_factory=list)
     cancelled: list[str | None] = field(default_factory=list)
     cancelled_ids: list[str] = field(default_factory=list)
+    terminal: dict[str, OrderRef] = field(default_factory=dict)
+    """Artik acik olmayan emirlerin son durumu (broker_order_id -> emir)."""
+    fail_get_order: bool = False
     fail_open_orders: bool = False
     fail_submit: bool = False
     submitted_at: datetime = NOW
@@ -144,15 +147,34 @@ class FakeBroker:
     def cancel_order(self, broker_order_id: str) -> None:
         """Yalnizca o kimlikteki acik emri iptal eder; yoksa Alpaca gibi reddeder."""
         self.cancelled_ids.append(broker_order_id)
-        if all(o.broker_order_id != broker_order_id for o in self.open_orders):
+        ref = next((o for o in self.open_orders if o.broker_order_id == broker_order_id), None)
+        if ref is None:
             msg = f"emir iptal edilemez: {broker_order_id}"
             raise BrokerError(msg)
         self.open_orders = [o for o in self.open_orders if o.broker_order_id != broker_order_id]
+        self.terminal[broker_order_id] = ref.model_copy(
+            update={"status": "canceled", "filled_qty": ref.filled_qty or 0.0}
+        )
+
+    def get_order(self, broker_order_id: str) -> OrderRef:
+        if self.fail_get_order:
+            msg = "emir okunamadi"
+            raise BrokerError(msg)
+        for order in self.open_orders:
+            if order.broker_order_id == broker_order_id:
+                return order
+        if broker_order_id in self.terminal:
+            return self.terminal[broker_order_id]
+        msg = f"emir bulunamadi: {broker_order_id}"
+        raise BrokerError(msg)
 
     def fill_order(self, ref: OrderRef, price: float, at: datetime) -> None:
         """Bekleyen bir emri dolmus gibi isaretler."""
         self.open_orders = [o for o in self.open_orders if o.client_order_id != ref.client_order_id]
         order = next(o for o in self.submitted if o.client_order_id == ref.client_order_id)
+        self.terminal[ref.broker_order_id] = ref.model_copy(
+            update={"status": "filled", "filled_qty": float(order.qty), "remaining_qty": 0.0}
+        )
         self.fills.append(
             Fill(
                 broker_order_id=ref.broker_order_id,

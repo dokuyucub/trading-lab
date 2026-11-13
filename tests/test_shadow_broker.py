@@ -71,6 +71,8 @@ def test_reads_are_synthetic_or_empty() -> None:
     assert broker.get_positions() == []
     assert broker.list_open_orders() == []
     assert broker.list_fills(SESSION_OPEN - timedelta(days=1)) == []
+    with pytest.raises(BrokerError, match="golge brokerda emir yok"):
+        broker.get_order("emir-1")
 
 
 @pytest.mark.parametrize(

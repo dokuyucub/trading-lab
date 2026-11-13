@@ -249,6 +249,30 @@ def test_cancel_order_targets_only_that_id(
     ]
 
 
+def test_get_order_reads_status_and_filled_quantity(
+    broker: AlpacaBroker, stub: tuple[str, StubState]
+) -> None:
+    """Iptalin sonucu girisin terminal durumu ve dolan miktariyla cozulur."""
+    stub[1].order_by_id = dict(
+        stub[1].order_by_id, id=ENTRY_TO_CANCEL, status="canceled", qty="100", filled_qty="30"
+    )
+    order = broker.get_order(ENTRY_TO_CANCEL)
+    assert [(method, path) for method, path, _ in stub[1].requests] == [
+        ("GET", f"/v2/orders/{ENTRY_TO_CANCEL}")
+    ]
+    assert order.status == "canceled"
+    assert order.filled_qty == 30
+    assert order.remaining_qty == 70
+
+
+def test_an_unreadable_order_becomes_a_broker_error(
+    broker: AlpacaBroker, stub: tuple[str, StubState]
+) -> None:
+    stub[1].fail_next = 500
+    with pytest.raises(BrokerError, match="Emir okunamadi"):
+        broker.get_order(ENTRY_TO_CANCEL)
+
+
 def test_a_refused_cancel_becomes_a_broker_error(
     broker: AlpacaBroker, stub: tuple[str, StubState]
 ) -> None:

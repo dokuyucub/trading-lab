@@ -55,6 +55,14 @@ class Broker(Protocol):
         """Bekleyen emirler."""
         ...
 
+    def get_order(self, broker_order_id: str) -> OrderRef:
+        """Tek emrin son durumu ve dolan miktari; okunamazsa BrokerError.
+
+        Iptal edilen girisin sonucu bununla cozulur. Acik listeden
+        kaybolmak iptal demek degildir: emir o arada dolmus olabilir.
+        """
+        ...
+
     def list_fills(self, since: datetime) -> list[Fill]:
         """Verilen andan bu yana gerceklesmis emirler (bacaklar dahil).
 

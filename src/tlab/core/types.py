@@ -577,6 +577,9 @@ class OrderRef(Frozen):
     side: Side | None = None
     remaining_qty: float | None = Field(default=None, ge=0)
     limit_price: float | None = Field(default=None, gt=0)
+    filled_qty: float | None = Field(default=None, ge=0)
+    """Dolan miktar. Iptal sonucu bununla cozulur: terminal durumda
+    sifirsa iptal, degilse dolum vardir (runner `_cancel_outcome`)."""
     stop_price: float | None = Field(default=None, gt=0)
     """Stop emrinin tetik fiyati. Bracket'in stop bacaginda dolu.
 

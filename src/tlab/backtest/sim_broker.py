@@ -114,6 +114,7 @@ class SimBroker:
         self._pending: list[_SimOrder] = []
         self._active: dict[str, _SimOrder] = {}
         self._exits: dict[str, _SimExit] = {}
+        self._canceled: dict[str, OrderRef] = {}
         self._fills: list[Fill] = []
         self._last_price: dict[str, float] = {}
         self._clock = _SimClock()
@@ -334,9 +335,36 @@ class SimBroker:
         for pending in self._pending:
             if pending.broker_order_id == broker_order_id:
                 self._pending.remove(pending)
+                self._canceled[broker_order_id] = self._entry_ref(pending, "canceled", 0.0)
                 return
         msg = f"emir iptal edilemez: {broker_order_id}"
         raise BrokerError(msg)
+
+    def get_order(self, broker_order_id: str) -> OrderRef:
+        """Giris emrinin son durumu: bekliyor, dolmus ya da iptal edilmis."""
+        for pending in self._pending:
+            if pending.broker_order_id == broker_order_id:
+                return self._entry_ref(pending, "new", 0.0)
+        for active in self._active.values():
+            if active.broker_order_id == broker_order_id:
+                return self._entry_ref(active, "filled", float(active.order.qty))
+        if broker_order_id in self._canceled:
+            return self._canceled[broker_order_id]
+        msg = f"emir bulunamadi: {broker_order_id}"
+        raise BrokerError(msg)
+
+    @staticmethod
+    def _entry_ref(sim: _SimOrder, status: str, filled_qty: float) -> OrderRef:
+        return OrderRef(
+            broker_order_id=sim.broker_order_id,
+            client_order_id=sim.order.client_order_id,
+            symbol=sim.order.symbol,
+            submitted_at=sim.submitted_at,
+            status=status,
+            side=sim.order.side,
+            remaining_qty=float(sim.order.qty) - filled_qty,
+            filled_qty=filled_qty,
+        )
 
     # ------------------------------------------------------------------
     # Dolum mantigi

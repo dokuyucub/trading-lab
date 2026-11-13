@@ -35,6 +35,19 @@ def open_entry_orders(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
     return {str(row["client_order_id"]): dict(row) for row in rows}
 
 
+def orders_with_status(conn: sqlite3.Connection, status: str) -> list[dict[str, Any]]:
+    """Belirli durumdaki emirlerin kimlikleri ve sembolleri."""
+    try:
+        rows = conn.execute(
+            "SELECT client_order_id, broker_order_id, symbol FROM orders WHERE status = ?",
+            (status,),
+        ).fetchall()
+    except sqlite3.Error as exc:
+        msg = f"Emirler okunamadi ({status}): {exc}"
+        raise JournalError(msg) from exc
+    return [dict(row) for row in rows]
+
+
 def unconfirmed_orders(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     """Gonderildigi yazilmis ama broker cevabi kaydedilmemis emirler.
 
