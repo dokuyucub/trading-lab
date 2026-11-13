@@ -55,6 +55,14 @@ class Broker(Protocol):
         """Bekleyen emirler."""
         ...
 
+    def get_order(self, broker_order_id: str) -> OrderRef:
+        """Tek emrin son durumu ve dolan miktari; okunamazsa BrokerError.
+
+        Iptal edilen girisin sonucu bununla cozulur. Acik listeden
+        kaybolmak iptal demek degildir: emir o arada dolmus olabilir.
+        """
+        ...
+
     def list_fills(self, since: datetime) -> list[Fill]:
         """Verilen andan bu yana gerceklesmis emirler (bacaklar dahil).
 
@@ -84,4 +92,15 @@ class Broker(Protocol):
 
     def cancel_open_orders(self, symbol: str | None = None) -> int:
         """Bekleyen emirleri iptal eder, iptal edilen sayiyi dondurur."""
+        ...
+
+    def cancel_order(self, broker_order_id: str) -> None:
+        """TEK emri kimligiyle iptal eder; iptal edilemezse BrokerError.
+
+        Sembol bazli iptal, o anda brokerda gorunen her emri duser.
+        Bir giris iptal edilirken dolmussa koruma bacaklari da o
+        listededir. Bayat giris iptali bu yuzden yalnizca girisin
+        kendi kimligine gider. Emir zaten dolmus ya da kapanmissa
+        broker reddeder; cagiran taraf sonucu brokerdan yeniden okur.
+        """
         ...

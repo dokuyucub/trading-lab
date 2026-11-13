@@ -189,6 +189,110 @@ kullanıcı isterse.
     - Kod `src/` altında olduğu için kampanya dondurması bitince ayrı PR
       ile gelir. Dondurulmuş main'e üretim düzeltmesi girmez.
     - Bu iki açık kapanmadan ortam güvenliği tamamlanmış sayılmaz.
+    - **Düzeltme (dal `claude/killswitch-fix`, #17 ÖN RAPOR 6753982638;
+      kampanya dondurması bitmeden main'e girmez):**
+      - Açık 2: `_check_kill_switch` gün durumu okuma hatasını yakalar ve
+        turu bitirmez. `LoopResult.entries_blocked` yeni girişi engeller;
+        iptal, `must_flatten` ve zarar sınırı kapatması sürer. Karar
+        yazılamazsa kapatma yine yapılır ve not düşülür.
+      - Açık 1: zarar sınırı aşılmamışsa ve bu seans için journal'da
+        gönderilmiş emir yoksa (`orders_submitted_since`), broker'da
+        bugün gerçekleşme varsa gün "belirsiz" sayılır. Karar
+        `daily_state`'e yazılır ve pozisyonlar kapatılır.
+        - Gerçekleşmeler okunamazsa yalnız giriş engellenir.
+        - Süreç kendi emrini göndermeden önce yazdığı için normal gün
+          etkilenmez.
+      - Testler `tests/test_kill_switch_durability.py`'de; eski
+        karakterizasyon testi ters beklentiye çevrildi.
+      - Yazılamayan karar (Codex #63/6772282247 P1): `_record_halt`
+        hata alırsa karar süreç belleğinde (`_unpersisted_halts`) tutulur.
+        Sonraki her turda gün kapalı sayılır, kapanış sürer ve kalıcı yazma
+        yeniden denenir; başarılı olunca bellekten düşer.
+        - **Yeniden başlatma için kabul sınırı:** süreç, yazma başarılı
+          olmadan yeniden başlarsa bellek kaybolur. O durumda koruma şunlara
+          dayanır:
+          - zarar hâlâ sınırın altındaysa zarar kuralı;
+          - journal taze ise belirsiz gün kuralı;
+          - journal hâlâ yazılamıyorsa write-ahead: karar ya da emir
+            yazılamazsa emir gönderilmez (`_evaluate_universe`).
+        - Kabul edilen açık dar: geçici yazma hatası, bir sonraki turdan
+          önce yeniden başlatma, yazmanın düzelmiş olması, zararın sınırın
+          üstüne dönmesi ve journal'da bugünün emri bulunması aynı anda
+          olmalı. Hata ERROR log'u ve tur notuyla görünür kalır. Paper
+          öncesi "günde tek koşu" kapısı bu durumda ikinci süreci zaten
+          başlatmaz.
+      - Gün durumu bilinmiyorken bekleyen giriş (P2): `entries_blocked`
+        iken bizim, pozisyonu olmayan sembollerdeki bütün bekleyen girişler
+        yaşına bakılmadan iptal edilir.
+        - Turun başında pozisyonu görünen sembolde iptal yapılmaz.
+          Kısmen dolmuş girişin kalan miktarı bekler; bu miktar risk
+          kapısından geçmiş ilk emrin parçasıdır.
+      - İptal/dolum yarışı (Codex #63/6777889127, 6840456161, 6844629736,
+        6863854867):
+        bayat giriş
+        iptali (hem TTL hem `entries_blocked` yolu) yalnız girişin
+        `broker_order_id`'sine gider (`Broker.cancel_order`). Sembol bazlı
+        iptal bu yoldan çıktı; koruma bacaklarının kimliği iptal çağrısına
+        hiçbir senaryoda girmez.
+        - Sonuç iptal isteğinin kabulünden ya da girişin açık listeden
+          kaybolmasından çıkarılmaz. İptal asenkron kesinleşir; giriş iki
+          okuma arasında dolabilir. Karar yalnız girişin kendi durumundan
+          (`Broker.get_order`: `status`, `filled_qty`) verilir:
+          - terminal değil (`pending_cancel`, `new`, `partially_filled` …)
+            → izlemede: journal'da `cancel_pending`, süreçte bellek; o
+            turda yeni giriş yok (`entries_blocked`). İzlemedeki girişe
+            ikinci iptal gitmez. Dolum varsa (`filled_qty > 0`) koruma
+            kontrolü iptal kesinleşmeden HEMEN ve her turda yeniden
+            yapılır: kapsam yoksa gün kapanır, varsa izleme sürer. İptalin
+            yaşam döngüsü ile dolan miktarın koruması ayrı sorulardır;
+          - terminal (`canceled`/`expired`/`rejected`) ve dolum sıfır →
+            "canceled";
+          - terminal ve dolum var (`filled` dahil) ya da dolum bilinmiyor
+            → koruma kontrolü; kapsıyorsa "filled". Korumasız dolumda
+            durum değiştirilmez, gün kararı kalıcıdır;
+          - `get_order` okunamazsa → izlemede, giriş engeli sürer.
+        - İzlemedeki iptaller her turda, kill-switch ve gün sonu
+          kontrollerinden sonra, sembolde pozisyon görünse de çözülür.
+          Yeniden başlayan süreç izlemeyi journal'dan devralır. Geç görünen
+          dolum böylece koruma kontrolünden düşmez.
+        - **İptal niyeti write-ahead:** iptal çağrısından ÖNCE journal'a
+          `cancel_requested` yazılır, çağrıdan sonra `cancel_pending`.
+          Niyet yazılamazsa iptal gönderilmez; tur `entries_blocked` olur
+          ve not düşülür. Giriş ve bacakları brokerda kalır; gün sonu
+          kapanışı ve zarar sınırı yolu sürer. Yeniden başlayan süreç
+          bellekte olmayan `cancel_requested` satırının iptalini yeniden
+          gönderir (ilk istek hiç gitmemiş ya da sonucu yazılmamış olabilir;
+          ikinci istek yalnız girişin kimliğine gider ve zararsızdır), sonra
+          sonucu çözer. `cancel_pending` satırına ikinci iptal gitmez.
+        - **Koruma kuralı:** sembolde çıkış yönünde, `stop_price` taşıyan
+          açık emirlerin kalan miktar toplamı ≥ `max(filled_qty, pozisyon
+          miktarı)`. Gereken miktar emrin kendi dolumundan gelir; pozisyon
+          okuması dolumu henüz göstermese de kontrol yapılır. Kalan
+          miktarı bilinmeyen emir kapsam sayılmaz.
+        - Kural sağlanırsa bacaklara dokunulmaz. Sağlanmazsa ya da
+          pozisyon/emir okunamazsa gün kill-switch ile kapanır
+          (fail-closed). Gün kararı her turda kapatmayı yeniden dener;
+          yazılamazsa bellekteki kilit geçerlidir.
+        - Testler `tests/test_entry_cancel_race.py`'de, iki yolda:
+          dolum iptal çağrısının içinde (kısmi, tam, bacaksız, eksik
+          bacak, okunamayan broker) ve iptal kabul edilip `pending_cancel`
+          kalırken dolumun sonraki turda pozisyon okumasından sonra, açık
+          emirler okunurken olması (tam kapsam, bacaksız, eksik bacak,
+          pozisyonu henüz görünmeyen dolum, dolumsuz kesinleşme, izlemenin
+          sürmesi, yeniden başlatma, okunamayan giriş) ve iptal kesinleşmeden
+          kısmi dolum (`pending_cancel`/`partially_filled`: kapsam yok,
+          eksik, tam; artan dolumda kapsamın yeniden ölçülmesi; yeniden
+          başlatma).
+        - **Doğrulanmadı:** Alpaca'da kısmi dolum + ebeveyn iptalinden
+          sonra bacak miktarının dolan miktara inip inmediği ve bacakların
+          düz `status=open` listesinde görünüp görünmediği. İlk paper
+          günlerinde (§4, emir yaşam döngüsü kabulü) gösterilmeli. Kural
+          iki durumda da güvenli: bacaklar görünür ve kapsıyorsa dokunulmaz,
+          görünmüyorsa gün kapanır. `done_for_day` gibi terminal sayılmayan
+          bir durum izlemeyi gün sonuna kadar uzatır; o sürede yeni giriş
+          yoktur. Yarış nadir olduğu için bedeli nadir bir kapalı gündür.
+      - Kalan iş, "günde tek koşu" kapısı. Paper workflow'uyla birlikte
+        gelir.
 - **Başlangıç yetkisi:** Codex SHA bağlı ONAY + kullanıcı onayı + kayıtlı
   yürütme kararı (kesin commit, main CI, yöntem, tarih aralığı). Gölge
   (d) deseniyle aynı.
