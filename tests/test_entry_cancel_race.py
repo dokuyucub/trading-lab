@@ -402,7 +402,9 @@ def test_a_fill_the_position_read_does_not_show_yet_is_still_checked(
 
     result = s.runner.run_once()
 
-    assert status_of(s.conn, s.entry) == "filled"
+    # Korumasiz dolumda durum degismez; gun karari kalicidir.
+    expected = "cancel_pending" if stop_qty is None else "filled"
+    assert status_of(s.conn, s.entry) == expected
     assert result.halted is (stop_qty is None)
     assert len(s.broker.submitted) == 1
 
@@ -452,7 +454,7 @@ def test_a_restarted_process_takes_over_the_pending_cancel(
 
     result = s.restart().run_once()
 
-    assert status_of(s.conn, s.entry) == "filled"
+    assert status_of(s.conn, s.entry) == "cancel_pending"
     assert result.halted
     assert "koruma dogrulanamadi" in " ".join(result.notes)
 
@@ -511,3 +513,99 @@ def test_a_clean_cancel_is_written_as_canceled(path: str, config: Config, tmp_pa
     assert result.cancelled == 1
     assert not result.halted
     assert status_of(s.conn, s.entry) == "canceled"
+
+
+# --------------------------------------------------------------------------
+# Iptal kesinlesmeden kismi dolum (Codex #63/6844629736)
+# --------------------------------------------------------------------------
+
+
+def partial_without_settling(
+    s: Setup, *, status: str, filled: float, stop_qty: float | None
+) -> None:
+    """Giris acik kalir (terminal degil) ama bir kismi dolmustur."""
+    s.broker.open_orders = [
+        o.model_copy(update={"status": status, "filled_qty": filled, "side": Side.BUY})
+        if o.broker_order_id == s.entry.broker_order_id
+        else o
+        for o in s.broker.open_orders
+        if not o.broker_order_id.startswith("leg-")
+    ]
+    hold_position(s.broker, s.order, filled)
+    if stop_qty is not None:
+        s.broker.open_orders.extend(legs(s.order, stop_qty=stop_qty))
+
+
+@pytest.mark.parametrize("path", PATHS)
+@pytest.mark.parametrize("status", ["pending_cancel", "partially_filled"])
+@pytest.mark.parametrize("cover", ["none", "short"])
+def test_an_unsettled_partial_fill_without_cover_halts_the_day(
+    path: str, status: str, cover: str, config: Config, tmp_path: Path
+) -> None:
+    s = prepare(path, config, tmp_path)
+    accept_without_settling(s)
+    filled = 5.0
+    partial_without_settling(
+        s, status=status, filled=filled, stop_qty=None if cover == "none" else filled - 1
+    )
+
+    result = s.runner.run_once()
+
+    assert result.halted
+    assert "KILL-SWITCH: koruma dogrulanamadi: SPY" in " ".join(result.notes)
+    assert status_of(s.conn, s.entry) == "cancel_pending"
+    assert s.broker.closed == ["SPY"]
+    assert result.evaluated == 0
+    assert len(s.broker.submitted) == 1
+
+
+@pytest.mark.parametrize("path", PATHS)
+@pytest.mark.parametrize("status", ["pending_cancel", "partially_filled"])
+def test_an_unsettled_partial_fill_with_cover_stays_tracked(
+    path: str, status: str, config: Config, tmp_path: Path
+) -> None:
+    s = prepare(path, config, tmp_path)
+    accept_without_settling(s)
+    partial_without_settling(s, status=status, filled=5.0, stop_qty=5.0)
+
+    result = s.runner.run_once()
+
+    assert not result.halted
+    assert result.entries_blocked
+    assert status_of(s.conn, s.entry) == "cancel_pending"
+    assert s.broker.closed == []
+    assert leg_ids(s.broker) == ["leg-stop", "leg-target"]
+    assert s.broker.cancelled_ids == [s.entry.broker_order_id]
+    assert len(s.broker.submitted) == 1
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_a_growing_unsettled_fill_is_checked_again(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """Kapsam ilk turdaki miktarla sabitlenmez."""
+    s = prepare(path, config, tmp_path)
+    accept_without_settling(s)
+    partial_without_settling(s, status="partially_filled", filled=3.0, stop_qty=3.0)
+    assert not s.runner.run_once().halted
+
+    partial_without_settling(s, status="partially_filled", filled=5.0, stop_qty=3.0)
+    result = s.runner.run_once()
+
+    assert result.halted
+    assert s.broker.closed == ["SPY"]
+    assert len(s.broker.submitted) == 1
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_a_restarted_process_checks_an_unsettled_partial_fill(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    s = prepare(path, config, tmp_path)
+    accept_without_settling(s)
+    partial_without_settling(s, status="partially_filled", filled=5.0, stop_qty=None)
+
+    result = s.restart().run_once()
+
+    assert result.halted
+    assert "koruma dogrulanamadi" in " ".join(result.notes)

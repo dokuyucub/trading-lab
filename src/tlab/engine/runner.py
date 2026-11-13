@@ -544,43 +544,56 @@ class SessionRunner:
             result.cancelled += 1
             log.info("Bayat giris emri iptal edildi: %s", item.symbol)
             return True
-        self._write_order_status(item, "filled")
         if outcome is CancelOutcome.FILLED:
+            self._write_order_status(item, "filled")
             log.warning("%s girisi iptal sirasinda doldu; stop bacagi kapsiyor", item.symbol)
             result.notes.append(
                 f"{item.symbol} girisi iptal sirasinda doldu; stop bacagi dolumu kapsiyor"
             )
             return True
+        # Korumasiz dolum: durum degistirilmez (giris kesinlesmemis
+        # olabilir). Gun karari kalici; kapatma her turda yeniden denenir.
         self._halt_unprotected(item.symbol, positions, session, result)
         return False
 
     def _cancel_outcome(self, item: TrackedCancel) -> CancelOutcome:
-        """Iptalin sonucunu girisin KENDI terminal durumundan cikarir.
+        """Iptalin sonucunu girisin KENDI durumundan cikarir.
 
         Iptal isteginin kabulu ya da girisin acik listeden kaybolmasi
         sonuc degildir: iptal asenkron kesinlesir ve giris iki okuma
-        arasinda dolabilir (Codex #63/6840456161). Karar yalnizca
-        `get_order` ile okunan durumdan verilir:
-          * terminal degil (pending_cancel, new, partially_filled ...)
-            -> PENDING: izlemede kalir, yeni giris engellenir;
-          * terminal ve dolum sifir -> CANCELED;
-          * terminal ve dolum var ya da dolum bilinmiyor -> koruma
-            kontrolu: stop bacaklari `max(dolum, pozisyon)` miktarini
-            kapsiyorsa FILLED, kapsamiyorsa ya da durum okunamiyorsa
-            UNPROTECTED (fail-closed).
-        Gereken miktar emrin kendi dolumundan gelir; pozisyon okumasi
-        dolumu henuz gostermese de kontrol yapilir.
+        arasinda dolabilir (Codex #63/6840456161). Iki soru ayri
+        cevaplanir (Codex #63/6844629736):
+          * iptal kesinlesti mi: `get_order` durumu terminal mi;
+          * dolan miktar korunuyor mu: dolum varsa, terminal olsun ya da
+            olmasin, HEMEN kontrol edilir.
+        Sonuc:
+          * okunamiyor -> PENDING (izleme ve giris engeli surer);
+          * terminal, dolum sifir -> CANCELED;
+          * terminal degil, dolum sifir -> PENDING;
+          * dolum var (ya da terminal ve dolum bilinmiyor): stop
+            bacaklari `max(dolum, pozisyon)` miktarini kapsamiyorsa ya
+            da durum okunamiyorsa UNPROTECTED; kapsiyorsa terminalde
+            FILLED, degilse PENDING. PENDING her turda yeniden
+            degerlendirildigi icin dolum arttikca kapsam yeniden olculur.
         """
         try:
             order = self.broker.get_order(item.broker_order_id)
         except BrokerError:
             log.exception("%s giris emri okunamadi (%s)", item.symbol, item.broker_order_id)
             return CancelOutcome.PENDING
-        if order.status not in TERMINAL_ORDER_STATUSES:
-            return CancelOutcome.PENDING
-        if order.filled_qty == 0:
-            return CancelOutcome.CANCELED
+        terminal = order.status in TERMINAL_ORDER_STATUSES
+        if order.filled_qty == 0 or (not terminal and order.filled_qty is None):
+            return CancelOutcome.CANCELED if terminal else CancelOutcome.PENDING
+        if not self._fill_is_protected(item, order):
+            return CancelOutcome.UNPROTECTED
+        return CancelOutcome.FILLED if terminal else CancelOutcome.PENDING
 
+    def _fill_is_protected(self, item: TrackedCancel, order: OrderRef) -> bool:
+        """Dolan miktari stop bacaklari kapsiyor mu; okunamazsa False.
+
+        Gereken miktar emrin kendi dolumundan gelir; pozisyon okumasi
+        dolumu henuz gostermese de kontrol yapilir.
+        """
         try:
             position = next(
                 (p for p in self.broker.get_positions() if p.symbol == item.symbol), None
@@ -588,16 +601,14 @@ class SessionRunner:
             symbol_orders = [o for o in self.broker.list_open_orders() if o.symbol == item.symbol]
         except BrokerError:
             log.exception("%s dolum sonrasi broker durumu okunamadi", item.symbol)
-            return CancelOutcome.UNPROTECTED
+            return False
 
         required = max(order.filled_qty or 0.0, position.qty if position else 0.0)
         entry_side = position.side if position else order.side
         if required <= 0 or entry_side is None:
-            return CancelOutcome.UNPROTECTED
+            return False
         exit_side = Side.SELL if entry_side is Side.BUY else Side.BUY
-        if stops_cover(exit_side, required, symbol_orders):
-            return CancelOutcome.FILLED
-        return CancelOutcome.UNPROTECTED
+        return stops_cover(exit_side, required, symbol_orders)
 
     def _write_order_status(self, item: TrackedCancel, status: str) -> None:
         """Durumu journal'a yazar; yazilamazsa izleme bellekte surer."""

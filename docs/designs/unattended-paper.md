@@ -227,7 +227,8 @@ kullanıcı isterse.
         - Turun başında pozisyonu görünen sembolde iptal yapılmaz.
           Kısmen dolmuş girişin kalan miktarı bekler; bu miktar risk
           kapısından geçmiş ilk emrin parçasıdır.
-      - İptal/dolum yarışı (Codex #63/6777889127, 6840456161): bayat giriş
+      - İptal/dolum yarışı (Codex #63/6777889127, 6840456161, 6844629736):
+        bayat giriş
         iptali (hem TTL hem `entries_blocked` yolu) yalnız girişin
         `broker_order_id`'sine gider (`Broker.cancel_order`). Sembol bazlı
         iptal bu yoldan çıktı; koruma bacaklarının kimliği iptal çağrısına
@@ -239,11 +240,15 @@ kullanıcı isterse.
           - terminal değil (`pending_cancel`, `new`, `partially_filled` …)
             → izlemede: journal'da `cancel_pending`, süreçte bellek; o
             turda yeni giriş yok (`entries_blocked`). İzlemedeki girişe
-            ikinci iptal gitmez;
+            ikinci iptal gitmez. Dolum varsa (`filled_qty > 0`) koruma
+            kontrolü iptal kesinleşmeden HEMEN ve her turda yeniden
+            yapılır: kapsam yoksa gün kapanır, varsa izleme sürer. İptalin
+            yaşam döngüsü ile dolan miktarın koruması ayrı sorulardır;
           - terminal (`canceled`/`expired`/`rejected`) ve dolum sıfır →
             "canceled";
           - terminal ve dolum var (`filled` dahil) ya da dolum bilinmiyor
-            → "filled" ve koruma kontrolü;
+            → koruma kontrolü; kapsıyorsa "filled". Korumasız dolumda
+            durum değiştirilmez, gün kararı kalıcıdır;
           - `get_order` okunamazsa → izlemede, giriş engeli sürer.
         - İzlemedeki iptaller her turda, kill-switch ve gün sonu
           kontrollerinden sonra, sembolde pozisyon görünse de çözülür.
@@ -264,7 +269,10 @@ kullanıcı isterse.
           kalırken dolumun sonraki turda pozisyon okumasından sonra, açık
           emirler okunurken olması (tam kapsam, bacaksız, eksik bacak,
           pozisyonu henüz görünmeyen dolum, dolumsuz kesinleşme, izlemenin
-          sürmesi, yeniden başlatma, okunamayan giriş).
+          sürmesi, yeniden başlatma, okunamayan giriş) ve iptal kesinleşmeden
+          kısmi dolum (`pending_cancel`/`partially_filled`: kapsam yok,
+          eksik, tam; artan dolumda kapsamın yeniden ölçülmesi; yeniden
+          başlatma).
         - **Doğrulanmadı:** Alpaca'da kısmi dolum + ebeveyn iptalinden
           sonra bacak miktarının dolan miktara inip inmediği ve bacakların
           düz `status=open` listesinde görünüp görünmediği. İlk paper
