@@ -35,7 +35,7 @@ from pathlib import Path
 import pytest
 
 from conftest import make_account
-from test_runner import NOW, FakeBroker, FakeMarket, breakout_bars, build_runner
+from test_runner import NOW, FakeBroker, FakeClock, FakeMarket, breakout_bars, build_runner
 from tlab.config import Config, load_config
 from tlab.core.types import BracketOrder, OrderRef, Position, Side
 from tlab.engine.runner import SessionRunner
@@ -67,14 +67,26 @@ class RacingBroker(FakeBroker):
     on_list: Hook | None = None
     crash_after_cancel: bool = False
     """Broker iptali kabul eder, surec sonucu yazamadan kesilir."""
+    unreachable_cancels: int = 0
+    """Bu kadar iptal istegi brokera hic ulasmaz (baglanti hatasi)."""
+    lose_cancel_reply: bool = False
+    """Broker iptali alir ama cevap kaybolur: cagiran hata gorur."""
 
     def cancel_order(self, broker_order_id: str) -> None:
         if self.on_cancel is not None:
             hook, self.on_cancel = self.on_cancel, None
             hook(self)
+        if self.unreachable_cancels > 0:
+            self.unreachable_cancels -= 1
+            self.cancelled_ids.append(broker_order_id)
+            msg = "baglanti kurulamadi"
+            raise BrokerError(msg)
         self._cancel(broker_order_id)
         if self.crash_after_cancel:
             raise Crash
+        if self.lose_cancel_reply:
+            msg = "cevap alinamadi"
+            raise BrokerError(msg)
 
     def _cancel(self, broker_order_id: str) -> None:
         if not self.hold_cancel:
@@ -485,7 +497,8 @@ def test_an_unreadable_entry_stays_tracked_and_blocks_entries(
     result = s.runner.run_once()
 
     assert result.entries_blocked
-    assert status_of(s.conn, s.entry) == "cancel_pending"
+    # Iptal reddedildi ve emir okunamadi: ulastigi dogrulanmadi.
+    assert status_of(s.conn, s.entry) == "cancel_requested"
     assert result.cancelled == 0
     assert not result.halted
     assert len(s.broker.submitted) == 1
@@ -661,7 +674,9 @@ def test_a_crash_around_the_cancel_still_checks_an_unprotected_fill(
 
     # Iptal yeniden gonderildi; yalnizca girisin kimligine.
     assert set(s.broker.cancelled_ids) == {s.entry.broker_order_id}
-    assert len(s.broker.cancelled_ids) == (1 if point == "before_broker" else 2)
+    # Ulasmamis istek yeniden gonderildi; ulasmis olana (pending_cancel)
+    # ikinci istek gitmedi.
+    assert len(s.broker.cancelled_ids) == 1
     assert result.halted
     assert "KILL-SWITCH: koruma dogrulanamadi: SPY" in " ".join(result.notes)
     assert s.broker.closed == ["SPY"]
@@ -718,3 +733,162 @@ def test_an_unwritable_cancel_intent_sends_no_cancel(
     assert not result.halted
     assert [o.broker_order_id for o in s.broker.open_orders] == [s.entry.broker_order_id]
     assert len(s.broker.submitted) == 1
+
+
+# --------------------------------------------------------------------------
+# Iletilemeyen iptal (Codex #63/6993997992 P1)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("path", PATHS)
+@pytest.mark.parametrize("restart", [False, True])
+def test_an_unreached_cancel_is_sent_again(
+    path: str, restart: bool, config: Config, tmp_path: Path
+) -> None:
+    """Istek brokera ulasmadi; emir hala aktif. Sonraki tur yeniden gonderir."""
+    s = prepare(path, config, tmp_path)
+    s.broker.unreachable_cancels = 1
+
+    first = s.runner.run_once()
+
+    assert s.broker.cancelled_ids == [s.entry.broker_order_id]
+    assert [o.broker_order_id for o in s.broker.open_orders] == [s.entry.broker_order_id]
+    # Ulasmadigi bilinmeyen istek "kabul edildi" sayilmaz.
+    assert status_of(s.conn, s.entry) == "cancel_requested"
+    assert first.entries_blocked
+
+    runner = s.restart() if restart else s.runner
+    second = runner.run_once()
+
+    assert s.broker.cancelled_ids == [s.entry.broker_order_id] * 2
+    assert s.broker.open_orders == []
+    assert status_of(s.conn, s.entry) == "canceled"
+    assert second.cancelled == 1
+    assert not second.halted
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_a_cancel_whose_reply_was_lost_is_not_sent_again(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """Broker iptali aldi (pending_cancel) ama cevap kayboldu."""
+    s = prepare(path, config, tmp_path)
+    s.broker.hold_cancel = True
+    s.broker.lose_cancel_reply = True
+
+    first = s.runner.run_once()
+
+    assert first.entries_blocked
+    assert status_of(s.conn, s.entry) == "cancel_requested"
+    s.broker.lose_cancel_reply = False
+
+    second = s.runner.run_once()
+
+    assert s.broker.cancelled_ids == [s.entry.broker_order_id]
+    assert status_of(s.conn, s.entry) == "cancel_pending"
+    assert second.entries_blocked
+    assert not second.halted
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_a_cancel_that_never_reaches_the_broker_halts_the_day(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    s = prepare(path, config, tmp_path)
+    s.broker.unreachable_cancels = 99
+
+    results = [s.runner.run_once() for _ in range(3)]
+
+    assert [r.halted for r in results] == [False, False, False]
+    assert all(r.entries_blocked for r in results)
+    assert len(s.broker.cancelled_ids) == 3
+
+    final = s.runner.run_once()
+
+    assert final.halted
+    assert "KILL-SWITCH: iptal iletilemedi: SPY" in " ".join(final.notes)
+    # Kurtarma: butun emirler iptal edilir.
+    assert s.broker.cancelled == [None]
+    assert len(s.broker.cancelled_ids) == 3
+    assert len(s.broker.submitted) == 1
+
+
+# --------------------------------------------------------------------------
+# Onceki seanstan kalan iz (Codex #63/6993997992 P2)
+# --------------------------------------------------------------------------
+
+LATER = NOW + timedelta(days=3)
+
+
+def halt_on_an_unprotected_fill(s: Setup) -> None:
+    """Ilk gun: dolum stopsuz, gun kapanir, pozisyon kapatilir; iz kalir."""
+
+    def unprotected(broker: RacingBroker) -> None:
+        settle(broker, s.entry, "filled", s.order.qty)
+        hold_position(broker, s.order, s.order.qty)
+
+    s.broker.on_cancel = unprotected
+    assert s.runner.run_once().halted
+    assert s.broker.positions == []
+    assert status_of(s.conn, s.entry) in ("cancel_requested", "cancel_pending")
+
+
+def next_session(s: Setup) -> SessionRunner:
+    """Ayni journal, uc gun sonraki acik seans, yeni surec."""
+    s.broker.clock = FakeClock(
+        is_open=True,
+        next_open=LATER - timedelta(minutes=30),
+        next_close=LATER + timedelta(hours=6),
+    )
+    s.runner = build_runner(
+        config=s.config, conn=s.conn, broker=s.broker, market=s.market, now=LATER
+    )
+    return s.runner
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_a_flat_account_in_a_later_session_is_not_locked_by_an_old_fill(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    s = prepare(path, config, tmp_path)
+    halt_on_an_unprotected_fill(s)
+
+    result = next_session(s).run_once()
+
+    assert not result.halted
+    assert status_of(s.conn, s.entry) == "filled"
+    if path == "ttl":
+        assert not result.entries_blocked
+    # Iz kapandi: sonraki tur da kilitlenmez.
+    assert not s.runner.run_once().halted
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_a_position_left_from_an_old_fill_is_still_protected(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    s = prepare(path, config, tmp_path)
+    halt_on_an_unprotected_fill(s)
+    hold_position(s.broker, s.order, 5.0)
+
+    result = next_session(s).run_once()
+
+    assert result.halted
+    assert "koruma dogrulanamadi: SPY" in " ".join(result.notes)
+    assert s.broker.closed[-1] == "SPY"
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_a_covered_position_left_from_an_old_fill_closes_the_tracking(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    s = prepare(path, config, tmp_path)
+    halt_on_an_unprotected_fill(s)
+    hold_position(s.broker, s.order, 5.0)
+    s.broker.open_orders.extend(legs(s.order, stop_qty=5.0))
+
+    result = next_session(s).run_once()
+
+    assert not result.halted
+    assert status_of(s.conn, s.entry) == "filled"
+    assert leg_ids(s.broker) == ["leg-stop", "leg-target"]

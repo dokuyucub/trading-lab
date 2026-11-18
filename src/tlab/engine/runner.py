@@ -79,7 +79,16 @@ satirdaki iptali yeniden gonderir: ilk istek hic gitmemis olabilir.
 """
 
 CANCEL_PENDING = "cancel_pending"
-"""Journal durumu: iptal brokera gonderildi, giris henuz terminal durumda degil."""
+"""Journal durumu: broker iptali ALDI (cagri hatasiz dondu ya da emir
+`pending_cancel`/terminal goruldu); giris henuz terminal durumda degil."""
+
+CANCEL_ACK_STATUSES = frozenset({"pending_cancel"}) | TERMINAL_ORDER_STATUSES
+"""Iptal isteginin brokera ulastigini gosteren emir durumlari."""
+
+MAX_CANCEL_ATTEMPTS = 3
+"""Ulasamayan iptal icin surec basina en fazla deneme (ilk gonderim dahil).
+Asilirsa gun kill-switch ile kapanir; `_flatten_all` her turda butun
+emirleri iptal edip kapatmayi yeniden dener."""
 
 
 class CancelOutcome(Enum):
@@ -198,6 +207,14 @@ class SessionRunner:
         Journal'da `cancel_pending` olarak da yazilir; yeniden baslayan
         surec izlemeyi oradan devralir.
         """
+        self._unconfirmed_cancels: set[str] = set()
+        """Iptali gonderilen ama brokerin aldigi dogrulanmamis girisler."""
+        self._cancel_attempts: dict[str, int] = {}
+        """Giris basina bu surecte yapilan iptal gonderimi sayisi."""
+        self._cancels_seen_this_turn: set[str] = set()
+        """Bu turun basinda izlemede olan girisler (cozulen ya da suren).
+        Turun basindaki acik emir listesi onlari hala gosterebilir; bayat
+        iptal yolu onlara yeni iptal gondermemeli."""
         self._unpersisted_halts: dict[date, str] = {}
         """Kalici yazilamamis kill-switch kararlari (gun -> sebep).
 
@@ -477,7 +494,8 @@ class SessionRunner:
         for order in open_orders:
             if order.symbol in positions or order.client_order_id not in ours:
                 continue
-            if order.client_order_id in self._pending_cancels:
+            if order.client_order_id in self._cancels_seen_this_turn:
+                # Izlemedeki (ya da bu turda cozulen) girise ikinci iptal yok.
                 continue
             if not every_age and order.submitted_at.astimezone(UTC) >= deadline:
                 continue
@@ -503,35 +521,66 @@ class SessionRunner:
         return True
 
     def _send_cancel(self, item: TrackedCancel) -> None:
-        """Iptali girisin kimligine gonderir ve gonderildigini yazar.
+        """Iptali girisin kimligine gonderir; ulastiysa `cancel_pending` yazar.
 
-        Red tek basina sonuc degil: giris dolmus ya da zaten kapanmis
-        olabilir. Karari terminal durum verir. `cancel_pending` yazilamazsa
-        satir `cancel_requested` kalir; o da izlenen bir durumdur.
+        Hata, istegin brokera ulasmadigi ya da cevabin kayboldugu
+        anlamina gelebilir. Ikisi ayirt edilemedigi icin satir
+        `cancel_requested` kalir ve sonraki tur emrin durumunu okuyarak
+        karar verir (`_confirm_cancel`). Basari ise brokerin istegi
+        aldiginin kanitidir.
         """
+        cid = item.client_order_id
+        self._cancel_attempts[cid] = self._cancel_attempts.get(cid, 0) + 1
         try:
             self.broker.cancel_order(item.broker_order_id)
         except BrokerError:
             log.exception("%s giris emri iptal edilemedi (%s)", item.symbol, item.broker_order_id)
+            self._unconfirmed_cancels.add(cid)
+            return
+        self._mark_cancel_confirmed(item)
+
+    def _mark_cancel_confirmed(self, item: TrackedCancel) -> None:
+        self._unconfirmed_cancels.discard(item.client_order_id)
         self._write_order_status(item, CANCEL_PENDING)
+
+    def _confirm_cancel(self, item: TrackedCancel) -> bool:
+        """Dogrulanmamis iptali uzlastirir; deneme hakki bittiyse False.
+
+        Emir `pending_cancel` ya da terminal ise istek ulasmistir: yeni
+        iptal gonderilmez. Hala aktifse ayni giris kimligine yeniden
+        gonderilir (en fazla MAX_CANCEL_ATTEMPTS). Emir okunamazsa bu
+        turda bir sey gonderilmez; izleme ve giris engeli surer.
+        """
+        try:
+            order = self.broker.get_order(item.broker_order_id)
+        except BrokerError:
+            log.exception("%s giris emri okunamadi (%s)", item.symbol, item.broker_order_id)
+            return True
+        if order.status in CANCEL_ACK_STATUSES:
+            self._mark_cancel_confirmed(item)
+            return True
+        if self._cancel_attempts.get(item.client_order_id, 0) >= MAX_CANCEL_ATTEMPTS:
+            return False
+        self._send_cancel(item)
+        return True
 
     def _resolve_pending_cancels(
         self, positions: dict[str, Position], session: SessionState, result: LoopResult
     ) -> bool:
         """Bellekte ve journal'da izlenen iptalleri cozer.
 
-        Journal'da `cancel_requested` kalmis ve bu surecin belleginde
-        olmayan satirin iptali once yeniden gonderilir: onceki surec
-        niyeti yazip iptali gondermeden (ya da sonucu yazmadan) kapanmis
-        olabilir. Ikinci istek zararsizdir; yalnizca girisin kimligine
-        gider. `cancel_pending` satirina ikinci iptal gitmez.
+        `cancel_requested` (bellekte ya da journal'da) iptalin brokera
+        ulastigi dogrulanmamis demektir: once emrin durumu okunur, ulasmissa
+        yeni istek gitmez, hala aktifse ayni girisin kimligine sinirli
+        sayida yeniden gonderilir (`_confirm_cancel`). Deneme hakki biterse
+        gun kapanir. `cancel_pending` satirina ikinci iptal gitmez.
 
         Korumasiz dolum yuzunden gun kapandiysa False doner.
         """
+        self._cancels_seen_this_turn = set()
         if self.dry_run:
             return True
         tracked = dict(self._pending_cancels)
-        resend: set[str] = set()
         try:
             rows = orders_with_status(self.conn, CANCEL_REQUESTED, CANCEL_PENDING)
         except JournalError:
@@ -548,10 +597,17 @@ class SessionRunner:
                 symbol=str(row["symbol"]),
             )
             if row["status"] == CANCEL_REQUESTED:
-                resend.add(client_order_id)
+                self._unconfirmed_cancels.add(client_order_id)
+        self._cancels_seen_this_turn = set(tracked)
         for item in tracked.values():
-            if item.client_order_id in resend:
-                self._send_cancel(item)
+            if item.client_order_id in self._unconfirmed_cancels and not self._confirm_cancel(item):
+                self._halt_day(
+                    f"iptal iletilemedi: {item.symbol} ({MAX_CANCEL_ATTEMPTS} deneme)",
+                    positions,
+                    session,
+                    result,
+                )
+                return False
             if not self._settle_cancel(item, positions, session, result):
                 return False
         return True
@@ -564,14 +620,19 @@ class SessionRunner:
         result: LoopResult,
     ) -> bool:
         """Iptalin sonucunu uygular; gun kapandiysa False doner."""
-        outcome = self._cancel_outcome(item)
+        outcome = self._cancel_outcome(item, session)
         if outcome is CancelOutcome.PENDING:
             self._pending_cancels[item.client_order_id] = item
-            self._write_order_status(item, CANCEL_PENDING)
+            # Dogrulanmamis iptal `cancel_requested` kalir; bu ayrim
+            # PENDING cozumunde silinmemeli (Codex #63/6993997992).
+            if item.client_order_id not in self._unconfirmed_cancels:
+                self._write_order_status(item, CANCEL_PENDING)
             self._block_entries(result, f"{item.symbol} giris iptali kesinlesmedi")
             return True
 
         self._pending_cancels.pop(item.client_order_id, None)
+        self._unconfirmed_cancels.discard(item.client_order_id)
+        self._cancel_attempts.pop(item.client_order_id, None)
         if outcome is CancelOutcome.CANCELED:
             self._write_order_status(item, "canceled")
             result.cancelled += 1
@@ -589,7 +650,7 @@ class SessionRunner:
         self._halt_unprotected(item.symbol, positions, session, result)
         return False
 
-    def _cancel_outcome(self, item: TrackedCancel) -> CancelOutcome:
+    def _cancel_outcome(self, item: TrackedCancel, session: SessionState) -> CancelOutcome:
         """Iptalin sonucunu girisin KENDI durumundan cikarir.
 
         Iptal isteginin kabulu ya da girisin acik listeden kaybolmasi
@@ -617,15 +678,20 @@ class SessionRunner:
         terminal = order.status in TERMINAL_ORDER_STATUSES
         if order.filled_qty == 0 or (not terminal and order.filled_qty is None):
             return CancelOutcome.CANCELED if terminal else CancelOutcome.PENDING
-        if not self._fill_is_protected(item, order):
+        if not self._fill_is_protected(item, order, session):
             return CancelOutcome.UNPROTECTED
         return CancelOutcome.FILLED if terminal else CancelOutcome.PENDING
 
-    def _fill_is_protected(self, item: TrackedCancel, order: OrderRef) -> bool:
+    def _fill_is_protected(
+        self, item: TrackedCancel, order: OrderRef, session: SessionState
+    ) -> bool:
         """Dolan miktari stop bacaklari kapsiyor mu; okunamazsa False.
 
-        Gereken miktar emrin kendi dolumundan gelir; pozisyon okumasi
-        dolumu henuz gostermese de kontrol yapilir.
+        Ayni seansta gereken miktar `max(dolum, pozisyon)`: pozisyon
+        okumasi dolumu henuz gostermiyor olabilir. Giris onceki bir
+        seanstansa bu gecikme mumkun degil; tutulan miktar brokerdaki
+        pozisyondur. Pozisyon yoksa hesap duz dogrulanmistir (Codex
+        #63/6993997992); varsa normal kapsam kontrolu yapilir.
         """
         try:
             position = next(
@@ -636,7 +702,12 @@ class SessionRunner:
             log.exception("%s dolum sonrasi broker durumu okunamadi", item.symbol)
             return False
 
-        required = max(order.filled_qty or 0.0, position.qty if position else 0.0)
+        same_session = order.submitted_at.astimezone(UTC) >= session.session_open
+        held = position.qty if position else 0.0
+        if not same_session and held == 0:
+            return True
+        filled = (order.filled_qty or 0.0) if same_session else 0.0
+        required = max(filled, held)
         entry_side = position.side if position else order.side
         if required <= 0 or entry_side is None:
             return False
@@ -664,6 +735,15 @@ class SessionRunner:
         Kalici gun karari ise her turda `_flatten_all`'u yeniden dener.
         """
         reason = f"koruma dogrulanamadi: {symbol} girisi iptal sirasinda doldu"
+        self._halt_day(reason, positions, session, result)
+
+    def _halt_day(
+        self,
+        reason: str,
+        positions: dict[str, Position],
+        session: SessionState,
+        result: LoopResult,
+    ) -> None:
         self._record_halt(session.now.date(), reason, result)
         result.halted = True
         result.flattened = self._flatten_all(positions, ExitReason.KILL_SWITCH)

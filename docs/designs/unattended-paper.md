@@ -228,7 +228,7 @@ kullanıcı isterse.
           Kısmen dolmuş girişin kalan miktarı bekler; bu miktar risk
           kapısından geçmiş ilk emrin parçasıdır.
       - İptal/dolum yarışı (Codex #63/6777889127, 6840456161, 6844629736,
-        6863854867):
+        6863854867, 6993997992):
         bayat giriş
         iptali (hem TTL hem `entries_blocked` yolu) yalnız girişin
         `broker_order_id`'sine gider (`Broker.cancel_order`). Sembol bazlı
@@ -264,6 +264,23 @@ kullanıcı isterse.
           gönderir (ilk istek hiç gitmemiş ya da sonucu yazılmamış olabilir;
           ikinci istek yalnız girişin kimliğine gider ve zararsızdır), sonra
           sonucu çözer. `cancel_pending` satırına ikinci iptal gitmez.
+        - **Ulaşamayan iptal (Codex #63/6993997992 P1):** `cancel_pending`
+          yalnız brokerın iptali ALDIĞI doğrulanınca yazılır: çağrı hatasız
+          döndü ya da emir `pending_cancel`/terminal görüldü. Çağrı hata
+          verirse satır `cancel_requested` kalır; PENDING çözümü bu ayrımı
+          silmez. Sonraki tur önce emri okur: ulaşmışsa yeni istek gitmez
+          (cevabı kaybolan istek), hâlâ aktifse aynı giriş kimliğine yeniden
+          gönderilir. Süreç başına en fazla `MAX_CANCEL_ATTEMPTS` (3) deneme;
+          aşılırsa gün kill-switch ile kapanır ("iptal iletilemedi") ve
+          `_flatten_all` bütün emirleri iptal edip kapatmayı her turda
+          yeniden dener.
+        - **Önceki seanstan kalan iz (P2):** koruma kontrolünde `filled_qty`
+          yalnız aynı seansta kullanılır (pozisyon okuması dolumu henüz
+          göstermeyebilir). Giriş önceki bir seanstansa tutulan miktar
+          brokerdaki pozisyondur: pozisyon yoksa hesap düz doğrulanmıştır ve
+          takip kapanır; pozisyon varsa normal kapsam kontrolü yapılır.
+          Yalnız tarihe bakıp satırı atlamak açık kalan pozisyonu
+          kaçırırdı.
         - **Koruma kuralı:** sembolde çıkış yönünde, `stop_price` taşıyan
           açık emirlerin kalan miktar toplamı ≥ `max(filled_qty, pozisyon
           miktarı)`. Gereken miktar emrin kendi dolumundan gelir; pozisyon
