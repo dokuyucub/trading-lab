@@ -85,6 +85,17 @@ CANCEL_PENDING = "cancel_pending"
 CANCEL_ACK_STATUSES = frozenset({"pending_cancel"}) | TERMINAL_ORDER_STATUSES
 """Iptal isteginin brokera ulastigini gosteren emir durumlari."""
 
+PROTECTIVE_STATUSES = frozenset(
+    {"new", "accepted", "pending_new", "accepted_for_bidding", "partially_filled"}
+)
+"""Koruma KANITI sayilan cikis emri durumlari (pozitif liste).
+
+`pending_cancel`, `pending_replace`, `held` ve bilinmeyen her durum koruma
+sayilmaz (Codex #63/7115896065, 7116120239). Alpaca bracket bacaklari ebeveyn
+tamamen dolunca etkinlesir; `held`in tam dolumdan sonra calistigi bu repoda
+dogrulanmadi, bu yuzden fail-closed disarida (unattended-paper.md §4).
+"""
+
 MAX_CANCEL_ATTEMPTS = 3
 """Ulasamayan iptal icin surec basina en fazla deneme (ilk gonderim dahil).
 Asilirsa gun kill-switch ile kapanir; `_flatten_all` her turda butun
@@ -109,15 +120,27 @@ class TrackedCancel:
     symbol: str
 
 
-def stops_cover(exit_side: Side, qty: float, orders: list[OrderRef]) -> bool:
-    """Cikis yonunde, stop fiyatli acik emirler `qty` miktari kapsiyor mu.
+def may_still_execute(order: OrderRef, exit_side: Side) -> bool:
+    """Cikis yonunde ve hala gerceklesebilir mi: terminal degilse evet.
 
-    Kalan miktari bilinmeyen emir kapsam saymaz (fail-closed).
+    Koruma kanitindan ayri bir sorudur: `pending_cancel`, `held` ya da
+    bilinmeyen durumdaki emir koruma sayilmaz ama dolabilir.
+    """
+    return order.side is exit_side and order.status not in TERMINAL_ORDER_STATUSES
+
+
+def stops_cover(exit_side: Side, qty: float, orders: list[OrderRef]) -> bool:
+    """Cikis yonunde, koruma kaniti olan stop emirleri `qty` miktari kapsiyor mu.
+
+    Kalan miktari bilinmeyen emir ve `PROTECTIVE_STATUSES` disindaki her
+    durum kapsam saymaz (fail-closed).
     """
     covered = sum(
         order.remaining_qty or 0.0
         for order in orders
-        if order.side is exit_side and order.stop_price is not None
+        if order.side is exit_side
+        and order.status in PROTECTIVE_STATUSES
+        and order.stop_price is not None
     )
     return covered >= qty
 
@@ -705,7 +728,11 @@ class SessionRunner:
         same_session = order.submitted_at.astimezone(UTC) >= session.session_open
         held = position.qty if position else 0.0
         if not same_session and held == 0:
-            return True
+            # Duz hesap ancak sembolde etkin cikis emri de yoksa dogrulanir.
+            # Kalan bir stop ya da hedef dolarsa ters pozisyon acar; sahipligi
+            # kimlikle kanitlanamadigi icin gun kapanir ve `_flatten_all`
+            # butun emirleri iptal eder (Codex #63/7115896065).
+            return not self._has_orphan_exit(item, order, symbol_orders)
         filled = (order.filled_qty or 0.0) if same_session else 0.0
         required = max(filled, held)
         entry_side = position.side if position else order.side
@@ -713,6 +740,20 @@ class SessionRunner:
             return False
         exit_side = Side.SELL if entry_side is Side.BUY else Side.BUY
         return stops_cover(exit_side, required, symbol_orders)
+
+    @staticmethod
+    def _has_orphan_exit(item: TrackedCancel, order: OrderRef, orders: list[OrderRef]) -> bool:
+        """Pozisyon yokken sembolde hala gerceklesebilecek bir cikis emri var mi."""
+        if order.side is None:
+            # Yon bilinmiyorsa girisin kendisi disindaki her terminal olmayan
+            # emir sayilir.
+            return any(
+                o.broker_order_id != item.broker_order_id
+                and o.status not in TERMINAL_ORDER_STATUSES
+                for o in orders
+            )
+        exit_side = Side.SELL if order.side is Side.BUY else Side.BUY
+        return any(may_still_execute(o, exit_side) for o in orders)
 
     def _write_order_status(self, item: TrackedCancel, status: str) -> None:
         """Durumu journal'a yazar; yazilamazsa izleme bellekte surer."""

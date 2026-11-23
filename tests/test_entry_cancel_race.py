@@ -892,3 +892,159 @@ def test_a_covered_position_left_from_an_old_fill_closes_the_tracking(
     assert not result.halted
     assert status_of(s.conn, s.entry) == "filled"
     assert leg_ids(s.broker) == ["leg-stop", "leg-target"]
+
+
+# --------------------------------------------------------------------------
+# Koruma kaniti ile gerceklesme ihtimali ayri sorular
+# (Codex #63/7115896065, 7116120239)
+# --------------------------------------------------------------------------
+
+NOT_PROTECTIVE = ["pending_cancel", "pending_replace", "held", "beklenmeyen_durum"]
+
+
+def legs_with_stop_status(order: BracketOrder, stop_status: str) -> list[OrderRef]:
+    stop, target = legs(order, stop_qty=order.qty)
+    return [stop.model_copy(update={"status": stop_status}), target]
+
+
+@pytest.mark.parametrize("stop_status", NOT_PROTECTIVE)
+@pytest.mark.parametrize("path", PATHS)
+def test_a_stop_without_protective_status_is_not_protection(
+    path: str, stop_status: str, config: Config, tmp_path: Path
+) -> None:
+    """Iptali/degisimi suren, `held` ya da bilinmeyen durumlu stop korumaz.
+
+    `held` bilincli olarak fail-closed: tam dolumdan sonra calistigi bu
+    repoda dogrulanmadi (unattended-paper.md §4).
+    """
+    s = prepare(path, config, tmp_path)
+
+    def fill(broker: RacingBroker) -> None:
+        settle(broker, s.entry, "filled", s.order.qty)
+        hold_position(broker, s.order, s.order.qty)
+        broker.open_orders.extend(legs_with_stop_status(s.order, stop_status))
+
+    s.broker.on_cancel = fill
+    result = s.runner.run_once()
+
+    assert result.halted
+    assert "KILL-SWITCH: koruma dogrulanamadi: SPY" in " ".join(result.notes)
+    assert status_of(s.conn, s.entry) != "filled"
+    assert s.broker.closed == ["SPY"]
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_a_held_stop_under_a_partially_filled_parent_is_not_protection(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """Ebeveyn kismi dolumda: bacaklar henuz etkin degil (`held`)."""
+    s = prepare(path, config, tmp_path)
+
+    def partial(broker: RacingBroker) -> None:
+        broker.open_orders = [
+            o.model_copy(update={"status": "partially_filled", "filled_qty": 5.0})
+            if o.broker_order_id == s.entry.broker_order_id
+            else o
+            for o in broker.open_orders
+        ]
+        hold_position(broker, s.order, 5.0)
+        stop, target = legs(s.order, stop_qty=5.0)
+        broker.open_orders.extend(
+            [
+                stop.model_copy(update={"status": "held"}),
+                target.model_copy(update={"status": "held"}),
+            ]
+        )
+
+    s.broker.hold_cancel = True
+    s.broker.on_cancel = partial
+    result = s.runner.run_once()
+
+    assert result.halted
+    assert "KILL-SWITCH: koruma dogrulanamadi: SPY" in " ".join(result.notes)
+    assert s.broker.closed == ["SPY"]
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_a_new_stop_leg_is_protection(path: str, config: Config, tmp_path: Path) -> None:
+    """Karsilastirma: ayni senaryoda `new` stop korur, gun kapanmaz."""
+    s = prepare(path, config, tmp_path)
+
+    def fill(broker: RacingBroker) -> None:
+        settle(broker, s.entry, "filled", s.order.qty)
+        hold_position(broker, s.order, s.order.qty)
+        broker.open_orders.extend(legs_with_stop_status(s.order, "new"))
+
+    s.broker.on_cancel = fill
+    result = s.runner.run_once()
+
+    assert not result.halted
+    assert status_of(s.conn, s.entry) == "filled"
+    assert s.broker.closed == []
+
+
+def session_after(s: Setup, days: int) -> SessionRunner:
+    """`LATER`dan `days` gun sonraki acik seans, yeni surec."""
+    now = LATER + timedelta(days=days)
+    s.broker.clock = FakeClock(
+        is_open=True,
+        next_open=now - timedelta(minutes=30),
+        next_close=now + timedelta(hours=6),
+    )
+    s.runner = build_runner(config=s.config, conn=s.conn, broker=s.broker, market=s.market, now=now)
+    return s.runner
+
+
+def halt_on_an_orphan_exit(s: Setup, stop_status: str) -> None:
+    """Pozisyon sifir, onceki seanstan `stop_status` durumlu satis stopu kalmis."""
+    halt_on_an_unprotected_fill(s)
+    stop, _ = legs(s.order, stop_qty=s.order.qty)
+    s.broker.open_orders.append(stop.model_copy(update={"status": stop_status}))
+
+    result = next_session(s).run_once()
+
+    assert result.halted
+    assert "koruma dogrulanamadi: SPY" in " ".join(result.notes)
+    # Guvenli kapatma butun emirleri iptal eder; kalan stop dusurulur.
+    assert s.broker.cancelled[-1] is None
+    assert leg_ids(s.broker) == []
+    # Iz korunur: broker sonucu bildirene kadar her seans yeniden uzlastirilir.
+    assert status_of(s.conn, s.entry) in ("cancel_requested", "cancel_pending")
+
+
+@pytest.mark.parametrize("stop_status", ["new", *NOT_PROTECTIVE])
+@pytest.mark.parametrize("path", PATHS)
+def test_an_orphan_exit_that_was_cancelled_leaves_a_flat_account(
+    path: str, stop_status: str, config: Config, tmp_path: Path
+) -> None:
+    """Kalan cikis emri (iptali surse de) gerceklesebilir; iptal kesinlesince duz."""
+    s = prepare(path, config, tmp_path)
+    halt_on_an_orphan_exit(s, stop_status)
+
+    # Sonraki seans: iptal kesinlesti, pozisyon da emir de yok.
+    after = session_after(s, 1).run_once()
+
+    assert not after.halted
+    assert status_of(s.conn, s.entry) == "filled"
+    assert not s.runner.run_once().halted
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_an_orphan_exit_that_filled_is_closed_in_the_next_session(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """`pending_cancel` stop iptalden once doldu: ters pozisyon (SELL 5)."""
+    s = prepare(path, config, tmp_path)
+    halt_on_an_orphan_exit(s, "pending_cancel")
+    price = s.order.limit_price or 100.0
+    s.broker.positions = [
+        Position(symbol="SPY", side=Side.SELL, qty=5.0, avg_entry_price=price, current_price=price)
+    ]
+
+    after = session_after(s, 1).run_once()
+
+    assert after.halted
+    assert "koruma dogrulanamadi: SPY" in " ".join(after.notes)
+    assert s.broker.closed[-1] == "SPY"
+    assert s.broker.positions == []
+    assert status_of(s.conn, s.entry) != "filled"

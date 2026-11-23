@@ -228,7 +228,8 @@ kullanıcı isterse.
           Kısmen dolmuş girişin kalan miktarı bekler; bu miktar risk
           kapısından geçmiş ilk emrin parçasıdır.
       - İptal/dolum yarışı (Codex #63/6777889127, 6840456161, 6844629736,
-        6863854867, 6993997992):
+        6863854867, 6993997992, 7115896065,
+        7116120239):
         bayat giriş
         iptali (hem TTL hem `entries_blocked` yolu) yalnız girişin
         `broker_order_id`'sine gider (`Broker.cancel_order`). Sembol bazlı
@@ -281,8 +282,33 @@ kullanıcı isterse.
           takip kapanır; pozisyon varsa normal kapsam kontrolü yapılır.
           Yalnız tarihe bakıp satırı atlamak açık kalan pozisyonu
           kaçırırdı.
+        - **Koruma kanıtı ile gerçekleşme ihtimali ayrı sorular (Codex
+          #63/7115896065, 7116120239):**
+          - *Koruma kanıtı* pozitif listedir: kapsam yalnız `new`,
+            `accepted`, `pending_new`, `accepted_for_bidding` ve
+            `partially_filled` durumundaki stoplardan hesaplanır.
+            `pending_cancel`, `pending_replace`, `held` ve listede olmayan
+            her durum koruma sayılmaz.
+          - **`held` doğrulanmadı.** Alpaca bracket bacakları ebeveyn
+            tamamen dolunca etkinleşir. Ebeveyn kısmi dolumdayken `held`
+            stop kesinlikle korumaz. Tam dolumdan sonra `held` gösterilen
+            bir stopun çalıştığına dair bu repoda doğrulanmış bir belge
+            yok; bu yüzden fail-closed olarak o da koruma sayılmaz. Bedeli:
+            Alpaca bu durumu gösteriyorsa, nadir iptal/dolum yarışında gün
+            gereksiz kapanabilir. İlk paper günlerinde bacak durumları
+            gözlenir; gevşetme ayrı karar gerektirir.
+          - *Gerçekleşme ihtimali* terminal olmayan her çıkış emri içindir:
+            iptali süren, `held` ya da bilinmeyen durumdaki emir koruma
+            sayılmasa da dolabilir.
+          - Önceki seansın girişinde pozisyon sıfırsa hesap ancak sembolde
+            gerçekleşebilecek bir çıkış emri (stop ya da hedef) da kalmadıysa
+            düz sayılır. Kalmışsa gün kapanır, `_flatten_all` bütün emirleri
+            iptal eder ve takip korunur. Sonraki seansta iptal kesinleşmiş,
+            pozisyon ve emir yoksa takip kapanır. Emir iptalden önce dolup
+            ters pozisyon açtıysa o pozisyon korumasız sayılır, gün kapanır
+            ve pozisyon kapatılır.
         - **Koruma kuralı:** sembolde çıkış yönünde, `stop_price` taşıyan
-          açık emirlerin kalan miktar toplamı ≥ `max(filled_qty, pozisyon
+          ve koruma kanıtı durumundaki açık emirlerin kalan miktar toplamı ≥ `max(filled_qty, pozisyon
           miktarı)`. Gereken miktar emrin kendi dolumundan gelir; pozisyon
           okuması dolumu henüz göstermese de kontrol yapılır. Kalan
           miktarı bilinmeyen emir kapsam sayılmaz.
