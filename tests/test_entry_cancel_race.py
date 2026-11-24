@@ -38,7 +38,7 @@ from conftest import make_account
 from test_runner import NOW, FakeBroker, FakeClock, FakeMarket, breakout_bars, build_runner
 from tlab.config import Config, load_config
 from tlab.core.types import BracketOrder, OrderRef, Position, Side
-from tlab.engine.runner import SessionRunner
+from tlab.engine.runner import MAX_COVER_WAIT_TURNS, LoopResult, SessionRunner
 from tlab.errors import BrokerError, JournalError
 from tlab.journal.db import apply_migrations, connect
 from tlab.journal.queries import halt_reason
@@ -1048,3 +1048,150 @@ def test_an_orphan_exit_that_filled_is_closed_in_the_next_session(
     assert s.broker.closed[-1] == "SPY"
     assert s.broker.positions == []
     assert status_of(s.conn, s.entry) != "filled"
+
+
+# --------------------------------------------------------------------------
+# Gecis durumundaki stop koruma kaniti degil (Codex #63/7139373707)
+# --------------------------------------------------------------------------
+
+TRANSITIONAL = ["accepted", "pending_new", "accepted_for_bidding"]
+
+
+def fill_with_stop_status(s: Setup, stop_status: str) -> None:
+    """Iptal sirasinda giris tamamen dolar; tek satis stopu `stop_status`."""
+
+    def fill(broker: RacingBroker) -> None:
+        settle(broker, s.entry, "filled", s.order.qty)
+        hold_position(broker, s.order, s.order.qty)
+        broker.open_orders.extend(legs_with_stop_status(s.order, stop_status))
+
+    s.broker.on_cancel = fill
+
+
+def set_stop_status(broker: FakeBroker, status: str) -> None:
+    broker.open_orders = [
+        o.model_copy(update={"status": status}) if o.broker_order_id == "leg-stop" else o
+        for o in broker.open_orders
+    ]
+
+
+def assert_still_waiting(s: Setup, result: LoopResult) -> None:
+    assert not result.halted
+    assert result.entries_blocked
+    assert status_of(s.conn, s.entry) != "filled"
+    assert s.broker.closed == []
+
+
+@pytest.mark.parametrize("stop_status", TRANSITIONAL)
+@pytest.mark.parametrize("path", PATHS)
+def test_a_transitional_stop_keeps_the_fill_tracked_until_it_is_rejected(
+    path: str, stop_status: str, config: Config, tmp_path: Path
+) -> None:
+    """Stop borsaya ulasmadan takip `filled` ile kapanmaz; reddedilirse gun kapanir."""
+    s = prepare(path, config, tmp_path)
+    fill_with_stop_status(s, stop_status)
+
+    assert_still_waiting(s, s.runner.run_once())
+
+    # Stop reddedildi: acik listeden cikar.
+    s.broker.open_orders = [o for o in s.broker.open_orders if o.broker_order_id != "leg-stop"]
+    result = s.runner.run_once()
+
+    assert result.halted
+    assert "KILL-SWITCH: koruma dogrulanamadi: SPY" in " ".join(result.notes)
+    assert s.broker.closed == ["SPY"]
+    assert status_of(s.conn, s.entry) != "filled"
+
+
+@pytest.mark.parametrize("stop_status", TRANSITIONAL)
+@pytest.mark.parametrize("path", PATHS)
+def test_a_transitional_stop_that_becomes_new_closes_the_tracking(
+    path: str, stop_status: str, config: Config, tmp_path: Path
+) -> None:
+    s = prepare(path, config, tmp_path)
+    fill_with_stop_status(s, stop_status)
+
+    assert_still_waiting(s, s.runner.run_once())
+
+    set_stop_status(s.broker, "new")
+    result = s.runner.run_once()
+
+    assert not result.halted
+    assert status_of(s.conn, s.entry) == "filled"
+    assert s.broker.closed == []
+    assert leg_ids(s.broker) == ["leg-stop", "leg-target"]
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_a_stop_stuck_in_transition_halts_the_day(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """Koruma MAX_COVER_WAIT_TURNS turda kanitlanmazsa gun kapanir."""
+    s = prepare(path, config, tmp_path)
+    fill_with_stop_status(s, "accepted")
+
+    for _ in range(MAX_COVER_WAIT_TURNS - 1):
+        assert_still_waiting(s, s.runner.run_once())
+    result = s.runner.run_once()
+
+    assert result.halted
+    assert "KILL-SWITCH: koruma dogrulanamadi: SPY" in " ".join(result.notes)
+    assert s.broker.closed == ["SPY"]
+
+
+def mixed_stops(order: BracketOrder, *, new_qty: float, accepted_qty: float) -> list[OrderRef]:
+    stop, target = legs(order, stop_qty=new_qty)
+    extra = stop.model_copy(
+        update={
+            "broker_order_id": "leg-stop-2",
+            "client_order_id": "alpaca-leg-stop-2",
+            "status": "accepted",
+            "remaining_qty": accepted_qty,
+        }
+    )
+    return [stop, extra, target]
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_protective_stops_alone_decide_the_cover(path: str, config: Config, tmp_path: Path) -> None:
+    """Gecis durumundaki fazla stop kapsami ne tamamlar ne de bozar."""
+    s = prepare(path, config, tmp_path)
+    qty = s.order.qty
+
+    def short_cover(broker: RacingBroker) -> None:
+        settle(broker, s.entry, "filled", qty)
+        hold_position(broker, s.order, qty)
+        broker.open_orders.extend(mixed_stops(s.order, new_qty=qty - 1, accepted_qty=1))
+
+    s.broker.on_cancel = short_cover
+    assert_still_waiting(s, s.runner.run_once())
+
+    # Ayni gun, ikinci stop da etkinlesti; artik `new` stoplar yetiyor.
+    set_stop_status(s.broker, "new")
+    s.broker.open_orders = [
+        o.model_copy(update={"remaining_qty": qty}) if o.broker_order_id == "leg-stop" else o
+        for o in s.broker.open_orders
+    ]
+    result = s.runner.run_once()
+
+    assert not result.halted
+    assert status_of(s.conn, s.entry) == "filled"
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_a_transitional_extra_stop_does_not_delay_a_covered_fill(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    s = prepare(path, config, tmp_path)
+    qty = s.order.qty
+
+    def covered(broker: RacingBroker) -> None:
+        settle(broker, s.entry, "filled", qty)
+        hold_position(broker, s.order, qty)
+        broker.open_orders.extend(mixed_stops(s.order, new_qty=qty, accepted_qty=1))
+
+    s.broker.on_cancel = covered
+    result = s.runner.run_once()
+
+    assert not result.halted
+    assert status_of(s.conn, s.entry) == "filled"

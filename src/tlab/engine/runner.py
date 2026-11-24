@@ -85,9 +85,7 @@ CANCEL_PENDING = "cancel_pending"
 CANCEL_ACK_STATUSES = frozenset({"pending_cancel"}) | TERMINAL_ORDER_STATUSES
 """Iptal isteginin brokera ulastigini gosteren emir durumlari."""
 
-PROTECTIVE_STATUSES = frozenset(
-    {"new", "accepted", "pending_new", "accepted_for_bidding", "partially_filled"}
-)
+PROTECTIVE_STATUSES = frozenset({"new", "partially_filled"})
 """Koruma KANITI sayilan cikis emri durumlari (pozitif liste).
 
 `pending_cancel`, `pending_replace`, `held` ve bilinmeyen her durum koruma
@@ -95,6 +93,18 @@ sayilmaz (Codex #63/7115896065, 7116120239). Alpaca bracket bacaklari ebeveyn
 tamamen dolunca etkinlesir; `held`in tam dolumdan sonra calistigi bu repoda
 dogrulanmadi, bu yuzden fail-closed disarida (unattended-paper.md §4).
 """
+
+TRANSITIONAL_STATUSES = frozenset({"accepted", "pending_new", "accepted_for_bidding"})
+"""Borsaya henuz iletilmemis ya da kabul edilmemis cikis emri durumlari.
+
+Koruma kaniti degildir; emir sonradan `rejected` olabilir (Codex
+#63/7139373707, Alpaca Order Lifecycle). Kapsam yalniz bunlarla
+tamamlaniyorsa takip kapanmaz, sinirli sure beklenir (`MAX_COVER_WAIT_TURNS`).
+"""
+
+MAX_COVER_WAIT_TURNS = 3
+"""Kapsami gecis durumundaki stoplara bagli dolum icin en fazla tur (ilk
+gorulme dahil). Asilirsa dolum korumasiz sayilir ve gun kapanir."""
 
 MAX_CANCEL_ATTEMPTS = 3
 """Ulasamayan iptal icin surec basina en fazla deneme (ilk gonderim dahil).
@@ -109,6 +119,17 @@ class CancelOutcome(Enum):
     PENDING = "pending"
     FILLED = "filled"
     UNPROTECTED = "unprotected"
+
+
+class Coverage(Enum):
+    """Dolan miktarin stop bacaklariyla korunma durumu."""
+
+    COVERED = "covered"
+    """Koruma kaniti olan stoplar tek basina yetiyor."""
+    WAITING = "waiting"
+    """Kapsam ancak gecis durumundaki stoplarla tamamlaniyor."""
+    NONE = "none"
+    """Kapsam yok ya da durum okunamadi."""
 
 
 @dataclass(frozen=True)
@@ -129,20 +150,27 @@ def may_still_execute(order: OrderRef, exit_side: Side) -> bool:
     return order.side is exit_side and order.status not in TERMINAL_ORDER_STATUSES
 
 
-def stops_cover(exit_side: Side, qty: float, orders: list[OrderRef]) -> bool:
-    """Cikis yonunde, koruma kaniti olan stop emirleri `qty` miktari kapsiyor mu.
+def stop_coverage(exit_side: Side, qty: float, orders: list[OrderRef]) -> Coverage:
+    """Cikis yonundeki stop emirleri `qty` miktari kapsiyor mu.
 
-    Kalan miktari bilinmeyen emir ve `PROTECTIVE_STATUSES` disindaki her
-    durum kapsam saymaz (fail-closed).
+    Kapsam once yalniz `PROTECTIVE_STATUSES` ile olculur; yetmezse
+    `TRANSITIONAL_STATUSES` eklenince yetip yetmedigine bakilir (WAITING).
+    Kalan miktari bilinmeyen emir ve iki kumenin disindaki her durum kapsam
+    saymaz (fail-closed).
     """
-    covered = sum(
-        order.remaining_qty or 0.0
-        for order in orders
-        if order.side is exit_side
-        and order.status in PROTECTIVE_STATUSES
-        and order.stop_price is not None
-    )
-    return covered >= qty
+
+    def total(statuses: frozenset[str]) -> float:
+        return sum(
+            order.remaining_qty or 0.0
+            for order in orders
+            if order.side is exit_side and order.status in statuses and order.stop_price is not None
+        )
+
+    if total(PROTECTIVE_STATUSES) >= qty:
+        return Coverage.COVERED
+    if total(PROTECTIVE_STATUSES | TRANSITIONAL_STATUSES) >= qty:
+        return Coverage.WAITING
+    return Coverage.NONE
 
 
 @dataclass
@@ -234,6 +262,8 @@ class SessionRunner:
         """Iptali gonderilen ama brokerin aldigi dogrulanmamis girisler."""
         self._cancel_attempts: dict[str, int] = {}
         """Giris basina bu surecte yapilan iptal gonderimi sayisi."""
+        self._cover_waits: dict[str, int] = {}
+        """Giris basina kapsami gecis durumundaki stoplara bagli tur sayisi."""
         self._cancels_seen_this_turn: set[str] = set()
         """Bu turun basinda izlemede olan girisler (cozulen ya da suren).
         Turun basindaki acik emir listesi onlari hala gosterebilir; bayat
@@ -656,6 +686,7 @@ class SessionRunner:
         self._pending_cancels.pop(item.client_order_id, None)
         self._unconfirmed_cancels.discard(item.client_order_id)
         self._cancel_attempts.pop(item.client_order_id, None)
+        self._cover_waits.pop(item.client_order_id, None)
         if outcome is CancelOutcome.CANCELED:
             self._write_order_status(item, "canceled")
             result.cancelled += 1
@@ -692,6 +723,10 @@ class SessionRunner:
             da durum okunamiyorsa UNPROTECTED; kapsiyorsa terminalde
             FILLED, degilse PENDING. PENDING her turda yeniden
             degerlendirildigi icin dolum arttikca kapsam yeniden olculur.
+          * kapsam yalniz gecis durumundaki stoplarla tamamlaniyorsa
+            (WAITING) takip kapanmaz: PENDING, giris engeli surer.
+            `MAX_COVER_WAIT_TURNS` turda koruma kanitlanmazsa UNPROTECTED
+            (Codex #63/7139373707).
         """
         try:
             order = self.broker.get_order(item.broker_order_id)
@@ -701,14 +736,24 @@ class SessionRunner:
         terminal = order.status in TERMINAL_ORDER_STATUSES
         if order.filled_qty == 0 or (not terminal and order.filled_qty is None):
             return CancelOutcome.CANCELED if terminal else CancelOutcome.PENDING
-        if not self._fill_is_protected(item, order, session):
+        coverage = self._fill_coverage(item, order, session)
+        if coverage is Coverage.NONE:
             return CancelOutcome.UNPROTECTED
+        cid = item.client_order_id
+        if coverage is Coverage.WAITING:
+            waits = self._cover_waits.get(cid, 0) + 1
+            self._cover_waits[cid] = waits
+            if waits >= MAX_COVER_WAIT_TURNS:
+                return CancelOutcome.UNPROTECTED
+            log.warning("%s dolumu gecis durumundaki stopla kapsaniyor; bekleniyor", item.symbol)
+            return CancelOutcome.PENDING
+        self._cover_waits.pop(cid, None)
         return CancelOutcome.FILLED if terminal else CancelOutcome.PENDING
 
-    def _fill_is_protected(
+    def _fill_coverage(
         self, item: TrackedCancel, order: OrderRef, session: SessionState
-    ) -> bool:
-        """Dolan miktari stop bacaklari kapsiyor mu; okunamazsa False.
+    ) -> Coverage:
+        """Dolan miktari stop bacaklari kapsiyor mu; okunamazsa NONE.
 
         Ayni seansta gereken miktar `max(dolum, pozisyon)`: pozisyon
         okumasi dolumu henuz gostermiyor olabilir. Giris onceki bir
@@ -723,7 +768,7 @@ class SessionRunner:
             symbol_orders = [o for o in self.broker.list_open_orders() if o.symbol == item.symbol]
         except BrokerError:
             log.exception("%s dolum sonrasi broker durumu okunamadi", item.symbol)
-            return False
+            return Coverage.NONE
 
         same_session = order.submitted_at.astimezone(UTC) >= session.session_open
         held = position.qty if position else 0.0
@@ -732,14 +777,16 @@ class SessionRunner:
             # Kalan bir stop ya da hedef dolarsa ters pozisyon acar; sahipligi
             # kimlikle kanitlanamadigi icin gun kapanir ve `_flatten_all`
             # butun emirleri iptal eder (Codex #63/7115896065).
-            return not self._has_orphan_exit(item, order, symbol_orders)
+            if self._has_orphan_exit(item, order, symbol_orders):
+                return Coverage.NONE
+            return Coverage.COVERED
         filled = (order.filled_qty or 0.0) if same_session else 0.0
         required = max(filled, held)
         entry_side = position.side if position else order.side
         if required <= 0 or entry_side is None:
-            return False
+            return Coverage.NONE
         exit_side = Side.SELL if entry_side is Side.BUY else Side.BUY
-        return stops_cover(exit_side, required, symbol_orders)
+        return stop_coverage(exit_side, required, symbol_orders)
 
     @staticmethod
     def _has_orphan_exit(item: TrackedCancel, order: OrderRef, orders: list[OrderRef]) -> bool:

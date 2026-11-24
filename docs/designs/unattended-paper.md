@@ -229,7 +229,7 @@ kullanıcı isterse.
           kapısından geçmiş ilk emrin parçasıdır.
       - İptal/dolum yarışı (Codex #63/6777889127, 6840456161, 6844629736,
         6863854867, 6993997992, 7115896065,
-        7116120239):
+        7116120239, 7139373707):
         bayat giriş
         iptali (hem TTL hem `entries_blocked` yolu) yalnız girişin
         `broker_order_id`'sine gider (`Broker.cancel_order`). Sembol bazlı
@@ -284,11 +284,22 @@ kullanıcı isterse.
           kaçırırdı.
         - **Koruma kanıtı ile gerçekleşme ihtimali ayrı sorular (Codex
           #63/7115896065, 7116120239):**
-          - *Koruma kanıtı* pozitif listedir: kapsam yalnız `new`,
-            `accepted`, `pending_new`, `accepted_for_bidding` ve
+          - *Koruma kanıtı* pozitif listedir: kapsam yalnız `new` ve
             `partially_filled` durumundaki stoplardan hesaplanır.
             `pending_cancel`, `pending_replace`, `held` ve listede olmayan
             her durum koruma sayılmaz.
+          - *Geçiş durumu* (Codex #63/7139373707): `accepted` (henüz
+            borsaya iletilmedi), `pending_new` (borsa henüz kabul etmedi)
+            ve `accepted_for_bidding` durumundaki stop sonradan `rejected`
+            olabilir ([Alpaca Order Lifecycle](https://docs.alpaca.markets/us/docs/orders-at-alpaca#order-lifecycle)).
+            Kapsam ancak bu stoplarla tamamlanıyorsa takip `filled` ile
+            kapanmaz. Durum değişmez, yeni giriş engellenir ve kapsam her
+            turda yeniden ölçülür. Stop `new` olursa takip kapanır;
+            reddedilirse dolum korumasız sayılır ve gün kapanır. Koruma
+            `MAX_COVER_WAIT_TURNS` (3) turda kanıtlanmazsa da gün kapanır.
+            Sayaç süreç belleğinde tutulur; yeniden başlatmada sıfırlanır,
+            ama bu sırada giriş engeli sürer. `held` bu yola girmez:
+            ebeveyn kısmi dolumda kalırsa bacak hiç etkinleşmeyebilir.
           - **`held` doğrulanmadı.** Alpaca bracket bacakları ebeveyn
             tamamen dolunca etkinleşir. Ebeveyn kısmi dolumdayken `held`
             stop kesinlikle korumaz. Tam dolumdan sonra `held` gösterilen
