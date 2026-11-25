@@ -1,22 +1,18 @@
 # S1 — Hata Avı: PR #63, `05b391d` (kod) + `05df92d` (yalnız test)
 
-Tarih: 2026-11-25. İncelenen head `05df92d`, ebeveyn `a48daae`. Yalnız okuma ve çevrimdışı hedefli test;
-commit, push, GitHub yazımı, broker çağrısı yok. Sınıflar: (a) bu commit getirdi, (b) PR'da önceden var,
-(c) main'de var, PR kapsamı dışı.
+Tarih: 2026-11-25. İncelenen head `05df92d`, ebeveyn `a48daae`. Yalnız okuma ve çevrimdışı hedefli test yapıldı.
+Sınıflar: (a) bu commit getirdi, (b) PR'da önceden var, (c) main'de var, PR kapsamı dışı.
 
 ## Sonuç
 
-- **Push edilebilir mi: EVET-notlarla.** Codex 7154998289'un iki senaryosu iki yolda da kapanıyor. Gerileme
-  bulunmadı: aşağıdaki beş bulgunun hepsi ebeveyn `a48daae` kaynağıyla da kırmızı.
-- **5 DOĞRULANDI + 2 OLASI.** B1 ve B2, commit mesajındaki ve §4'teki "yeniden başlatma ve okuma hatası
-  süreyi uzatamaz" iddiasını daraltıyor; Codex'in sıradaki bulgusu büyük olasılıkla bu ikisinden biri.
-- **Öneri:** B1 ve B2 küçük düzeltmeler; push'tan önce kapatılmalı ya da PR'a bilinen sınır diye yazılmalı.
-  B3–B5 ile test ve belge notları takip işi olabilir. Karar Yönetim'in.
+- **Push edilebilir mi: EVET-notlarla.** Codex 7154998289'un iki senaryosu iki yolda da kapanıyor; gerileme yok (beş bulgunun hepsi `a48daae` kaynağıyla da kırmızı).
+- **5 DOĞRULANDI + 2 OLASI.** B1 ve B2, commit mesajındaki ve §4'teki "yeniden başlatma ve okuma hatası süreyi uzatamaz" iddiasını daraltıyor; Codex'in sıradaki bulgusu büyük olasılıkla bunlardan biri.
+- **Öneri:** B1 ve B2 küçük düzeltmeler; push'tan önce kapatılmalı ya da PR'a bilinen sınır diye yazılmalı. B3–B5 ile test ve belge notları takip işi olabilir.
 
 ## Codex senaryolarının yeniden üretimi
 
-Karalama dosyası (commit edilmedi): `/tmp/claude-0/-home-user-trading-lab/27d6a727-f8fd-55d8-bd5f-345e7067b5e2/scratchpad/wt-r63/tests/test_scratch_r63.py`.
-`05df92d` ile 26 yeşil, 15 kırmızı (kırmızıların hepsi aşağıdaki bulgular). `tests/test_entry_cancel_race.py`: 124 yeşil.
+Karalama dosyası çalışma kopyasında `tests/test_scratch_r63.py` (commit edilmedi): `05df92d` ile 26 yeşil,
+15 kırmızı (kırmızıların hepsi aşağıdaki bulgular). `tests/test_entry_cancel_race.py`: 124 yeşil.
 
 | Senaryo (iki yol: `ttl`, `blocked`) | `a48daae` | `05df92d` |
 |---|---|---|
@@ -25,12 +21,11 @@ Karalama dosyası (commit edilmedi): `/tmp/claude-0/-home-user-trading-lab/27d6a
 | (1) ve (2), kapatma brokera ulaşmazken (`fail_close`) | kırmızı | yeşil: her tur yeniden denenir, broker kabul edince kapanır |
 
 Not: `blocked` yolda yeniden başlatmadan sonraki `halted`, `daily_state`'ten değil izlenen satırın yeniden
-değerlendirilmesinden gelir. B1b ve B2 tam bu dayanağı kırıyor.
+değerlendirilmesinden gelir. B1b ve B2 bu dayanağı kırıyor.
 
 ## Bulgular (önem sırasıyla)
 
-Testlerin ortak başlığı:
-
+Karalama testlerinin ortak başlığı (aşağıdaki testler bununla çalışır; güvenli beklenti yazılıdır, kırmızı = bulgu):
 ```python
 from datetime import timedelta
 import pytest
@@ -52,29 +47,23 @@ def reopen(s, tmp_path):  # baglanti kapanir; ayni journal ile yeni surec
 ```
 
 ### B1 — `_reconcile` izleme satırını `closed` ile eziyor (orta) — DOĞRULANDI, (b)
-
-`runner.py:410` giriş ve çıkış gerçekleşmesi eşleşince `orders.status`'u koşulsuz `closed` yapar. İptal izi
-aynı sütundadır (`runner.py:614`). Aynı süreçte bellek izi sürdürür; yeni süreç izi bulamaz. Sembolde pozisyon
-olduğu için bayat iptal yolu da girişi yeniden izlemeye almaz (`runner.py:524`).
-
-- **B1 (iki yol, gün hiç kapanmamış):** T1 iptal `pending_cancel`. T2 giriş 5/10, pozisyon 5, stop `new` 5:
-  izleme sürer. Stop tetiklenir, broker iki gerçekleşme bildirir; giriş 3 adet daha dolar, pozisyon 3, stop yok.
-  Yeniden başlatma. T3–T6: satır `closed`, `halted=False`, kapatma yok. Kontrol (yeşil): yeniden başlatma
-  yoksa ya da broker gerçekleşme bildirmiyorsa (sahte brokerın varsayılanı) gün T3'te kapanır.
-- **B1b (`blocked`; 05df92d'deki yeni testin devamı):** korumasız dolum, gün yalnız bellekte kapalı, kapatma
-  ulaşmaz. Stop (5 adet) iptali kesinleşmeden dolar. Yeniden başlatma: satır `closed`, 4 tur `halted=False`,
-  kalan pozisyon stopsuz, kapatma denenmez.
-- **Gerçekçilik:** Alpaca bağdaştırıcısı `filled_at` taşımayan emri gerçekleşme saymaz
-  (`alpaca_broker.py:364`). Kısmi dolmuş açık emirde `filled_at`'in boş geldiği bu incelemede doğrulanmadı;
-  boşsa B1 yalnız sahte brokerla oluşur. B1b tam dolmuş giriş ve tam dolmuş stop bacağıyla gerçek
-  bağdaştırıcıda da oluşur, ama üç koşul ister: yazılamayan `daily_state`, yeniden başlatma, kısmi çıkış.
+`runner.py:410` giriş ve çıkış gerçekleşmesi eşleşince `orders.status`'u koşulsuz `closed` yapar; iptal izi aynı
+sütundadır (`runner.py:614`). Aynı süreçte bellek izi sürdürür, yeni süreç bulamaz. Sembolde pozisyon olduğu için
+bayat iptal yolu da girişi yeniden izlemeye almaz (`runner.py:524`).
+- **B1 (iki yol):** T1 iptal `pending_cancel`. T2 giriş 5 adet dolu (terminal değil), pozisyon 5, stop `new` 5: izleme sürer. Stop tetiklenir
+  (broker iki gerçekleşme bildirir), giriş 3 adet daha dolar: pozisyon 3, stop yok. Yeniden başlatma. T3–T6: satır
+  `closed`, `halted=False`, kapatma yok. Kontrol (yeşil): yeniden başlatma ya da gerçekleşme bildirimi yoksa gün kapanır.
+- **B1b (`blocked`; 05df92d'deki yeni testin devamı):** korumasız dolum, gün yalnız bellekte kapalı, kapatma ulaşmaz.
+  Stop (5 adet) iptali kesinleşmeden dolar. Yeniden başlatma: satır `closed`, 4 tur `halted=False`, kalan stopsuz.
+- **Gerçekçilik:** bağdaştırıcı `filled_at` taşımayan emri gerçekleşme saymaz (`alpaca_broker.py:364`). Kısmi dolmuş
+  açık emirde `filled_at`'in boş geldiği doğrulanmadı; boşsa B1 yalnız sahte brokerla oluşur. B1b gerçek
+  bağdaştırıcıda da oluşur ama üç koşul ister: yazılamayan `daily_state`, yeniden başlatma, kısmi çıkış.
 - **Düzeltme yönü:** `_reconcile` izlemedeki satırı ezmesin (koşullu güncelleme) ya da iptal izi ayrı sütunda dursun.
-
 ```python
 @pytest.mark.parametrize("path", PATHS)
 def test_b1_reconcile_overwrites_the_tracking_row(path, config, tmp_path):
     s = prepare(path, config, tmp_path)
-    track_a_covered_partial_fill(s)        # giris 5/10 `partially_filled`, pozisyon 5, stop `new` 5
+    track_a_covered_partial_fill(s)        # giris 5 adet dolu (`partially_filled`), pozisyon 5, stop `new` 5
     assert status_of(s.conn, s.entry) == "cancel_pending"
     # Stop tetiklenir (5 satilir); giris 3 adet daha dolar: pozisyon 3, stop yok.
     s.broker.fills = [entry_fill(s, 5.0), fill(s, Side.SELL, 5.0, "leg-stop", "alpaca-leg-stop", "stop", 30)]
@@ -86,7 +75,7 @@ def test_b1_reconcile_overwrites_the_tracking_row(path, config, tmp_path):
     # KIRMIZI (iki yol): ([False]*4, 'closed', []) -- pozisyon 3 acik, stop yok, kapatma denenmedi
 def test_b1b_unpersisted_halt_is_lost_once_an_exit_fill_is_reconciled(config, tmp_path):
     s = prepare("blocked", config, tmp_path)   # daily_state yazilamiyor: karar yalniz bellekte
-    def short_cover(broker):                   # tam dolum 10; `new` stop yalniz 5 adedi kapsiyor
+    def short_cover(broker):                   # tam dolum; `new` stop yalniz 5 adedi kapsiyor
         settle(broker, s.entry, "filled", s.order.qty)
         hold_position(broker, s.order, s.order.qty)
         broker.open_orders.extend(legs(s.order, stop_qty=5.0))
@@ -105,15 +94,11 @@ def test_b1b_unpersisted_halt_is_lost_once_an_exit_fill_is_reconciled(config, tm
 ```
 
 ### B2 — Tur başındaki pozisyon görüntüsü yok sayılıyor (orta-düşük) — DOĞRULANDI, (b)
-
-Dal bu commit'te yazıldı ama sonuç ebeveynle aynı; gerileme değil. `_outcome_without_entry` pozisyonu yeniden
-okur; okuma hata verirse PENDING döner (`runner.py:728-734`). Oysa turun başında okunan `positions`
-(`runner.py:319`) sembolü gösteriyor ve `_settle_cancel`'a kadar taşınıyor. Dizi: kapsanan kısmi dolum
-izleniyor; stop düşer; her turda `get_order(parent)` ve ikinci `get_positions` hata verir, ilk `get_positions`
-ve emir listesi başarılıdır. Sonuç: 6 tur `halted=False`, `close_position` yok. Giriş okunabilseydi aynı okuma
-hatası günü kapatırdı (`runner.py:765-766`). Düzeltme yönü: iç okuma hata verirse tur başı görüntüsüne düş;
-sembol oradaysa UNPROTECTED.
-
+Dal bu commit'te yazıldı ama sonuç ebeveynle aynı. `_outcome_without_entry` pozisyonu yeniden okur; okuma hata verirse
+PENDING döner (`runner.py:728-734`). Oysa turun başında okunan `positions` (`runner.py:319`) sembolü gösteriyor.
+Dizi: kapsanan kısmi dolum izleniyor; stop düşer; her turda `get_order(parent)` ve ikinci `get_positions` hata verir,
+ilk `get_positions` ve emir listesi başarılıdır: 6 tur `halted=False`, `close_position` yok. Giriş okunabilseydi aynı
+okuma hatası günü kapatırdı (`runner.py:765-766`). Düzeltme yönü: iç okuma hata verirse tur başı görüntüsüne düş.
 ```python
 @pytest.mark.parametrize("path", PATHS)
 def test_b2_turn_start_position_snapshot_is_ignored(path, config, tmp_path):
@@ -131,14 +116,11 @@ def test_b2_turn_start_position_snapshot_is_ignored(path, config, tmp_path):
 ```
 
 ### B3 — Ulaşmayan iptal, giriş okunamadıkça yeniden gönderilmiyor (orta-düşük) — DOĞRULANDI, (b)
-
-`_confirm_cancel`, `get_order` hata verince hiçbir şey yapmadan döner (`runner.py:583-587`). Deneme sayacı
-ilerlemez; bayat iptal yolu da izlemedeki girişi atlar (`runner.py:526`). Dizi: T1 iptal brokera ulaşmaz
-(`cancel_requested`); T2–T9 yalnız `get_order(parent)` hata verir, giriş açık listede `accepted` görünür.
-Sonuç: 8 turda tek gönderim, gün kapanmaz, bayat giriş canlı kalır. Dolarsa koruması bu commit'le ölçülür;
-açık olan, `MAX_CANCEL_ATTEMPTS` sınırının bir okuma hatasıyla süresiz uzaması (7154998289 ile aynı sınıf).
-Düzeltme yönü: okuma hatasında tur başı açık emir listesindeki duruma düş ya da okunamayan turu denemeye say.
-
+`_confirm_cancel`, `get_order` hata verince hiçbir şey yapmadan döner (`runner.py:583-587`); deneme sayacı ilerlemez,
+bayat iptal yolu da izlemedeki girişi atlar (`runner.py:526`). Dizi: T1 iptal brokera ulaşmaz; T2–T9 yalnız
+`get_order(parent)` hata verir, giriş açık listede `accepted` görünür: 8 turda tek gönderim, gün kapanmaz, bayat giriş
+canlı kalır. `MAX_CANCEL_ATTEMPTS` sınırı bir okuma hatasıyla süresiz uzuyor (7154998289 ile aynı sınıf). Düzeltme
+yönü: okuma hatasında tur başı açık emir listesindeki duruma düş ya da okunamayan turu denemeye say.
 ```python
 @pytest.mark.parametrize("path", PATHS)
 def test_b3_unreached_cancel_is_not_resent_while_the_entry_is_unreadable(path, config, tmp_path):
@@ -153,14 +135,12 @@ def test_b3_unreached_cancel_is_not_resent_while_the_entry_is_unreadable(path, c
 ```
 
 ### B4 — Giriş okunuyor ama dolumu 0 ya da bilinmiyor; görünen pozisyon ölçülmüyor (düşük) — DOĞRULANDI, (b)
-
-`runner.py:711-712` dolum 0 ise (terminal değilken `None` de) pozisyona bakmadan döner. Bu commit'ten sonra
-kural tutarsız: giriş okunamazsa görünen pozisyon ölçülür, okunur ama bayatsa ölçülmez. Dizi: iptal
-`pending_cancel`; giriş `partially_filled`, `filled_qty` 0 ya da `None`; pozisyon 5, stop yok: 4 tur
-`halted=False`. B4b: giriş `canceled`, dolum 0, pozisyon 5: satır `canceled` yazılır, iz kapanır. Gerçek
-bağdaştırıcıda bozuk `filled_qty` 0.0'a düşer (`sdk_compat.py:29-42`). Emir okumasının pozisyon okumasından
-geri kaldığı bir Alpaca durumu bu incelemede doğrulanmadı.
-
+`runner.py:711-712` dolum 0 ise (terminal değilken `None` de) pozisyona bakmadan döner. Kural artık tutarsız: giriş
+okunamazsa görünen pozisyon ölçülür, okunur ama bayatsa ölçülmez. Dizi: iptal `pending_cancel`; giriş
+`partially_filled`, `filled_qty` 0 ya da `None`; pozisyon 5, stop yok: 4 tur `halted=False`. B4b: giriş `canceled`,
+dolum 0, pozisyon 5: satır `canceled` yazılır ve iz kapanır.
+Gerçek bağdaştırıcıda bozuk `filled_qty` 0.0'a düşer (`sdk_compat.py:29-42`); emir okumasının pozisyon okumasından
+geri kaldığı bir Alpaca durumu doğrulanmadı.
 ```python
 @pytest.mark.parametrize("filled", [0.0, None])
 @pytest.mark.parametrize("path", PATHS)
@@ -182,11 +162,10 @@ def test_b4b_zero_fill_terminal_entry_with_a_visible_position(path, config, tmp_
 ```
 
 ### B5 — Önceki seans, okunamayan giriş: sahipsiz çıkış emri kalıyor (düşük) — DOĞRULANDI, (b)
-
 Giriş okunursa pozisyon yokken kalan çıkış emri günü kapatır ve iptal edilir (`runner.py:770-775`). Okunamazsa
-`position is None` PENDING döner (`runner.py:735-736`): 4 tur `halted=False`, `leg-stop` listede kalır.
-Emir dolarsa oluşan ters pozisyon o turda günü kapatır (açığa satış testi yeşil).
-
+`position is None` PENDING döner (`runner.py:735-736`). Dizi: 1. gün korumasız dolum, gün kapanır, pozisyon
+kapatılır, iz kalır; sonraki seans satış stopu listede, giriş okunamıyor: 4 tur `halted=False`, stop yerinde.
+Emir dolarsa oluşan ters pozisyon o turda günü kapatır.
 ```python
 @pytest.mark.parametrize("path", PATHS)
 def test_b5_orphan_exit_survives_while_the_old_entry_is_unreadable(path, config, tmp_path):
@@ -200,66 +179,46 @@ def test_b5_orphan_exit_survives_while_the_old_entry_is_unreadable(path, config,
     # KIRMIZI (iki yol): ([False]*4, ['leg-stop']) -- giris okunursa ayni durum gunu kapatiyor
 ```
 
-### O1 — Emir uç noktası bir tur aksarsa kapsanan pozisyon tasfiye edilir — OLASI (tasarım bedeli), (a)
-
-İzlenen girişin sembolünde stopla kapsanan pozisyon varken `get_order` ve `list_open_orders` aynı turda hata
-verirse gün kapanır (`runner.py:739-742`); liste dönünce bütün emirler iptal edilir ve pozisyon kapatılır.
-05df92d'deki ikinci tur tam bunu sabitliyor (stop `new` 5, pozisyon 5). Ebeveynde bu durum PENDING'di. Yalnız
-izlemede giriş ve görünen pozisyon birlikteyken oluşur; "her gün kapanır" durumu kurulamadı. §4 bu bedeli yazmıyor.
-
-### O2 — Kalıcı okunamayan giriş yeni girişleri süresiz kilitler — OLASI, (b)
-
-`get_order` kalıcı hata verirse (örnek: brokerda artık bulunmayan kimlik) satır hiç kapanmaz; her tur ve her
-seans `entries_blocked` olur (`runner.py:709`, `659`). Çıkış yolu yalnız elle journal düzeltmesi. Kod okunarak
-yazıldı; test yok.
-
-### Kapsam dışı gözlemler, (c)
-
-- `_flatten_all` sembolde listede emir kaldıkça kapatma göndermez (`runner.py:971-978`). İptal hiç
-  kesinleşmezse gün kapalı ama pozisyon açık kalır (yeşil karalama testi: 6 tur `halted`, `closed == []`).
-- `run_once` başındaki `get_account`, `get_positions` ve `_reconcile` hataları turu kill-switch'ten önce
-  bitirir (`runner.py:318-327`); o turda güvenli kapatma ve gün sonu kapanışı da çalışmaz. Kod okunarak.
+### Olası bulgular ve kapsam dışı gözlemler
+- **O1 — OLASI (tasarım bedeli), (a):** izlenen girişin sembolünde stopla kapsanan pozisyon varken `get_order` ve
+  `list_open_orders` aynı turda hata verirse gün kapanır (`runner.py:739-742`); liste dönünce pozisyon tasfiye edilir.
+  Ebeveynde PENDING'di. "Her gün kapanır" durumu kurulamadı: dal yalnız izlemede giriş ve görünen pozisyon varken çalışır.
+- **O2 — OLASI, (b):** `get_order` kalıcı hata verirse (brokerda artık bulunmayan kimlik) satır hiç kapanmaz; her tur
+  ve her seans `entries_blocked` (`runner.py:709`, `659`). Çıkış yolu elle journal düzeltmesi. Kod okunarak; test yok.
+- **(c)** `_flatten_all` listede emir kaldıkça kapatma göndermez (`runner.py:971-978`): iptal kesinleşmezse gün kapalı,
+  pozisyon açık kalır (yeşil karalama testi, 6 tur). `run_once` başındaki `get_account`, `get_positions`, `_reconcile`
+  hataları turu kill-switch'ten önce bitirir (`runner.py:318-327`); o turda güvenli kapatma da çalışmaz. Kod okunarak.
 
 ## Denenip kırılamayanlar
-
-- Açığa satış yönü: satış girişi, SELL pozisyon; stop yok, yanlış yönde stop, tam alış stopu; giriş okunur ve
-  okunamaz (12 yeşil). Pozisyonun ancak sonraki turda görünmesi, giriş okunamazken (2 yeşil).
-- Codex senaryoları kapatma başarısızken, yeniden başlatma ve yeniden açılan bağlantıyla (8 yeşil).
-- Journal yazma hataları (kod ve mevcut testler): `cancel_pending`, `filled`, `canceled` yazılamazsa satır
-  izlemede kalır ve yeniden çözülür; `record_halt` yazılamazsa bellek kilidi; gün kapatan turun herhangi iki
-  adımı arasındaki kesinti satırı `cancel_*` bırakır.
-- Aynı sembolde iki izlenen giriş: izleme sürerken giriş engelli olduğu için kurulamadı. `dry_run`: üç yol da
-  hemen döner, brokera dokunmaz (tasarım). `canceled` + `filled_qty > 0`: kapsam kontrolüne girer.
-- Silinen adlara (`TRANSITIONAL_STATUSES`, `Coverage`, `MAX_COVER_WAIT_TURNS`, `_cover_waits`) başka başvuru yok.
+- Açığa satış yönü (stop yok, yanlış yönde stop, tam alış stopu; giriş okunur ve okunamaz): 12 yeşil. Pozisyonun
+  ancak sonraki turda görünmesi, giriş okunamazken: 2 yeşil. Codex senaryoları kapatma başarısızken: 8 yeşil.
+- Journal yazma hataları (kod ve mevcut testler): `cancel_pending`, `filled`, `canceled` yazılamazsa satır izlemede
+  kalır ve yeniden çözülür; gün kapatan turun herhangi iki adımı arasındaki kesinti satırı `cancel_*` bırakır.
+- Aynı sembolde iki izlenen giriş kurulamadı (izleme sürerken giriş engelli). `dry_run` üç yolda da hemen döner.
+  `canceled` + `filled_qty > 0` kapsam kontrolüne girer. Silinen adlara (`Coverage`, `_cover_waits` vb.) başvuru kalmamış.
 
 ## Test zayıflıkları
-
-1. **Okunamayan giriş dalında stop durumu ve miktarı sabit değil.** Mutasyon: `runner.py:744` satırı "çıkış
-   yönünde `stop_price` taşıyan herhangi bir emir var mı" yapıldı; 124 testin hepsi yeşil kaldı. Eksik: kapsanan
-   kısmi dolumdan sonra stop `accepted`/`held` ya da eksik miktarlı iken giriş okunamaz, gün kapanır.
+1. **Okunamayan giriş dalında stop durumu ve miktarı sabit değil.** Mutasyon: `runner.py:744` "çıkış yönünde
+   `stop_price` taşıyan herhangi bir emir var mı" yapıldı; 124 test yeşil kaldı. Eksik: kapsanan kısmi dolumdan sonra
+   stop `accepted`/`held` ya da eksik miktarlıyken giriş okunamaz, gün kapanır.
 2. **`..._is_read_back_after_a_restart` (satır 1096) runner'ın kaydı okuduğunu göstermiyor.** Mutasyon:
-   `_check_kill_switch` kalıcı kaydı yok sayar; dosyadaki 124 test yine yeşil. `again.halted` izlenen satırdan
-   da çıkıyor. Düzeltme: `again.notes` içinde `gun kapali:` ara, `KILL-SWITCH:` olmadığını doğrula.
-   Codex 7155309564'ün itirazı bu yüzden yarı açık.
-3. **`..._rebuilt_from_the_tracked_entry...` (1122)** sahte brokerın gerçekleşme bildirmemesine dayanıyor;
-   bildirirse aynı akış kırmızı (B1b).
-4. **`..._unreadable_positions_stays_tracked` (1287)** tek tur ve pozisyon listesi boş: "bilgi yok" ile "tur
-   başında pozisyon görüldü" ayrılmıyor (B2). Sonraki turda `run_once` hata fırlatır; sınanmıyor.
-5. **`..._unreadable_orders_halts...` (1255)** ikinci turda kapatılan pozisyon tam kapsanıyordu (O1); test bunu
-   istenen davranış olarak sabitliyor, belgede karşılığı yok.
-6. `test_a_transitional_stop_does_not_complete_the_cover` (1170) kapanma sebebini doğrulamıyor. Dosyada satış
-   yönlü giriş testi yok; davranış doğru ama sabit değil.
+   `_check_kill_switch` kalıcı kaydı yok sayar; dosyadaki 124 test yine yeşil, çünkü `again.halted` izlenen satırdan da
+   çıkıyor. Düzeltme: `again.notes` içinde `gun kapali:` aranmalı. Codex 7155309564 bu yüzden yarı açık.
+3. `..._rebuilt_from_the_tracked_entry...` (1122) sahte brokerın gerçekleşme bildirmemesine dayanıyor (B1b).
+4. `..._unreadable_positions_stays_tracked` (1287) tek tur ve pozisyon listesi boş: "bilgi yok" ile "tur başında
+   pozisyon görüldü" ayrılmıyor (B2); sonraki turda `run_once`'ın hata fırlatması sınanmıyor.
+5. `..._unreadable_orders_halts...` (1255) ikinci turda tam kapsanan pozisyonun kapatılmasını istenen davranış diye
+   sabitliyor (O1). `..._does_not_complete_the_cover` (1170) kapanma sebebini doğrulamıyor. Satış yönlü giriş testi yok.
 
 ## Belge uyuşmazlıkları (`docs/designs/unattended-paper.md` §4)
-
-1. Satır 240-254: "Karar yalnız girişin kendi durumundan verilir" ve "`get_order` okunamazsa → izlemede,
-   giriş engeli sürer" artık eksik; yeni madde (302-306) pozisyon ve açık emirlerle gün kapatıyor.
-2. Satır 331-333: "pozisyon/emir okunamazsa gün kill-switch ile kapanır" genel yazılmış; giriş ve pozisyon
-   birlikte okunamazsa gün kapanmıyor (306. satır ve B2).
-3. Satır 299-300 ve commit mesajı: "Gün kararı `daily_state`'e kalıcı yazılır", "yeniden başlatma süreyi
-   uzatamaz". `daily_state` yazılamayan dalda karar bellektedir; dayanak izlenen satırdır (B1b, B2 sınırı).
-4. Satır 274: `MAX_CANCEL_ATTEMPTS` sınırının giriş okunamazken ilerlemediği yazmıyor (B3).
+1. Satır 240-254: "Karar yalnız girişin kendi durumundan verilir" ve "`get_order` okunamazsa → izlemede, giriş engeli
+   sürer" artık eksik; yeni madde (303-307) pozisyon ve açık emirlerle gün kapatıyor.
+2. Satır 331-333: "pozisyon/emir okunamazsa gün kill-switch ile kapanır" fazla genel; giriş ve pozisyon birlikte
+   okunamazsa gün kapanmıyor (306-307, B2).
+3. Satır 299-300 ve commit mesajı: "Gün kararı `daily_state`'e kalıcı yazılır", "yeniden başlatma süreyi uzatamaz".
+   `daily_state` yazılamayan dalda karar bellektedir; dayanak izlenen satırdır ve B1b ile B2'de kırılıyor.
+4. Satır 274: `MAX_CANCEL_ATTEMPTS` sayacının giriş okunamazken ilerlemediği yazmıyor (B3). O1 bedeli de yazmıyor.
 5. Satır 230-232 Codex listesinde 7154998289 ve 7155309564 yok; 335-343 test dökümü yeni grupları anmıyor.
-6. "Nadir, gereksiz kapalı gün" bedeli hafif kalıyor: `S1-arastirma-2-alpaca-emir-davranisi.md` tam dolumdan
-   sonra stopun `held` kaldığını (ikincil kaynak) yazıyor; öyleyse her iptal/dolum yarışı gün kapatır, O1 de eklenir.
+6. Satır 300-302 bedeli "gereksiz kapanabilir" diye hafif geçiyor: `S1-arastirma-2-alpaca-emir-davranisi.md` tam
+   dolumdan sonra stopun `held` kaldığını (ikincil kaynak) yazıyor; öyleyse her iptal/dolum yarışı gün kapatır.
 7. `core/types.py:588` olmayan `_cancel_entry`'ye atıf yapıyor (bu commit'ten önce de vardı).
