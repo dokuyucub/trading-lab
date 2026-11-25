@@ -70,7 +70,8 @@ assert broker.realized_pnl < 0        # E  stop yok sayildi, kazanc yazildi: +15
 ```
 Yön: iyimser. Gerçek bracket −1R yazardı; simülasyon +1,5R yazıyor. "Giriş ve çıkış aynı barda olmaz" kuralı
 README'de kötümserlik diye geçiyor ama yalnızca HEDEF için kötümser; stop için bedava ikinci şans. ORB girişi
-marketable limit olduğundan (kapanış + 5 bps) dolum barın başındadır, dip kesin olarak sonradır. Mevcut test
+marketable limittir (kapanış + 5 bps): sonraki bar limitte/altında açılırsa dolum barın başındadır, dip
+kesin olarak sonradır. Mevcut test
 (`test_entry_and_exit_never_happen_in_the_same_bar`) yalnızca hedef yönünü sınıyor.
 Öneri: giriş barında hedef ertelensin, stop denensin (`low <= stop` → stop fiyatından çıkış). Efor: **S**.
 
