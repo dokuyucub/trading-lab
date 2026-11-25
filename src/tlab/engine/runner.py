@@ -104,6 +104,7 @@ gunu hemen kapatir; gun karari kalicidir (unattended-paper.md §4).
 
 MAX_CANCEL_ATTEMPTS = 3
 """Ulasamayan iptal icin surec basina en fazla deneme (ilk gonderim dahil).
+Girisin okunamadigi tur da, bir sey gonderilmese bile, denemeye sayilir.
 Asilirsa gun kill-switch ile kapanir; `_flatten_all` her turda butun
 emirleri iptal edip kapatmayi yeniden dener."""
 

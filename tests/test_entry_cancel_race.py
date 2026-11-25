@@ -1354,7 +1354,7 @@ def test_reconciliation_does_not_overwrite_a_tracked_entry(
 ) -> None:
     """Mutabakat izlenen satiri `closed` yapmaz; yeni surec izi bulur (B1)."""
     s = prepare(path, config, tmp_path)
-    track_a_covered_partial_fill(s)  # giris 5/10, pozisyon 5, stop `new` 5
+    track_a_covered_partial_fill(s)  # giris kismen doldu (5), pozisyon 5, stop `new` 5
     assert status_of(s.conn, s.entry) == "cancel_pending"
 
     # Stop tetiklenir (5 satilir); giris 3 adet daha dolar: pozisyon 3, stop yok.
@@ -1592,3 +1592,111 @@ def test_a_short_position_needs_a_buy_stop(
     s.broker.fail_get_order = unreadable
 
     assert s.runner.run_once().halted is (cover != "full")
+
+
+# --------------------------------------------------------------------------
+# Sembol yalitimi (Onay Kurulu, S1-onay-kurulu-pr63-8fd2234 N1)
+# --------------------------------------------------------------------------
+
+
+def other_symbol_stop(s: Setup, qty: float) -> OrderRef:
+    """Baska bir sembolun (QQQ) satis stopu: SPY icin koruma degildir."""
+    stop = legs(s.order, stop_qty=qty)[0]
+    return stop.model_copy(
+        update={
+            "symbol": "QQQ",
+            "broker_order_id": "other-stop",
+            "client_order_id": "alpaca-other-stop",
+        }
+    )
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_another_symbols_stop_is_not_cover_for_a_read_fill(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    s = prepare(path, config, tmp_path)
+    qty = float(s.order.qty)
+
+    def fill(broker: RacingBroker) -> None:
+        settle(broker, s.entry, "filled", qty)
+        hold_position(broker, s.order, qty)
+        broker.open_orders.append(other_symbol_stop(s, qty))
+
+    s.broker.on_cancel = fill
+    result = s.runner.run_once()
+
+    assert result.halted
+    assert "KILL-SWITCH: koruma dogrulanamadi: SPY" in " ".join(result.notes)
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_another_symbols_stop_is_not_cover_when_the_entry_is_unreadable(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    s = prepare(path, config, tmp_path)
+    track_a_covered_partial_fill(s)  # SPY pozisyon 5, SPY stop `new` 5
+    s.broker.open_orders = [o for o in s.broker.open_orders if o.broker_order_id != "leg-stop"]
+    s.broker.open_orders.append(other_symbol_stop(s, 5.0))
+    s.broker.fail_get_order = True
+
+    result = s.runner.run_once()
+
+    assert result.halted
+    assert "KILL-SWITCH: koruma dogrulanamadi: SPY" in " ".join(result.notes)
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_another_symbols_stop_is_not_cover_for_a_stale_fill_report(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    s = prepare(path, config, tmp_path)
+    accept_without_settling(s)
+    settle(s.broker, s.entry, "canceled", 0.0)
+    hold_position(s.broker, s.order, 5.0)
+    s.broker.open_orders.append(other_symbol_stop(s, 5.0))
+
+    result = s.runner.run_once()
+
+    assert result.halted
+    assert status_of(s.conn, s.entry) != "canceled"
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_another_symbols_position_does_not_count_for_an_unreadable_entry(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """SPY girisi okunamiyor, SPY pozisyonu yok; QQQ kendi stopuyla korunuyor."""
+    s = prepare(path, config, tmp_path)
+    accept_without_settling(s)
+    price = s.order.limit_price or 100.0
+    s.broker.positions = [
+        Position(symbol="QQQ", side=Side.BUY, qty=5.0, avg_entry_price=price, current_price=price)
+    ]
+    s.broker.open_orders.append(other_symbol_stop(s, 5.0))
+    s.broker.fail_get_order = True
+
+    result = s.runner.run_once()
+
+    assert not result.halted
+    assert result.entries_blocked
+    assert s.broker.closed == []
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_another_symbols_position_does_not_lock_an_old_fill(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """Onceki seansin SPY girisi: SPY duz; QQQ pozisyonu SPY izini acik tutmaz."""
+    s = prepare(path, config, tmp_path)
+    halt_on_an_unprotected_fill(s)
+    price = s.order.limit_price or 100.0
+    s.broker.positions = [
+        Position(symbol="QQQ", side=Side.BUY, qty=5.0, avg_entry_price=price, current_price=price)
+    ]
+    s.broker.open_orders.append(other_symbol_stop(s, 5.0))
+
+    result = next_session(s).run_once()
+
+    assert not result.halted
+    assert status_of(s.conn, s.entry) == "filled"
