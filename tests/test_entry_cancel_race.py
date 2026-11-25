@@ -817,7 +817,9 @@ def test_a_cancel_whose_reply_was_lost_is_not_sent_again(
     first = s.runner.run_once()
 
     assert first.entries_blocked
-    assert status_of(s.conn, s.entry) == "cancel_requested"
+    # Cevap kayboldu ama ayni turda emir `pending_cancel` okundu: istegin
+    # ulastigi kanitlandi, satir cozumsuz istek olarak kalmaz.
+    assert status_of(s.conn, s.entry) == "cancel_pending"
     s.broker.lose_cancel_reply = False
 
     second = s.runner.run_once()
@@ -868,7 +870,9 @@ def halt_on_an_unprotected_fill(s: Setup) -> None:
     s.broker.on_cancel = unprotected
     assert s.runner.run_once().halted
     assert s.broker.positions == []
-    assert status_of(s.conn, s.entry) in ("cancel_requested", "cancel_pending")
+    # Broker iptali reddetti (giris coktan doldu) ama giris terminal okundu:
+    # istegin akibeti belli, satir cozumsuz istek olarak kalmaz.
+    assert status_of(s.conn, s.entry) == "cancel_pending"
 
 
 def next_session(s: Setup) -> SessionRunner:
@@ -1920,17 +1924,60 @@ def test_an_adopted_unconfirmed_old_cancel_takes_the_safe_close_path(
 ) -> None:
     """Onceki seans, iptal DOGRULANMAMIS, giris okunamiyor: ilk turda gun kapanir."""
     s = prepare(path, config, tmp_path)
-    halt_on_an_unprotected_fill(s)
+    s.broker.unreachable_cancels = 1
+    assert s.runner.run_once().entries_blocked
     assert status_of(s.conn, s.entry) == "cancel_requested"
-    s.broker.open_orders.append(old_exit_order(s, "new"))
     s.broker.fail_get_order = True
 
     result = next_session(s).run_once()
 
     assert result.halted
     assert "KILL-SWITCH: iptal iletilemedi: SPY" in " ".join(result.notes)
-    assert leg_ids(s.broker) == []
+    # Hesap genelindeki iptal bayat girisi kapsar.
+    assert s.broker.open_orders == []
     assert status_of(s.conn, s.entry) == "cancel_requested"
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_a_rejected_cancel_of_a_filled_entry_is_not_adopted_as_unresolved(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """Dolum yarisi: iptal reddedildi ama giris `filled` okundu; iz `cancel_pending`.
+
+    Sonraki surec bunu cozumsuz istek diye devralmaz: duz hesapta tek bir
+    gecici okuma hatasi gunu kapatmaz.
+    """
+    s = prepare(path, config, tmp_path)
+    halt_on_an_unprotected_fill(s)
+    s.broker.fail_get_order = True
+
+    result = next_session(s).run_once()
+
+    assert not result.halted
+    assert result.entries_blocked
+    assert status_of(s.conn, s.entry) == "cancel_pending"
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_an_old_exit_order_is_orphaned_when_the_journal_time_is_unreadable(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """Journal'daki gonderim ani bozuk: seans kanitlanamaz, giris eski sayilir."""
+    s = prepare(path, config, tmp_path)
+    halt_on_a_late_unprotected_fill(s)
+    s.conn.execute(
+        "UPDATE orders SET submitted_at = 'bozuk' WHERE client_order_id = ?",
+        (s.entry.client_order_id,),
+    )
+    s.conn.commit()
+    s.broker.open_orders.append(old_exit_order(s, "new"))
+    s.broker.fail_get_order = True
+
+    result = next_session(s).run_once()
+
+    assert result.halted
+    assert "KILL-SWITCH: koruma dogrulanamadi: SPY" in " ".join(result.notes)
+    assert leg_ids(s.broker) == []
 
 
 @pytest.mark.parametrize("path", PATHS)
@@ -1973,6 +2020,26 @@ def test_an_adopted_unconfirmed_cancel_gets_no_blind_turn(
 
     assert result.halted
     assert "iptal iletilemedi: SPY" in " ".join(result.notes)
+    assert s.broker.open_orders == []
+    assert len(s.broker.submitted) == 1
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_an_adopted_unconfirmed_cancel_gets_a_single_resend(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """Giris okunuyor ve aktif, ama yeniden gonderim de ulasmiyor: gun o turda kapanir."""
+    s = prepare(path, config, tmp_path)
+    s.broker.unreachable_cancels = 1
+    assert s.runner.run_once().entries_blocked
+    assert status_of(s.conn, s.entry) == "cancel_requested"
+    s.broker.unreachable_cancels = 5
+
+    result = reopen(s, tmp_path).run_once()
+
+    assert result.halted
+    assert "iptal iletilemedi: SPY" in " ".join(result.notes)
+    assert s.broker.cancelled_ids.count(s.entry.broker_order_id) == 2
     assert s.broker.open_orders == []
     assert len(s.broker.submitted) == 1
 

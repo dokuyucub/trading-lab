@@ -262,8 +262,9 @@ class SessionRunner:
         self._adopted_cancels: set[str] = set()
         """Bu surecin journal'dan `cancel_requested` olarak devraldigi iptaller.
         Yalniz istek dogrulanmamisken sorulur (`_confirm_cancel`). Deneme
-        sayaci surec bellegindedir; devralinan istekte giris okunamazsa
-        sayac yeniden baslatilmaz, gun o turda kapanir (Codex #63/7168523270)."""
+        sayaci surec bellegindedir; devralinan istek yeni bir sayac almaz:
+        giris okunamazsa ya da tek yeniden gonderim ulasmazsa gun o turda
+        kapanir (Codex #63/7168523270)."""
         """Iptali gonderilen ama brokerin aldigi dogrulanmamis girisler."""
         self._cancel_attempts: dict[str, int] = {}
         """Giris basina bu surecte yapilan iptal gonderimi sayisi."""
@@ -615,10 +616,11 @@ class SessionRunner:
         hatasiyla suresiz uzamamali. Hak bitince gun kapanir ve hesap
         genelindeki iptal bayat girisi de kapsar.
 
-        Journal'dan devralinan istekte kor tur hakki yoktur: sayac surec
-        bellegindedir ve yeniden baslatma onu sifirlar. Devralinan giris
-        okunamiyorsa gun o turda kapanir; boylece yeniden baslatma sureyi
-        uzatamaz (Codex #63/7168523270).
+        Journal'dan devralinan istekte sinir surecler arasidir: sayac surec
+        bellegindedir ve yeniden baslatma onu sifirlar. Bu yuzden devralinan
+        istek tek bir firsat alir. Giris okunamiyorsa ya da tek yeniden
+        gonderim de ulasmazsa gun O TURDA kapanir; boylece yeniden baslatma
+        sureyi uzatamaz (Codex #63/7168523270).
         """
         cid = item.client_order_id
         try:
@@ -636,7 +638,8 @@ class SessionRunner:
         if self._cancel_attempts.get(item.client_order_id, 0) >= MAX_CANCEL_ATTEMPTS:
             return False
         self._send_cancel(item)
-        return True
+        # Devralinan istek yeniden gonderildi ve yine dogrulanmadiysa bekleme yok.
+        return not (cid in self._adopted_cancels and cid in self._unconfirmed_cancels)
 
     def _resolve_pending_cancels(
         self, positions: dict[str, Position], session: SessionState, result: LoopResult
@@ -766,6 +769,13 @@ class SessionRunner:
         except BrokerError:
             log.exception("%s giris emri okunamadi (%s)", item.symbol, item.broker_order_id)
             return self._outcome_without_entry(item, positions, session)
+        unconfirmed = item.client_order_id in self._unconfirmed_cancels
+        if unconfirmed and order.status in CANCEL_ACK_STATUSES:
+            # Giris `pending_cancel` ya da terminal okundu: iptal isteginin
+            # akibeti artik belirsiz degil (broker reddetmis olsa bile emir
+            # bitmis). Satir `cancel_requested` kalirsa yeni surec onu
+            # cozumsuz istek diye devralir ve tek okuma hatasinda gunu kapatir.
+            self._mark_cancel_confirmed(item)
         terminal = order.status in TERMINAL_ORDER_STATUSES
         if order.filled_qty == 0 or (not terminal and order.filled_qty is None):
             position, known = self._current_position(item.symbol, positions)
@@ -811,6 +821,8 @@ class SessionRunner:
             UNPROTECTED: gun kapanir, hesap genelindeki iptal emri de
             kapsar (Codex #63/7168523270). Ayni seansin girisinde bu
             kontrol yapilmaz: kendi bekleyen bacaklari sahipsiz degildir.
+            Journal'daki gonderim ani okunamiyorsa seans kanitlanamaz:
+            giris onceki seanstan sayilir (fail-closed).
         Diger her durumda PENDING: izleme ve giris engeli surer.
         """
         position, _known = self._current_position(item.symbol, positions)
@@ -818,9 +830,11 @@ class SessionRunner:
             if self._position_is_covered(item.symbol, position):
                 return CancelOutcome.PENDING
             return CancelOutcome.UNPROTECTED
-        if item.submitted_at is None:
-            return CancelOutcome.PENDING
-        if item.submitted_at.astimezone(UTC) >= session.session_open:
+        same_session = (
+            item.submitted_at is not None
+            and item.submitted_at.astimezone(UTC) >= session.session_open
+        )
+        if same_session:
             return CancelOutcome.PENDING
         try:
             symbol_orders = [o for o in self.broker.list_open_orders() if o.symbol == item.symbol]
