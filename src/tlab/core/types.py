@@ -585,7 +585,7 @@ class OrderRef(Frozen):
 
     Dolan bir pozisyonun korumasi bu alanla dogrulanir: pozisyona ters
     yonde, stop fiyati olan acik emirlerin kalan miktari pozisyonu
-    kapsamali (runner `_cancel_entry`).
+    kapsamali (runner `stops_cover`).
     """
 
 

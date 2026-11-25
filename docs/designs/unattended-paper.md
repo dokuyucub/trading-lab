@@ -229,7 +229,7 @@ kullanıcı isterse.
           kapısından geçmiş ilk emrin parçasıdır.
       - İptal/dolum yarışı (Codex #63/6777889127, 6840456161, 6844629736,
         6863854867, 6993997992, 7115896065,
-        7116120239, 7139373707):
+        7116120239, 7139373707, 7154998289, 7155309564):
         bayat giriş
         iptali (hem TTL hem `entries_blocked` yolu) yalnız girişin
         `broker_order_id`'sine gider (`Broker.cancel_order`). Sembol bazlı
@@ -237,8 +237,9 @@ kullanıcı isterse.
         hiçbir senaryoda girmez.
         - Sonuç iptal isteğinin kabulünden ya da girişin açık listeden
           kaybolmasından çıkarılmaz. İptal asenkron kesinleşir; giriş iki
-          okuma arasında dolabilir. Karar yalnız girişin kendi durumundan
-          (`Broker.get_order`: `status`, `filled_qty`) verilir:
+          okuma arasında dolabilir. İptalin sonucu girişin kendi durumundan
+          (`Broker.get_order`: `status`, `filled_qty`) çıkarılır; sembolde
+          görünen pozisyonun koruması ayrıca ölçülür:
           - terminal değil (`pending_cancel`, `new`, `partially_filled` …)
             → izlemede: journal'da `cancel_pending`, süreçte bellek; o
             turda yeni giriş yok (`entries_blocked`). İzlemedeki girişe
@@ -248,14 +249,19 @@ kullanıcı isterse.
             yaşam döngüsü ile dolan miktarın koruması ayrı sorulardır;
           - terminal (`canceled`/`expired`/`rejected`) ve dolum sıfır →
             "canceled";
+          - dolum sıfır ya da bilinmiyor ama tur başında sembolde pozisyon
+            görünüyor → brokerın dolum bilgisi bayat olabilir; pozisyonun
+            koruması ölçülür, kanıtlanamazsa gün kapanır ve iz kapanmaz;
           - terminal ve dolum var (`filled` dahil) ya da dolum bilinmiyor
             → koruma kontrolü; kapsıyorsa "filled". Korumasız dolumda
             durum değiştirilmez, gün kararı kalıcıdır;
-          - `get_order` okunamazsa → izlemede, giriş engeli sürer.
+          - `get_order` okunamazsa → aşağıdaki "Giriş okunamıyorsa" maddesi.
         - İzlemedeki iptaller her turda, kill-switch ve gün sonu
           kontrollerinden sonra, sembolde pozisyon görünse de çözülür.
           Yeniden başlayan süreç izlemeyi journal'dan devralır. Geç görünen
-          dolum böylece koruma kontrolünden düşmez.
+          dolum böylece koruma kontrolünden düşmez. Mutabakat izlenen satırı
+          `closed` ile ezmez (yazıcıda koşullu güncelleme): iz aynı sütunda
+          durur ve ezilirse yeni süreç onu bulamaz.
         - **İptal niyeti write-ahead:** iptal çağrısından ÖNCE journal'a
           `cancel_requested` yazılır, çağrıdan sonra `cancel_pending`.
           Niyet yazılamazsa iptal gönderilmez; tur `entries_blocked` olur
@@ -272,7 +278,8 @@ kullanıcı isterse.
           silmez. Sonraki tur önce emri okur: ulaşmışsa yeni istek gitmez
           (cevabı kaybolan istek), hâlâ aktifse aynı giriş kimliğine yeniden
           gönderilir. Süreç başına en fazla `MAX_CANCEL_ATTEMPTS` (3) deneme;
-          aşılırsa gün kill-switch ile kapanır ("iptal iletilemedi") ve
+          girişin okunamadığı tur da denemeye sayılır, sınır okuma hatasıyla
+          uzamaz. Aşılırsa gün kill-switch ile kapanır ("iptal iletilemedi") ve
           `_flatten_all` bütün emirleri iptal edip kapatmayı her turda
           yeniden dener.
         - **Önceki seanstan kalan iz (P2):** koruma kontrolünde `filled_qty`
@@ -297,14 +304,19 @@ kullanıcı isterse.
             Bekleme sayacı bilerek yok. Böyle bir sayaç süreç belleğinde
             tutulursa yeniden başlatmada sıfırlanır, girişin okuma hatasında
             da ilerlemez; koruma süresi sınırsız uzayabilir. Gün kararı ise
-            `daily_state`'e kalıcı yazılır. Bedeli: yarış anında stop hâlâ
+            `daily_state`'e kalıcı yazılır. Yazılamazsa karar süreç
+            belleğindedir; yeniden başlayan süreç aynı sonuca izlenen satırı
+            yeniden değerlendirerek varır. Bedeli: yarış anında stop hâlâ
             geçiş durumundaysa gün gereksiz kapanabilir; `held` ile birlikte
             ilk paper günlerinde gözlenir.
           - *Giriş okunamıyorsa* (Codex #63/7154998289): dolum miktarı
             bilinmez, ama sembolde görünen pozisyonun koruması yine ölçülür.
-            Pozisyon stoplarla kapsanmıyorsa ya da açık emirler okunamıyorsa
-            gün kapanır. Pozisyon yoksa, kapsanıyorsa ya da pozisyon
-            okunamıyorsa takip ve giriş engeli sürer.
+            Pozisyon yeniden okunur; bu okuma hata verirse tur başındaki
+            görüntü kullanılır. Pozisyon görünüyor ve stoplarla kapsanmıyorsa
+            ya da açık emirler okunamıyorsa gün kapanır. İki kaynakta da
+            pozisyon yoksa ya da pozisyon kapsanıyorsa takip ve giriş engeli
+            sürer. Bedeli: giriş ve emir listesi aynı turda okunamazsa
+            stopla kapsanan pozisyon da kapatılır.
           - **`held` doğrulanmadı.** Alpaca bracket bacakları ebeveyn
             tamamen dolunca etkinleşir. Ebeveyn kısmi dolumdayken `held`
             stop kesinlikle korumaz. Tam dolumdan sonra `held` gösterilen
@@ -328,9 +340,10 @@ kullanıcı isterse.
           miktarı)`. Gereken miktar emrin kendi dolumundan gelir; pozisyon
           okuması dolumu henüz göstermese de kontrol yapılır. Kalan
           miktarı bilinmeyen emir kapsam sayılmaz.
-        - Kural sağlanırsa bacaklara dokunulmaz. Sağlanmazsa ya da
-          pozisyon/emir okunamazsa gün kill-switch ile kapanır
-          (fail-closed). Gün kararı her turda kapatmayı yeniden dener;
+        - Kural sağlanırsa bacaklara dokunulmaz. Sağlanmazsa ya da giriş
+          okunabiliyorken pozisyon/emir okunamazsa gün kill-switch ile
+          kapanır (fail-closed). Giriş de okunamıyorsa "Giriş okunamıyorsa"
+          maddesi geçerlidir. Gün kararı her turda kapatmayı yeniden dener;
           yazılamazsa bellekteki kilit geçerlidir.
         - Testler `tests/test_entry_cancel_race.py`'de, iki yolda:
           dolum iptal çağrısının içinde (kısmi, tam, bacaksız, eksik
@@ -341,7 +354,12 @@ kullanıcı isterse.
           sürmesi, yeniden başlatma, okunamayan giriş) ve iptal kesinleşmeden
           kısmi dolum (`pending_cancel`/`partially_filled`: kapsam yok,
           eksik, tam; artan dolumda kapsamın yeniden ölçülmesi; yeniden
-          başlatma).
+          başlatma). Ek gruplar: koruma sayılmayan stop durumları; önceki
+          seanstan kalan iz ve sahipsiz çıkış emri; kalıcı gün kararının
+          yeniden açılan bağlantıdan okunması ve yazılamayan kararın izlenen
+          satırdan yeniden kurulması; okunamayan giriş (pozisyon var/yok,
+          emirler okunamıyor, tur başı görüntüsü, deneme sınırı); mutabakatın
+          izlenen satırı ezmemesi; bayat dolum bilgisi; satış yönlü giriş.
         - **Doğrulanmadı:** Alpaca'da kısmi dolum + ebeveyn iptalinden
           sonra bacak miktarının dolan miktara inip inmediği ve bacakların
           düz `status=open` listesinde görünüp görünmediği. İlk paper
@@ -350,6 +368,17 @@ kullanıcı isterse.
           görünmüyorsa gün kapanır. `done_for_day` gibi terminal sayılmayan
           bir durum izlemeyi gün sonuna kadar uzatır; o sürede yeni giriş
           yoktur. Yarış nadir olduğu için bedeli nadir bir kapalı gündür.
+          Dış araştırma (ikincil kaynaklar; ayrıntı #63 TESLİM) tam dolumdan
+          sonra stop bacağının `held` kaldığını ve `status=open` listesinde
+          dönmediğini bildiriyor. Doğruysa dolumlu her iptal yarışı günü
+          kapatır. Bacakların iç içe (`nested`) okunması ve her turda koruma
+          denetimi ayrı tasarım işidir.
+        - **Bilinen sınırlar:** (i) önceki seans + okunamayan giriş +
+          pozisyon yokken kalan çıkış emri, iptal brokerca doğrulanmışsa
+          fark edilmez; emir dolarsa oluşan ters pozisyon o turda günü
+          kapatır. (ii) İptali doğrulanmış ama kalıcı olarak okunamayan
+          giriş yeni girişleri süresiz engeller; çıkışı elle journal
+          düzeltmesidir.
       - Kalan iş, "günde tek koşu" kapısı. Paper workflow'uyla birlikte
         gelir.
 - **Başlangıç yetkisi:** Codex SHA bağlı ONAY + kullanıcı onayı + kayıtlı

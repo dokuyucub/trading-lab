@@ -407,7 +407,11 @@ class SessionRunner:
             if not self.writer.record_trade(trade):
                 continue
             recorded += 1
-            self.writer.update_order_status(matched.entry.client_order_id, "closed")
+            # Iptal izlemesindeki satir ezilmez: iz ayni sutunda durur ve
+            # yeni surec onu oradan devralir.
+            self.writer.mark_order_closed(
+                matched.entry.client_order_id, unless=(CANCEL_REQUESTED, CANCEL_PENDING)
+            )
             log.info(
                 "Islem kapandi: %s %s %.4g adet | %s | net %.2f (%.2fR)",
                 trade.symbol,
@@ -578,12 +582,19 @@ class SessionRunner:
         Emir `pending_cancel` ya da terminal ise istek ulasmistir: yeni
         iptal gonderilmez. Hala aktifse ayni giris kimligine yeniden
         gonderilir (en fazla MAX_CANCEL_ATTEMPTS). Emir okunamazsa bu
-        turda bir sey gonderilmez; izleme ve giris engeli surer.
+        turda bir sey gonderilmez, ama tur denemeye sayilir: sinir okuma
+        hatasiyla suresiz uzamamali. Hak bitince gun kapanir ve hesap
+        genelindeki iptal bayat girisi de kapsar.
         """
+        cid = item.client_order_id
         try:
             order = self.broker.get_order(item.broker_order_id)
         except BrokerError:
             log.exception("%s giris emri okunamadi (%s)", item.symbol, item.broker_order_id)
+            attempts = self._cancel_attempts.get(cid, 0)
+            if attempts >= MAX_CANCEL_ATTEMPTS:
+                return False
+            self._cancel_attempts[cid] = attempts + 1
             return True
         if order.status in CANCEL_ACK_STATUSES:
             self._mark_cancel_confirmed(item)
@@ -649,7 +660,7 @@ class SessionRunner:
         result: LoopResult,
     ) -> bool:
         """Iptalin sonucunu uygular; gun kapandiysa False doner."""
-        outcome = self._cancel_outcome(item, session)
+        outcome = self._cancel_outcome(item, positions, session)
         if outcome is CancelOutcome.PENDING:
             self._pending_cancels[item.client_order_id] = item
             # Dogrulanmamis iptal `cancel_requested` kalir; bu ayrim
@@ -679,7 +690,9 @@ class SessionRunner:
         self._halt_unprotected(item.symbol, positions, session, result)
         return False
 
-    def _cancel_outcome(self, item: TrackedCancel, session: SessionState) -> CancelOutcome:
+    def _cancel_outcome(
+        self, item: TrackedCancel, positions: dict[str, Position], session: SessionState
+    ) -> CancelOutcome:
         """Iptalin sonucunu girisin KENDI durumundan cikarir.
 
         Iptal isteginin kabulu ya da girisin acik listeden kaybolmasi
@@ -694,6 +707,9 @@ class SessionRunner:
             pozisyonun korumasi yine olculur (`_outcome_without_entry`);
           * terminal, dolum sifir -> CANCELED;
           * terminal degil, dolum sifir -> PENDING;
+          * dolum sifir ya da bilinmiyor ama tur basinda sembolde pozisyon
+            goruluyor: brokerin dolum bilgisi bayat olabilir; pozisyonun
+            korumasi olculur, kanitlanamazsa UNPROTECTED;
           * dolum var (ya da terminal ve dolum bilinmiyor): stop
             bacaklari `max(dolum, pozisyon)` miktarini kapsamiyorsa ya
             da durum okunamiyorsa UNPROTECTED; kapsiyorsa terminalde
@@ -706,44 +722,52 @@ class SessionRunner:
             order = self.broker.get_order(item.broker_order_id)
         except BrokerError:
             log.exception("%s giris emri okunamadi (%s)", item.symbol, item.broker_order_id)
-            return self._outcome_without_entry(item)
+            return self._outcome_without_entry(item, positions)
         terminal = order.status in TERMINAL_ORDER_STATUSES
         if order.filled_qty == 0 or (not terminal and order.filled_qty is None):
+            seen = positions.get(item.symbol)
+            if seen is not None and not self._position_is_covered(item.symbol, seen):
+                return CancelOutcome.UNPROTECTED
             return CancelOutcome.CANCELED if terminal else CancelOutcome.PENDING
         if not self._fill_is_protected(item, order, session):
             return CancelOutcome.UNPROTECTED
         return CancelOutcome.FILLED if terminal else CancelOutcome.PENDING
 
-    def _outcome_without_entry(self, item: TrackedCancel) -> CancelOutcome:
+    def _outcome_without_entry(
+        self, item: TrackedCancel, positions: dict[str, Position]
+    ) -> CancelOutcome:
         """Giris okunamiyorken sembolde gorunen pozisyonun korumasini olcer.
 
         Dolum miktari bilinmez. Ama girisin okunamamasi, daha once gorulmus
         ya da yeni olusmus korumasiz bir pozisyonu gizlememeli (Codex
-        #63/7154998289): pozisyon ve acik emirler okunabiliyorsa ve pozisyon
-        stoplarla kapsanmiyorsa UNPROTECTED. Pozisyon goruluyor ama acik
-        emirler okunamiyorsa koruma kanitlanamaz: yine UNPROTECTED. Pozisyon
-        yoksa, kapsaniyorsa ya da pozisyon okunamiyorsa PENDING: izleme ve
-        giris engeli surer.
+        #63/7154998289). Pozisyon yeniden okunur; bu okuma hata verirse tur
+        basindaki goruntuye dusulur. Pozisyon goruluyor ve korumasi
+        kanitlanamiyorsa UNPROTECTED. Iki kaynakta da pozisyon yoksa ya da
+        pozisyon kapsaniyorsa PENDING: izleme ve giris engeli surer.
         """
         try:
             position = next(
                 (p for p in self.broker.get_positions() if p.symbol == item.symbol), None
             )
         except BrokerError:
-            log.exception("%s pozisyonu okunamadi", item.symbol)
-            return CancelOutcome.PENDING
-        if position is None:
-            return CancelOutcome.PENDING
-        try:
-            symbol_orders = [o for o in self.broker.list_open_orders() if o.symbol == item.symbol]
-        except BrokerError:
-            # Pozisyon goruluyor, korumasi kanitlanamiyor: fail-closed.
-            log.exception("%s acik emirleri okunamadi", item.symbol)
-            return CancelOutcome.UNPROTECTED
-        exit_side = Side.SELL if position.side is Side.BUY else Side.BUY
-        if stops_cover(exit_side, position.qty, symbol_orders):
+            log.exception("%s pozisyonu okunamadi; tur basi goruntusu kullaniliyor", item.symbol)
+            position = positions.get(item.symbol)
+        if position is None or self._position_is_covered(item.symbol, position):
             return CancelOutcome.PENDING
         return CancelOutcome.UNPROTECTED
+
+    def _position_is_covered(self, symbol: str, position: Position) -> bool:
+        """Gorunen pozisyonu koruma kaniti olan stoplar kapsiyor mu.
+
+        Acik emirler okunamazsa koruma kanitlanamaz: False (fail-closed).
+        """
+        try:
+            symbol_orders = [o for o in self.broker.list_open_orders() if o.symbol == symbol]
+        except BrokerError:
+            log.exception("%s acik emirleri okunamadi", symbol)
+            return False
+        exit_side = Side.SELL if position.side is Side.BUY else Side.BUY
+        return stops_cover(exit_side, position.qty, symbol_orders)
 
     def _fill_is_protected(
         self, item: TrackedCancel, order: OrderRef, session: SessionState

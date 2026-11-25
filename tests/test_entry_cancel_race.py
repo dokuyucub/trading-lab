@@ -37,8 +37,8 @@ import pytest
 from conftest import make_account
 from test_runner import NOW, FakeBroker, FakeClock, FakeMarket, breakout_bars, build_runner
 from tlab.config import Config, load_config
-from tlab.core.types import BracketOrder, OrderRef, Position, Side
-from tlab.engine.runner import SessionRunner
+from tlab.core.types import BracketOrder, Fill, OrderRef, Position, Side
+from tlab.engine.runner import MAX_CANCEL_ATTEMPTS, SessionRunner
 from tlab.errors import BrokerError, JournalError
 from tlab.journal.db import apply_migrations, connect
 from tlab.journal.queries import halt_reason
@@ -1113,9 +1113,15 @@ def test_a_halt_for_an_unprotected_fill_is_read_back_after_a_restart(
     assert reason is not None
     assert "koruma dogrulanamadi: SPY" in reason
 
+    # Giris dolumu sonradan kapsanmis gorunse bile gun acilmaz: yeni surec
+    # yeni bir karar vermez, kalici kaydi okur.
+    s.broker.open_orders.extend(legs(s.order, stop_qty=s.order.qty))
     again = s.restart().run_once()
 
     assert again.halted
+    notes = " ".join(again.notes)
+    assert f"gun kapali: {reason}" in notes
+    assert "KILL-SWITCH:" not in notes
     assert len(s.broker.submitted) == 1
 
 
@@ -1183,6 +1189,7 @@ def test_a_transitional_stop_does_not_complete_the_cover(
     result = s.runner.run_once()
 
     assert result.halted
+    assert "KILL-SWITCH: koruma dogrulanamadi: SPY" in " ".join(result.notes)
     assert s.broker.closed == ["SPY"]
     assert status_of(s.conn, s.entry) != "filled"
 
@@ -1301,3 +1308,255 @@ def test_an_unreadable_entry_with_unreadable_positions_stays_tracked(
     assert result.entries_blocked
     assert status_of(s.conn, s.entry) in ("cancel_requested", "cancel_pending")
     assert len(s.broker.submitted) == 1
+
+
+# --------------------------------------------------------------------------
+# Ofis incelemesi (docs/office/raporlar/S1-hata-avi-pr63-05df92d.md, B1-B4)
+# --------------------------------------------------------------------------
+
+
+def reported_fill(
+    s: Setup, side: Side, qty: float, broker_id: str, client_id: str, kind: str, after: int
+) -> Fill:
+    """Brokerin bildirdigi gerceklesme (mutabakatin girdisi)."""
+    return Fill(
+        broker_order_id=broker_id,
+        client_order_id=client_id,
+        symbol="SPY",
+        side=side,
+        qty=qty,
+        price=s.order.stop_loss,
+        filled_at=NOW + timedelta(seconds=after),
+        order_type=kind,
+    )
+
+
+def entry_fill(s: Setup, qty: float) -> Fill:
+    return reported_fill(
+        s, Side.BUY, qty, s.entry.broker_order_id, s.entry.client_order_id, "limit", 0
+    )
+
+
+def stop_fill(s: Setup, qty: float) -> Fill:
+    return reported_fill(s, Side.SELL, qty, "leg-stop", "alpaca-leg-stop", "stop", 30)
+
+
+def reopen(s: Setup, tmp_path: Path) -> SessionRunner:
+    """Baglanti kapanir; ayni journal ile yeni surec."""
+    s.conn.close()
+    s.conn = connect(tmp_path / "journal.db")
+    return s.restart()
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_reconciliation_does_not_overwrite_a_tracked_entry(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """Mutabakat izlenen satiri `closed` yapmaz; yeni surec izi bulur (B1)."""
+    s = prepare(path, config, tmp_path)
+    track_a_covered_partial_fill(s)  # giris 5/10, pozisyon 5, stop `new` 5
+    assert status_of(s.conn, s.entry) == "cancel_pending"
+
+    # Stop tetiklenir (5 satilir); giris 3 adet daha dolar: pozisyon 3, stop yok.
+    s.broker.fills = [entry_fill(s, 5.0), stop_fill(s, 5.0)]
+    partial_without_settling(s, status="partially_filled", filled=8.0, stop_qty=None)
+    hold_position(s.broker, s.order, 3.0)
+    result = s.restart().run_once()
+
+    assert result.halted
+    assert "koruma dogrulanamadi: SPY" in " ".join(result.notes)
+    assert status_of(s.conn, s.entry) == "cancel_pending"
+    assert s.broker.closed == ["SPY"]
+
+
+def test_an_unpersisted_halt_survives_a_reconciled_exit_fill(
+    config: Config, tmp_path: Path
+) -> None:
+    """Gun yalniz bellekte kapali; stop kismen dolar; yeni surec yine kapatir (B1b)."""
+    s = prepare("blocked", config, tmp_path)
+    qty = float(s.order.qty)
+
+    def short_cover(broker: RacingBroker) -> None:
+        settle(broker, s.entry, "filled", qty)
+        hold_position(broker, s.order, qty)
+        broker.open_orders.extend(legs(s.order, stop_qty=5.0))
+
+    s.broker.on_cancel = short_cover
+    s.broker.fail_close = True
+    assert s.runner.run_once().halted
+
+    # Stop, iptali kesinlesmeden tetiklendi ve 5 adet satti; kalan pozisyon stopsuz.
+    s.broker.fills = [entry_fill(s, qty), stop_fill(s, 5.0)]
+    hold_position(s.broker, s.order, qty - 5)
+    s.broker.fail_close = False
+    runner = reopen(s, tmp_path)
+    halted = [runner.run_once().halted for _ in range(3)]
+
+    assert all(halted)
+    assert status_of(s.conn, s.entry) != "closed"
+    assert s.broker.closed == ["SPY"]
+    assert s.broker.positions == []
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_the_turn_start_position_is_used_when_the_reread_fails(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """Giris ve ikinci pozisyon okumasi hata verir; tur basi goruntusu yeter (B2)."""
+    s = prepare(path, config, tmp_path)
+    track_a_covered_partial_fill(s)  # pozisyon 5, stop `new` 5
+    s.broker.open_orders = [o for o in s.broker.open_orders if o.broker_order_id != "leg-stop"]
+    s.broker.fail_get_order = True
+
+    def fail_later_position_reads(broker: RacingBroker) -> None:
+        broker.fail_positions = True
+
+    # Tur basindaki okuma basarili; sonraki pozisyon okumalari hata verir.
+    s.broker.on_list = fail_later_position_reads
+    result = s.runner.run_once()
+
+    assert result.halted
+    assert "KILL-SWITCH: koruma dogrulanamadi: SPY" in " ".join(result.notes)
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_an_unreadable_entry_counts_toward_the_cancel_attempt_limit(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """Ulasmayan iptal + okunamayan giris: sinir okuma hatasiyla uzamaz (B3)."""
+    s = prepare(path, config, tmp_path)
+    s.broker.unreachable_cancels = 1
+    assert s.runner.run_once().entries_blocked
+    assert status_of(s.conn, s.entry) == "cancel_requested"
+
+    s.broker.fail_get_order = True
+    results = [s.runner.run_once() for _ in range(MAX_CANCEL_ATTEMPTS)]
+
+    assert [r.halted for r in results[:-1]] == [False] * (MAX_CANCEL_ATTEMPTS - 1)
+    assert results[-1].halted
+    assert "iptal iletilemedi: SPY" in " ".join(results[-1].notes)
+    # Hesap genelindeki iptal bayat girisi de kapsar.
+    assert s.broker.open_orders == []
+    assert len(s.broker.submitted) == 1
+
+
+@pytest.mark.parametrize("filled", [0.0, None])
+@pytest.mark.parametrize("path", PATHS)
+def test_a_stale_fill_report_does_not_hide_a_visible_position(
+    path: str, filled: float | None, config: Config, tmp_path: Path
+) -> None:
+    """Giris okunuyor, dolumu 0 ya da bilinmiyor; pozisyon goruluyor, stop yok (B4)."""
+    s = prepare(path, config, tmp_path)
+    accept_without_settling(s)
+    s.broker.open_orders = [
+        o.model_copy(update={"status": "partially_filled", "filled_qty": filled, "side": Side.BUY})
+        for o in s.broker.open_orders
+    ]
+    hold_position(s.broker, s.order, 5.0)
+
+    result = s.runner.run_once()
+
+    assert result.halted
+    assert "KILL-SWITCH: koruma dogrulanamadi: SPY" in " ".join(result.notes)
+    assert s.broker.closed == ["SPY"]
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_a_canceled_entry_with_a_visible_position_keeps_the_tracking(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """Giris `canceled`, dolum 0, ama pozisyon var ve stopsuz: iz kapanmaz (B4)."""
+    s = prepare(path, config, tmp_path)
+    accept_without_settling(s)
+    settle(s.broker, s.entry, "canceled", 0.0)
+    hold_position(s.broker, s.order, 5.0)
+
+    result = s.runner.run_once()
+
+    assert result.halted
+    assert status_of(s.conn, s.entry) != "canceled"
+    assert s.broker.closed == ["SPY"]
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_a_canceled_entry_with_a_covered_position_is_written_as_canceled(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """Karsilastirma: ayni durumda pozisyon stopla kapsaniyorsa gun kapanmaz."""
+    s = prepare(path, config, tmp_path)
+    accept_without_settling(s)
+    settle(s.broker, s.entry, "canceled", 0.0)
+    hold_position(s.broker, s.order, 5.0)
+    s.broker.open_orders.extend(legs(s.order, stop_qty=5.0))
+
+    result = s.runner.run_once()
+
+    assert not result.halted
+    assert status_of(s.conn, s.entry) == "canceled"
+    assert s.broker.closed == []
+
+
+@pytest.mark.parametrize("stop", ["accepted", "held", "short"])
+@pytest.mark.parametrize("path", PATHS)
+def test_an_unreadable_entry_needs_a_protective_stop_for_the_whole_position(
+    path: str, stop: str, config: Config, tmp_path: Path
+) -> None:
+    """Okunamayan giris dalinda da stopun durumu ve miktari sayilir."""
+    s = prepare(path, config, tmp_path)
+    track_a_covered_partial_fill(s)  # pozisyon 5, stop `new` 5
+    update = {"remaining_qty": 4.0} if stop == "short" else {"status": stop}
+    s.broker.open_orders = [
+        o.model_copy(update=update) if o.broker_order_id == "leg-stop" else o
+        for o in s.broker.open_orders
+    ]
+    s.broker.fail_get_order = True
+
+    result = s.runner.run_once()
+
+    assert result.halted
+    assert "KILL-SWITCH: koruma dogrulanamadi: SPY" in " ".join(result.notes)
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_a_position_that_appears_later_is_checked_while_the_entry_is_unreadable(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    s = prepare(path, config, tmp_path)
+    accept_without_settling(s)
+    s.broker.fail_get_order = True
+    assert not s.runner.run_once().halted
+
+    hold_position(s.broker, s.order, 4.0)
+    result = s.runner.run_once()
+
+    assert result.halted
+    assert s.broker.closed == ["SPY"]
+
+
+@pytest.mark.parametrize("unreadable", [False, True])
+@pytest.mark.parametrize("cover", ["none", "wrong_side", "full"])
+@pytest.mark.parametrize("path", PATHS)
+def test_a_short_position_needs_a_buy_stop(
+    path: str, cover: str, unreadable: bool, config: Config, tmp_path: Path
+) -> None:
+    """Satis yonlu giris: yalniz alis yonlu stop korur; giris okunsa da okunmasa da."""
+    s = prepare(path, config, tmp_path)
+    accept_without_settling(s)
+    price = s.order.limit_price or 100.0
+    qty = float(s.order.qty)
+    s.broker.terminal[s.entry.broker_order_id] = s.entry.model_copy(
+        update={"status": "filled", "filled_qty": qty, "side": Side.SELL}
+    )
+    s.broker.positions = [
+        Position(symbol="SPY", side=Side.SELL, qty=qty, avg_entry_price=price, current_price=price)
+    ]
+    sell_stop = legs(s.order, stop_qty=qty)[0]
+    covers: dict[str, list[OrderRef]] = {
+        "none": [],
+        "wrong_side": [sell_stop],
+        "full": [sell_stop.model_copy(update={"side": Side.BUY})],
+    }
+    s.broker.open_orders = covers[cover]
+    s.broker.fail_get_order = unreadable
+
+    assert s.runner.run_once().halted is (cover != "full")
