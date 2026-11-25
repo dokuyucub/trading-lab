@@ -45,6 +45,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+from alpaca_stub import STUB_POLL_SECONDS
 from shadow_days import (
     CODE_SHA,
     PARAMS_VERSION,
@@ -112,7 +113,9 @@ class Api:
 def _start(handler: type[BaseHTTPRequestHandler]) -> tuple[ThreadingHTTPServer, str]:
     server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     server.daemon_threads = True
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": STUB_POLL_SECONDS}, daemon=True
+    ).start()
     return server, f"http://127.0.0.1:{server.server_address[1]}"
 
 

@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from alpaca_stub import STUB_POLL_SECONDS
 from tlab import paper_probe
 
 NOW = datetime(2026, 9, 21, 14, tzinfo=UTC)
@@ -39,7 +40,9 @@ def endpoint(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]:
             self.wfile.write(state.get("body", json.dumps(data).encode()))
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": STUB_POLL_SECONDS}, daemon=True
+    )
     worker.start()
 
     def local_connection(host: str, timeout: int) -> HTTPConnection:
