@@ -33,6 +33,8 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+from alpaca_stub import STUB_POLL_SECONDS
+
 REPO = Path(__file__).resolve().parents[1]
 SCRIPT = REPO / "scripts" / "artifact_roundtrip" / "verify.py"
 PAYLOAD = REPO / "scripts" / "artifact_roundtrip" / "payload.json"
@@ -147,7 +149,9 @@ def servers() -> Iterator[Servers]:
     for handler in (_api_handler(fake), _blob_handler(fake)):
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         server.daemon_threads = True
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread = threading.Thread(
+            target=server.serve_forever, kwargs={"poll_interval": STUB_POLL_SECONDS}, daemon=True
+        )
         thread.start()
         started.append((server, thread))
     api = f"http://127.0.0.1:{started[0][0].server_address[1]}"

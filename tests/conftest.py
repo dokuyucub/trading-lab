@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -53,6 +54,24 @@ IMPLEMENTATION_ROOT_FILES = (
     ".github/workflows/shadow-observation.yml",
     ".github/workflows/shadow-aggregate.yml",
 )
+
+
+SDK_RETRY_SLEEPS: list[float] = []
+"""alpaca-py'nin yeniden deneme oncesi istedigi beklemeler (saniye); her testte sifirlanir."""
+
+
+@pytest.fixture(autouse=True)
+def _sdk_retry_wait_is_virtual(monkeypatch: pytest.MonkeyPatch) -> None:
+    """alpaca-py 429/504 yanitinda yeniden denemeden once GERCEK `time.sleep(3)` cagirir.
+
+    Yeniden deneme sayisi ve istek sirasi aynen kalir (testler bunlari
+    sayiyor); yalnizca duvar saati beklemesi kaldirilir. Yama SDK
+    modulunun `time` ADINI degistirir, surecin `time.sleep`'ini degil.
+    """
+    import alpaca.common.rest as sdk_rest
+
+    SDK_RETRY_SLEEPS.clear()
+    monkeypatch.setattr(sdk_rest, "time", SimpleNamespace(sleep=SDK_RETRY_SLEEPS.append))
 
 
 @pytest.fixture

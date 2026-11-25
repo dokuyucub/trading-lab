@@ -29,6 +29,7 @@ from typing import Any
 import pytest
 
 from alpaca_stub import StubState, alpaca_stub, bar_payload
+from conftest import SDK_RETRY_SLEEPS
 from tlab import sdk_probe
 
 NOW = datetime(2026, 9, 24, 15, 0, tzinfo=UTC)
@@ -309,6 +310,9 @@ def test_a_transient_rate_limit_is_retried_and_succeeds(
     assert _run(stub) == 0
     assert "OK hesap" in capsys.readouterr().out
     assert state.paths().count(ACCOUNT_PATH) == 2, "yeniden deneme olmadi"
+    # SDK yeniden denemeden once bir kez bekler; bekleme testte sanaldir
+    # (conftest `_sdk_retry_wait_is_virtual`) ama istenen sure kaydedilir.
+    assert SDK_RETRY_SLEEPS == [3], "SDK beklemesi istenmedi ya da sanallastirilmadi"
 
 
 def test_failure_output_carries_no_remote_or_exception_trace(

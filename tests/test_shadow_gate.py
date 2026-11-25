@@ -26,6 +26,7 @@ from urllib.parse import urlparse
 
 import pytest
 
+from alpaca_stub import STUB_POLL_SECONDS
 from shadow_days import day_payload, write_day
 from tlab import shadow_job
 from tlab.core.clock import SimClock
@@ -86,7 +87,9 @@ def _serve(api: Api) -> Iterator[str]:
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     server.daemon_threads = True
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": STUB_POLL_SECONDS}, daemon=True
+    )
     thread.start()
     try:
         yield f"http://127.0.0.1:{server.server_address[1]}"

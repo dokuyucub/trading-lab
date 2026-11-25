@@ -25,6 +25,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+STUB_POLL_SECONDS = 0.01
+"""`serve_forever` yoklama araligi. Varsayilan 0,5 sn: `shutdown()` her test
+sonunda sunucu basina ~0,5 sn bekliyordu (olcum: S1 raporu)."""
+
 ACCOUNT: dict[str, Any] = {
     "id": "904837e3-3b76-47ec-b432-046db621571b",
     "account_number": "PA3ALPACA",
@@ -329,6 +333,9 @@ class StubState:
 def _handler(state: StubState) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
+        # Baslik ve govde ayri `send` ile yaziliyor; keep-alive baglantida
+        # Nagle + gecikmeli ACK her yaniti ~40 ms bekletiyordu.
+        disable_nagle_algorithm = True
 
         def _send(self, payload: Any, status: int = 200) -> None:
             raw = json.dumps(payload).encode()
@@ -433,7 +440,9 @@ def alpaca_stub() -> Iterator[tuple[str, StubState]]:
     # baglantiyi beklerken kilitlenir.
     server = ThreadingHTTPServer(("127.0.0.1", 0), _handler(state))
     server.daemon_threads = True
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(
+        target=server.serve_forever, kwargs={"poll_interval": STUB_POLL_SECONDS}, daemon=True
+    )
     thread.start()
     try:
         yield f"http://127.0.0.1:{server.server_address[1]}", state
