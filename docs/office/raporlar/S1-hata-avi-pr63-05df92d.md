@@ -222,3 +222,95 @@ def test_b5_orphan_exit_survives_while_the_old_entry_is_unreadable(path, config,
 6. Satır 300-302 bedeli "gereksiz kapanabilir" diye hafif geçiyor: `S1-arastirma-2-alpaca-emir-davranisi.md` tam
    dolumdan sonra stopun `held` kaldığını (ikincil kaynak) yazıyor; öyleyse her iptal/dolum yarışı gün kapatır.
 7. `core/types.py:588` olmayan `_cancel_entry`'ye atıf yapıyor (bu commit'ten önce de vardı).
+
+## Yeniden inceleme — f654f0d
+
+İncelenen head `f654f0d` (ebeveyn `05df92d`). Yalnız okuma ve çevrimdışı hedefli test.
+
+- **Push edilebilir mi: EVET-notlarla.** B1–B4 kapanmış; normal işleyişte gerileme ya da yanlış gün kapanışı kurulamadı.
+- **Notlar:** 2 DOĞRULANDI kalıntı (R1 orta-düşük, R2 düşük) ve 1 test boşluğu. R1, Codex 7154998289'un ikinci
+  maddesiyle aynı sınıf (bellekteki sayaç + yeniden başlatma); §4'te sınır olarak açık yazılmalı ya da kapatılmalı.
+
+### Karalama testlerinin `f654f0d` ile sonucu
+Eski 41 testin 39'u yeşil, 2'si kırmızı. `tests/test_entry_cancel_race.py`: 159 yeşil.
+- Yeşile dönenler: B1 (iki yol), B1b, B2 (iki yol), B4 (dört durum), B4b (iki yol), B5 (iki yol).
+- Kırmızı kalan: B3 (iki yol), yalnız eski ön koşul satırı (`open_orders == ["accepted"]`). Beklenen: gün artık 4. turda
+  kapanıyor ve hesap genelindeki iptal bayat girişi kaldırıyor. Yeni davranış doğru.
+- B5 yalnız iptal doğrulanmamışken (`cancel_requested`) yeşil: 4. turda "iptal iletilemedi" ile gün kapanıyor.
+  `cancel_pending` satırında sahipsiz emir kalmaya devam ediyor (§4 bilinen sınır (i) ile uyumlu).
+
+### R1 — Deneme sınırı süreç belleğinde; yeniden başlatma sınırı uzatıyor (orta-düşük) — DOĞRULANDI, (b)
+`_cancel_attempts` süreç belleğinde (`runner.py:241`, `594-597`). Dizi: T1 iptal brokera ulaşmaz; sonra yalnız
+`get_order(parent)` hata verir; iki turda bir bağlantı kapanıp yeni runner kurulur. Sonuç: 12 turda gün kapanmaz, iptal
+yeniden gönderilmez, giriş açık listede `accepted` kalır. Yeniden başlatma yoksa gün 4. turda kapanıyor. Codex'in
+ölçüsüyle ("2. ve 4. tur sonunda yeniden başlatma, 6. turda hâlâ açık") aynı düzende yeniden üretilir. Uzayan şey korumasız
+pozisyon değil, bayat girişin canlı kalma süresi; dolarsa koruması ölçülür. §4 "süreç başına" diyor ama commit mesajı
+ve satır 281 "sınır okuma hatasıyla uzamaz" diye genel yazıyor. Düzeltme yönü: sınırı journal'dan türet
+(`cancel_requested` satırının `updated_at` yaşı ya da kalıcı sayaç).
+```python
+@pytest.mark.parametrize("path", PATHS)
+def test_r1_restarts_reset_the_cancel_attempt_limit(path, config, tmp_path):
+    s = prepare(path, config, tmp_path)
+    s.broker.unreachable_cancels = 1       # ilk iptal brokera ulasmaz
+    assert s.runner.run_once().entries_blocked
+    s.broker.fail_get_order = True         # sonra yalniz get_order(parent) hata verir
+    halted = []
+    for turn in range(1, 13):
+        halted.append(s.runner.run_once().halted)
+        if turn % 2 == 0:
+            reopen(s, tmp_path)            # iki turda bir yeniden baslatma, ayni journal
+    live = [o.status for o in s.broker.open_orders]
+    assert any(halted) or len(s.broker.cancelled_ids) > 1, (halted, live, len(s.broker.cancelled_ids))
+    # KIRMIZI (iki yol): ([False]*12, ['accepted'], 1) -- sayac surec belleginde, her surecte sifirdan
+```
+
+### R2 — Kalıcı okunamayan, iptali doğrulanmamış giriş her seansı kapatıyor (düşük) — DOĞRULANDI, (a)
+B3 düzeltmesinin yan etkisi. Brokerda artık bulunmayan kimlik `cancel_requested` satırında kalırsa her seansta
+(ve her süreçte) üç tur giriş engellenir, dördüncü turda gün kapanır; satır hiç çözülmez. `05df92d`'de aynı durum
+süresiz giriş engeliydi (O2); ikisinde de bot işlem açamaz, fark her gün `KILL-SWITCH` kaydı düşmesi. §4 "Bilinen
+sınırlar (ii)" yalnız iptali doğrulanmış satırı anlatıyor; bu hâl yazılmamış.
+```python
+@pytest.mark.parametrize("path", PATHS)
+def test_r2_a_permanently_unreadable_unconfirmed_entry_halts_every_session(path, config, tmp_path):
+    s = prepare(path, config, tmp_path)
+    s.broker.unreachable_cancels = 1
+    s.runner.run_once()
+    s.broker.fail_get_order = True         # kimlik brokerda artik yok: kalici okuma hatasi
+    day1 = [s.runner.run_once().halted for _ in range(MAX_CANCEL_ATTEMPTS)]
+    s.broker.open_orders = []
+    day2 = [r.halted for r in [next_session(s).run_once()] + [s.runner.run_once() for _ in range(3)]]
+    day3 = [r.halted for r in [session_after(s, 1).run_once()] + [s.runner.run_once() for _ in range(3)]]
+    print("R2", path, day1, day2, day3, status_of(s.conn, s.entry), len(s.broker.submitted))
+    assert not (any(day2) and any(day3)), (day1, day2, day3)
+    # KIRMIZI (iki yol): her seans 3 tur engelli, 4. turda gun kapanir; satir `cancel_requested` kalir
+```
+
+### Arandı, bulunamadı
+- **Tur başı görüntüsünün bayatlığı:** yanlış kapanış için pozisyonun tur içinde kapanması ve aynı anda stopun da
+  listeden düşmesi gerekir; B2 dalında buna ek olarak giriş ve ikinci pozisyon okuması da hata vermeli. Yön fail-closed.
+- **Sıfır dolum dalı normal işleyişte tetiklenmiyor:** bayat iptal yalnız aynı görüntüde pozisyonu olmayan sembole
+  gider (`runner.py:528`), izleme sürerken yeni giriş yoktur. Dal ancak dışarıdan açılmış pozisyonda ya da bayat dolum
+  bilgisinde çalışır; stopla kapsanıyorsa gün kapanmaz (commit'teki karşılaştırma testi).
+- **`mark_order_closed`:** `src/` içinde `orders.status` okuyan iki sorgu var (`queries.py:45` izleme, `queries.py:64`
+  `submitting`); hiçbiri `closed`'a bakmıyor. İzlenmeyen işlemde satır yine `closed` oluyor (karalama testi yeşil).
+  İzlemesi sonradan kapanan satır bir daha `closed` olmaz, `filled`/`canceled` kalır: bugün okuyanı yok, kozmetik.
+- **Deneme sayacı:** T1 gönderim (1), T2 ve T3 okunamayan tur (2, 3), T4 gün kapanır; okunabilir akışla aynı tur
+  sayısı. Yeni süreçte satır journal'dan devralınırsa üç kör tur, dördüncüde kapanış. Bilinçli sonuç: iki kör turdan
+  sonra giriş yeniden okunur ve hâlâ aktifse yeniden gönderim yapılmadan gün kapanır (tek gönderim; karalama R3).
+
+### Yeni testler
+- Mutasyonlar (`tests/test_entry_cancel_race.py`): durum ve miktarı yok sayan `_position_is_covered` 6 kırmızı;
+  kalıcı kaydı yok sayan `_check_kill_switch` 1 kırmızı; B4 dalı kaldırılınca 6; B2 geri düşüşü kaldırılınca 2; B3
+  sayacı ilerlemeyince 2 kırmızı. Önceki zayıflık 1 ve 2 kapanmış.
+- **Boşluk:** `mark_order_closed` hiçbir şey yazmayacak biçimde bozuldu; ilgili 9 test dosyasında 420 test yeşil kaldı
+  (`test_shadow_http.py` hataları mutasyonsuz koşuda da var, ortam kaynaklı). Hiçbir test izlenmeyen işlemin satırının
+  `closed` olduğunu doğrulamıyor; yeni yöntemin olumlu yolu sabit değil.
+- İki B1 testi (satır 1352, 1372) işlemin kaydedildiğini doğrulamıyor; eşleşme bozulursa `!= "closed"` boş yere geçer.
+  `trades` satır sayısı eklenmeli. Satır 1357'deki "giris 5/10" yorumu yanlış (miktar 10 değil); kozmetik.
+
+### Belge (§4) yeniden kontrol
+- Yeni maddeler kodla uyumlu: sıfır dolum + tur başı pozisyonu, okunamayan giriş + görüntüye düşüş, koşullu `closed`,
+  okunamayan turun denemeye sayılması, bilinen sınırlar (i) ve (ii), `held` notu.
+- Eksik: satır 280-281 yeniden başlatmanın sayacı sıfırladığını (R1) ve gönderim sayısının üçten az kalabildiğini
+  söylemiyor; satır 376'daki sınır (ii) doğrulanmamış iptal hâlini (R2) içermiyor. `runner.py:105` sabitinin
+  açıklaması da okunamayan turun sayıldığını yazmıyor.
