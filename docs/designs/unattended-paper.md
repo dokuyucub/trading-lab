@@ -378,7 +378,14 @@ kullanıcı isterse.
           fark edilmez; emir dolarsa oluşan ters pozisyon o turda günü
           kapatır. (ii) İptali doğrulanmış ama kalıcı olarak okunamayan
           giriş yeni girişleri süresiz engeller; çıkışı elle journal
-          düzeltmesidir.
+          düzeltmesidir. (iii) İptal deneme sayacı süreç belleğindedir:
+          giriş okunamazken süreç sınır dolmadan yeniden başlarsa sayaç
+          sıfırlanır; bayat giriş o sürede canlı kalır, dolarsa koruması
+          ölçülür. (iv) İptali doğrulanmamış ve kalıcı olarak okunamayan
+          giriş her seansı sınır dolunca kapatır; çıkışı yine elle journal
+          düzeltmesidir. (iii) ve (iv) için kalıcı çözüm, sınırı journal
+          zaman damgasından türetmek ve her turda pozisyon korumasını
+          girişten bağımsız denetlemektir; ayrı tasarım işi.
       - Kalan iş, "günde tek koşu" kapısı. Paper workflow'uyla birlikte
         gelir.
 - **Başlangıç yetkisi:** Codex SHA bağlı ONAY + kullanıcı onayı + kayıtlı

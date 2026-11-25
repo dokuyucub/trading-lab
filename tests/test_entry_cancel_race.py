@@ -1369,6 +1369,38 @@ def test_reconciliation_does_not_overwrite_a_tracked_entry(
     assert s.broker.closed == ["SPY"]
 
 
+def test_reconciliation_closes_an_untracked_entry(config: Config, tmp_path: Path) -> None:
+    """Karsilastirma: izlemede olmayan giris islemi kapaninca `closed` olur."""
+    s = prepare("ttl", config, tmp_path)
+    qty = float(s.order.qty)
+    settle(s.broker, s.entry, "filled", qty)
+    s.broker.fills = [entry_fill(s, qty), stop_fill(s, qty)]
+
+    result = s.runner.run_once()
+
+    assert not result.halted
+    assert status_of(s.conn, s.entry) == "closed"
+
+
+def test_mark_order_closed_skips_only_the_listed_statuses(config: Config, tmp_path: Path) -> None:
+    s = prepare("ttl", config, tmp_path)
+    writer = s.runner.writer
+    cid = s.entry.client_order_id
+    tracked = ("cancel_requested", "cancel_pending")
+
+    for status in tracked:
+        writer.update_order_status(cid, status)
+        writer.mark_order_closed(cid, unless=tracked)
+        assert status_of(s.conn, s.entry) == status
+
+    writer.update_order_status(cid, "filled")
+    writer.mark_order_closed(cid, unless=tracked)
+    assert status_of(s.conn, s.entry) == "closed"
+
+    with pytest.raises(ValueError, match="bos olamaz"):
+        writer.mark_order_closed(cid, unless=())
+
+
 def test_an_unpersisted_halt_survives_a_reconciled_exit_fill(
     config: Config, tmp_path: Path
 ) -> None:
