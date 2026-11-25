@@ -73,6 +73,14 @@ class RacingBroker(FakeBroker):
     """Broker iptali alir ama cevap kaybolur: cagiran hata gorur."""
     fail_positions: bool = False
     """Pozisyon okumasi hata verir."""
+    fail_close: bool = False
+    """Kapatma emri brokera ulasmaz; pozisyon acik kalir."""
+
+    def close_position(self, symbol: str) -> OrderRef | None:
+        if self.fail_close:
+            msg = "pozisyon kapatilamadi"
+            raise BrokerError(msg)
+        return super().close_position(symbol)
 
     def get_positions(self) -> list[Position]:
         if self.fail_positions:
@@ -1085,12 +1093,11 @@ def fill_with_stop_status(s: Setup, stop_status: str) -> None:
     s.broker.on_cancel = fill
 
 
-@pytest.mark.parametrize("path", PATHS)
-def test_a_halt_for_an_unprotected_fill_survives_a_restart(
-    path: str, config: Config, tmp_path: Path
+def test_a_halt_for_an_unprotected_fill_is_read_back_after_a_restart(
+    config: Config, tmp_path: Path
 ) -> None:
-    """Stop `accepted`: gun ilk turda kapanir; yeni surec sureyi yeniden baslatamaz."""
-    s = prepare(path, config, tmp_path)
+    """Saglikli journal: karar `daily_state`e yazilir ve yeni baglantidan okunur."""
+    s = prepare("ttl", config, tmp_path)
     fill_with_stop_status(s, "accepted")
 
     first = s.runner.run_once()
@@ -1099,12 +1106,49 @@ def test_a_halt_for_an_unprotected_fill_survives_a_restart(
     assert s.broker.closed == ["SPY"]
     assert s.broker.positions == []
 
-    # Baglanti kapanir; ayni journal ile yeni surec.
+    # Baglanti kapanir; kalici kayit yeniden acilan baglantidan okunur.
     s.conn.close()
     s.conn = connect(tmp_path / "journal.db")
+    reason = halt_reason(s.conn, first.now.date())
+    assert reason is not None
+    assert "koruma dogrulanamadi: SPY" in reason
+
     again = s.restart().run_once()
 
     assert again.halted
+    assert len(s.broker.submitted) == 1
+
+
+def test_an_unpersisted_halt_is_rebuilt_from_the_tracked_entry_after_a_restart(
+    config: Config, tmp_path: Path
+) -> None:
+    """`daily_state` yazilamiyor: karar yalniz surec belleginde kalir.
+
+    Yeni surec o bellegi goremez. Davranis yine ayni olmali: izlenen giris
+    dolumu ve korumasiz pozisyonu yeniden gosterir, yeni giris acilmaz ve
+    brokerda kalan pozisyon yeniden guvenli kapatmaya alinir.
+    """
+    s = prepare("blocked", config, tmp_path)
+    fill_with_stop_status(s, "accepted")
+    s.broker.fail_close = True
+
+    first = s.runner.run_once()
+
+    assert first.halted
+    assert "kill-switch karari journal'a yazilamadi" in " ".join(first.notes)
+    # Kapatma brokera ulasmadi: pozisyon acik, iz journal'da duruyor.
+    assert s.broker.closed == []
+    assert len(s.broker.positions) == 1
+    assert status_of(s.conn, s.entry) in ("cancel_requested", "cancel_pending")
+
+    s.conn.close()
+    s.conn = connect(tmp_path / "journal.db")
+    s.broker.fail_close = False
+    again = s.restart().run_once()
+
+    assert again.halted
+    assert "KILL-SWITCH: koruma dogrulanamadi: SPY" in " ".join(again.notes)
+    assert s.broker.closed == ["SPY"]
     assert s.broker.positions == []
     assert len(s.broker.submitted) == 1
 
@@ -1225,6 +1269,18 @@ def test_an_unreadable_entry_with_unreadable_orders_halts_when_a_position_shows(
 
     assert result.halted
     assert "KILL-SWITCH: koruma dogrulanamadi: SPY" in " ".join(result.notes)
+    # Emir listesi okunamadigi icin iptal teyit edilemedi: rakip kapatma yok.
+    assert s.broker.closed == []
+    assert len(s.broker.positions) == 1
+
+    # Emir listesi geri geldi (giris hala okunamiyor): kapatma yeniden denenir.
+    s.broker.fail_open_orders = False
+    again = s.runner.run_once()
+
+    assert again.halted
+    assert s.broker.closed == ["SPY"]
+    assert s.broker.positions == []
+    assert len(s.broker.submitted) == 1
 
 
 @pytest.mark.parametrize("path", PATHS)
