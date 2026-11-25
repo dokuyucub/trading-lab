@@ -135,3 +135,28 @@ olmayan düşük önemli kalemler: TK §5 `journal/db.py:96-100` (göç `ROLLBAC
 - **Ertele (öneri): A5a → Sprint 2 başı,** yer gerekirse: 2 Aralık'tan önce son tarihi yok, ölçütleri en belirsiz iş.
 - **Çıkar:** B63 (tamamlandı). **Kalsın:** A1, A3, B0, A2, A6a, C0; A4 ancak Z1–Z4 işlendikten sonra yazılır (kabul ölçütü
   §6'nın ilk beş maddesini panoya taşıyor).
+
+## Yeniden inceleme — c691e0c (Z1–Z8)
+
+Karar: **ONAY (notlarla).** Yalnız Z1–Z8 ve düzeltmenin getirdiği çelişkiler okundu (`git diff HEAD~1 -- docs/office/backlog.md`).
+
+- **Z1–Z4 karşılandı.** §6 madde 3 artık "silmeden bize yazın" diyor ve önceki günlerin koşularını ("Manually run" dahil) koruyor;
+  genel kural ile madde 7, 8, 9 silmeyi ve anahtar yenilemeyi toplamdan sonraya alıyor; Actions sayfası madde 4 ve 6'da planlı
+  günlerin dışına taşınmış; madde 5 kesin değerleri veriyor ("Required approvals: 0", Code Owners ve "up to date" kapalı).
+- **Z5–Z6 karşılandı.** Özet 6 sekiz iş; K8 bekleyenlerinde B12 ve B14; B6–B9 ve B12–B14 için baseline karşılaştırması; D2 ön koşul notu.
+- **Z7–Z8 karşılandı.** Tur 2 = B0 ∥ B1, Tur 5 = C0 ∥ B2, B63 tamamlandı. `MAX_CANCEL_ATTEMPTS` açıklaması 2876da0'da doğrulandı;
+  `trades` sayımı B10'da. Yedek kural B12–B14; Sprint 2 sırası "C8; A8 → B3"; C15 notu `evidence.py`'ı koruyor.
+- C8'in Sprint 2'nin ilk işi olması ve A5a'nın Sprint 1'de kalması engel değil.
+
+**Sahibe iletilmeden önce düzeltilecek tek satır (yeniden inceleme gerekmez):** Özet 7 hâlâ "bugün beklenen üç ayar … dış PR iş
+akışlarını onaya bağlamak" diyor; §6 madde 4 ile çelişiyor. Doğrusu: bugün madde 1 (isterse madde 2), bu hafta madde 5; Actions
+ayarı 26–27 Kasım'da ya da 1 Aralık koşusundan sonra. Sahibe Özet değil §6 metni gitmeli.
+
+Notlar (engel değil):
+- Genel kural "hiçbir koşu silinmez" derken madde 3 tek yabancı koşunun silinebileceğini söylüyor; genel kurala "tek istisna madde 3"
+  yazılmalı. Madde 4'e "ayardan sonra haber verin" eklenmeli (Yönetim'in doğrulaması buna bağlı). Madde 6 için "toplam doğrulandıktan
+  sonra" daha güvenli: toplam koşusu da Actions'ta çalışır. Madde 2'ye: "uyarı çıkarsa bize yazın; anahtarı kendiniz yenilemeyin."
+- Bayat atıflar: İtiraz 5 ("§6 madde 1–3") ve İtiraz 6 ("§6 madde 4"; kural artık madde 5); §7'deki "GÜV D9 … sahip işi (§6)" (eski
+  madde 12 kalktı); C15 satırının dosya listesinde `evidence.py` duruyor; D2 satırının "Bekleyen" sütunu nota göre güncellenmemiş.
+- A4'ün kabul ölçütü "ilk beş madde"nin yanında genel kuralı da taşımalı. B1 dalı, #63'te süren tur commit edildikten sonra
+  açılmalı (ikisi de `runner.py`'a dokunuyor).
