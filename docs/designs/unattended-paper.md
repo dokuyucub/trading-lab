@@ -288,18 +288,23 @@ kullanıcı isterse.
             `partially_filled` durumundaki stoplardan hesaplanır.
             `pending_cancel`, `pending_replace`, `held` ve listede olmayan
             her durum koruma sayılmaz.
-          - *Geçiş durumu* (Codex #63/7139373707): `accepted` (henüz
-            borsaya iletilmedi), `pending_new` (borsa henüz kabul etmedi)
-            ve `accepted_for_bidding` durumundaki stop sonradan `rejected`
-            olabilir ([Alpaca Order Lifecycle](https://docs.alpaca.markets/us/docs/orders-at-alpaca#order-lifecycle)).
-            Kapsam ancak bu stoplarla tamamlanıyorsa takip `filled` ile
-            kapanmaz. Durum değişmez, yeni giriş engellenir ve kapsam her
-            turda yeniden ölçülür. Stop `new` olursa takip kapanır;
-            reddedilirse dolum korumasız sayılır ve gün kapanır. Koruma
-            `MAX_COVER_WAIT_TURNS` (3) turda kanıtlanmazsa da gün kapanır.
-            Sayaç süreç belleğinde tutulur; yeniden başlatmada sıfırlanır,
-            ama bu sırada giriş engeli sürer. `held` bu yola girmez:
-            ebeveyn kısmi dolumda kalırsa bacak hiç etkinleşmeyebilir.
+          - *Geçiş durumu* (Codex #63/7139373707, 7154998289): `accepted`
+            (henüz borsaya iletilmedi), `pending_new` (borsa henüz kabul
+            etmedi) ve `accepted_for_bidding` durumundaki stop sonradan
+            `rejected` olabilir ([Alpaca Order Lifecycle](https://docs.alpaca.markets/us/docs/orders-at-alpaca#order-lifecycle)).
+            Bu yüzden koruma sayılmaz ve **bekleme tanınmaz**: kapsam yalnız
+            koruma kanıtı olan stoplarla sağlanmıyorsa gün o turda kapanır.
+            Bekleme sayacı bilerek yok. Böyle bir sayaç süreç belleğinde
+            tutulursa yeniden başlatmada sıfırlanır, girişin okuma hatasında
+            da ilerlemez; koruma süresi sınırsız uzayabilir. Gün kararı ise
+            `daily_state`'e kalıcı yazılır. Bedeli: yarış anında stop hâlâ
+            geçiş durumundaysa gün gereksiz kapanabilir; `held` ile birlikte
+            ilk paper günlerinde gözlenir.
+          - *Giriş okunamıyorsa* (Codex #63/7154998289): dolum miktarı
+            bilinmez, ama sembolde görünen pozisyonun koruması yine ölçülür.
+            Pozisyon stoplarla kapsanmıyorsa ya da açık emirler okunamıyorsa
+            gün kapanır. Pozisyon yoksa, kapsanıyorsa ya da pozisyon
+            okunamıyorsa takip ve giriş engeli sürer.
           - **`held` doğrulanmadı.** Alpaca bracket bacakları ebeveyn
             tamamen dolunca etkinleşir. Ebeveyn kısmi dolumdayken `held`
             stop kesinlikle korumaz. Tam dolumdan sonra `held` gösterilen
