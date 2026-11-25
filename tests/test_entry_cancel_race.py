@@ -621,6 +621,28 @@ def test_an_unsettled_partial_fill_with_cover_stays_tracked(
 
 
 @pytest.mark.parametrize("path", PATHS)
+def test_an_unsettled_fill_the_position_read_does_not_show_yet_is_still_checked(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """Giris kesinlesmedi ama 5 adet doldu; pozisyon okumasi henuz gostermiyor, stop yok.
+
+    Gereken miktar girisin kendi dolumundan gelir: pozisyonun gorunmemesi
+    korumasiz dolumu gizlemez.
+    """
+    s = prepare(path, config, tmp_path)
+    accept_without_settling(s)
+    s.broker.open_orders = [
+        o.model_copy(update={"status": "partially_filled", "filled_qty": 5.0, "side": Side.BUY})
+        for o in s.broker.open_orders
+    ]
+
+    result = s.runner.run_once()
+
+    assert result.halted
+    assert "KILL-SWITCH: koruma dogrulanamadi: SPY" in " ".join(result.notes)
+
+
+@pytest.mark.parametrize("path", PATHS)
 def test_a_growing_unsettled_fill_is_checked_again(
     path: str, config: Config, tmp_path: Path
 ) -> None:
@@ -1700,3 +1722,273 @@ def test_another_symbols_position_does_not_lock_an_old_fill(
 
     assert not result.halted
     assert status_of(s.conn, s.entry) == "filled"
+
+
+# --------------------------------------------------------------------------
+# Iz kapanmadan once guncel pozisyon; onceki seansin cikis emri; devralinan
+# cozumsuz iptal (Codex #63/7168523270)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_a_position_that_appears_after_the_first_read_keeps_the_tracking(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """Tur basinda pozisyon yok; sonra giris `canceled`/0 ve pozisyon 5, stop yok."""
+    s = prepare(path, config, tmp_path)
+    accept_without_settling(s)
+
+    def late(broker: RacingBroker) -> None:
+        settle(broker, s.entry, "canceled", 0.0)
+        hold_position(broker, s.order, 5.0)
+
+    s.broker.on_list = late
+    result = s.runner.run_once()
+
+    assert result.halted
+    assert "KILL-SWITCH: koruma dogrulanamadi: SPY" in " ".join(result.notes)
+    assert status_of(s.conn, s.entry) != "canceled"
+    assert s.broker.closed == ["SPY"]
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_an_unknown_position_does_not_prove_a_flat_account(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """Giris `canceled`/0; guncel pozisyon okunamiyor, tur basi goruntusu bos."""
+    s = prepare(path, config, tmp_path)
+    accept_without_settling(s)
+
+    def blind(broker: RacingBroker) -> None:
+        settle(broker, s.entry, "canceled", 0.0)
+        broker.fail_positions = True
+
+    s.broker.on_list = blind
+    result = s.runner.run_once()
+
+    assert not result.halted
+    assert result.entries_blocked
+    assert status_of(s.conn, s.entry) == "cancel_pending"
+
+    # Okuma geri geldi ve hesap gercekten bos: iz kapanir.
+    s.broker.fail_positions = False
+    after = s.runner.run_once()
+
+    assert not after.halted
+    assert status_of(s.conn, s.entry) == "canceled"
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_a_failed_reread_falls_back_to_a_seen_position_for_a_zero_fill(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """Giris `canceled`/0; tur basinda stopsuz pozisyon goruldu, yeniden okuma hata verir."""
+    s = prepare(path, config, tmp_path)
+    accept_without_settling(s)
+    settle(s.broker, s.entry, "canceled", 0.0)
+    hold_position(s.broker, s.order, 5.0)
+
+    def fail_later_position_reads(broker: RacingBroker) -> None:
+        broker.fail_positions = True
+
+    s.broker.on_list = fail_later_position_reads
+    result = s.runner.run_once()
+
+    assert result.halted
+    assert "KILL-SWITCH: koruma dogrulanamadi: SPY" in " ".join(result.notes)
+    assert status_of(s.conn, s.entry) != "canceled"
+
+
+def halt_on_a_late_unprotected_fill(s: Setup) -> None:
+    """Ilk gun: iptal brokerca dogrulanir (`cancel_pending`), sonra stopsuz dolum."""
+    accept_without_settling(s)
+    fill_while_listing(s, filled=float(s.order.qty), stop_qty=None, visible=True)
+    assert s.runner.run_once().halted
+    assert s.broker.positions == []
+    assert status_of(s.conn, s.entry) == "cancel_pending"
+
+
+def old_exit_order(s: Setup, status: str) -> OrderRef:
+    """Sonraki seansa tasinan satis stopu."""
+    return legs(s.order, stop_qty=s.order.qty)[0].model_copy(update={"status": status})
+
+
+@pytest.mark.parametrize("stop_status", ["new", "held", "pending_cancel"])
+@pytest.mark.parametrize("path", PATHS)
+def test_an_old_exit_order_is_cancelled_even_when_the_entry_is_unreadable(
+    path: str, stop_status: str, config: Config, tmp_path: Path
+) -> None:
+    """Onceki seans, iptal dogrulanmis, giris okunamiyor, pozisyon sifir.
+
+    Kalan cikis emri gerceklesebilir: sonraki seansin ILK turunda gun
+    kapanir, hesap genelindeki iptal emri kapsar, iz korunur.
+    """
+    s = prepare(path, config, tmp_path)
+    halt_on_a_late_unprotected_fill(s)
+    s.broker.open_orders.append(old_exit_order(s, stop_status))
+    s.broker.fail_get_order = True
+
+    result = next_session(s).run_once()
+
+    assert result.halted
+    assert "KILL-SWITCH: koruma dogrulanamadi: SPY" in " ".join(result.notes)
+    assert s.broker.cancelled[-1] is None
+    assert leg_ids(s.broker) == []
+    assert status_of(s.conn, s.entry) == "cancel_pending"
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_an_old_exit_order_is_cancelled_even_when_the_position_is_unknown(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """Giris ve guncel pozisyon okunamiyor; gorunen eski cikis emri yine sahipsizdir."""
+    s = prepare(path, config, tmp_path)
+    halt_on_a_late_unprotected_fill(s)
+    s.broker.open_orders.append(old_exit_order(s, "new"))
+    runner = next_session(s)
+    s.broker.fail_get_order = True
+
+    def fail_later_position_reads(broker: RacingBroker) -> None:
+        broker.fail_positions = True
+
+    s.broker.on_list = fail_later_position_reads
+    result = runner.run_once()
+
+    assert result.halted
+    assert "KILL-SWITCH: koruma dogrulanamadi: SPY" in " ".join(result.notes)
+    assert status_of(s.conn, s.entry) == "cancel_pending"
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_an_unreadable_old_entry_on_an_empty_account_stays_tracked(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """Karsilastirma: ayni durum, ama sembolde emir yok. Gun kapanmaz."""
+    s = prepare(path, config, tmp_path)
+    halt_on_a_late_unprotected_fill(s)
+    s.broker.fail_get_order = True
+
+    result = next_session(s).run_once()
+
+    assert not result.halted
+    assert result.entries_blocked
+    assert status_of(s.conn, s.entry) == "cancel_pending"
+    assert s.broker.closed == ["SPY"]  # yalniz ilk gunun kapatmasi
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_an_old_buy_order_is_not_an_orphan_exit_for_a_long_entry(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """Yon journal'dan gelir: alis girisi icin alis emri cikis degildir."""
+    s = prepare(path, config, tmp_path)
+    halt_on_a_late_unprotected_fill(s)
+    s.broker.open_orders.append(old_exit_order(s, "new").model_copy(update={"side": Side.BUY}))
+    s.broker.fail_get_order = True
+
+    result = next_session(s).run_once()
+
+    assert not result.halted
+    assert result.entries_blocked
+    assert leg_ids(s.broker) == ["leg-stop"]
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_an_unreadable_order_list_is_not_evidence_of_an_orphan(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """Onceki seans, hesap duz, emir listesi okunamiyor: gun kapanmaz, iz surer."""
+    s = prepare(path, config, tmp_path)
+    halt_on_a_late_unprotected_fill(s)
+    runner = next_session(s)
+    s.broker.fail_get_order = True
+
+    def fail_later_order_reads(broker: RacingBroker) -> None:
+        broker.fail_open_orders = True
+
+    s.broker.on_list = fail_later_order_reads
+    result = runner.run_once()
+
+    assert not result.halted
+    assert result.entries_blocked
+    assert status_of(s.conn, s.entry) == "cancel_pending"
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_an_adopted_unconfirmed_old_cancel_takes_the_safe_close_path(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """Onceki seans, iptal DOGRULANMAMIS, giris okunamiyor: ilk turda gun kapanir."""
+    s = prepare(path, config, tmp_path)
+    halt_on_an_unprotected_fill(s)
+    assert status_of(s.conn, s.entry) == "cancel_requested"
+    s.broker.open_orders.append(old_exit_order(s, "new"))
+    s.broker.fail_get_order = True
+
+    result = next_session(s).run_once()
+
+    assert result.halted
+    assert "KILL-SWITCH: iptal iletilemedi: SPY" in " ".join(result.notes)
+    assert leg_ids(s.broker) == []
+    assert status_of(s.conn, s.entry) == "cancel_requested"
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_same_session_legs_are_not_orphans_while_the_entry_is_unreadable(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """Ayni seans: girisin kendi bekleyen (`held`) bacaklari sahipsiz sayilmaz."""
+    s = prepare(path, config, tmp_path)
+    accept_without_settling(s)
+    stop, target = legs(s.order, stop_qty=s.order.qty)
+    s.broker.open_orders.extend(
+        [stop.model_copy(update={"status": "held"}), target.model_copy(update={"status": "held"})]
+    )
+    s.broker.fail_get_order = True
+
+    for _ in range(3):
+        result = s.runner.run_once()
+        assert not result.halted
+        assert result.entries_blocked
+    assert leg_ids(s.broker) == ["leg-stop", "leg-target"]
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_an_adopted_unconfirmed_cancel_gets_no_blind_turn(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """Ulasmayan iptal + okunamayan giris: yeni surec sureyi yeniden baslatamaz."""
+    s = prepare(path, config, tmp_path)
+    s.broker.unreachable_cancels = 1
+    assert s.runner.run_once().entries_blocked
+    assert status_of(s.conn, s.entry) == "cancel_requested"
+    s.broker.fail_get_order = True
+
+    # Ayni surecte bir kor tur hakki var; gun henuz kapanmaz.
+    assert not s.runner.run_once().halted
+    assert [o.broker_order_id for o in s.broker.open_orders] == [s.entry.broker_order_id]
+
+    # Yeniden baslatma: devralinan istekte kor tur hakki yok.
+    result = reopen(s, tmp_path).run_once()
+
+    assert result.halted
+    assert "iptal iletilemedi: SPY" in " ".join(result.notes)
+    assert s.broker.open_orders == []
+    assert len(s.broker.submitted) == 1
+
+
+@pytest.mark.parametrize("path", PATHS)
+def test_an_adopted_unconfirmed_cancel_is_resent_when_the_entry_is_readable(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """Karsilastirma: devralinan istekte giris okunuyor ve aktifse yeniden gonderilir."""
+    s = prepare(path, config, tmp_path)
+    s.broker.unreachable_cancels = 1
+    assert s.runner.run_once().entries_blocked
+    assert status_of(s.conn, s.entry) == "cancel_requested"
+
+    result = reopen(s, tmp_path).run_once()
+
+    assert not result.halted
+    assert s.broker.cancelled_ids.count(s.entry.broker_order_id) == 2
+    assert status_of(s.conn, s.entry) == "canceled"

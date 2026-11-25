@@ -36,12 +36,17 @@ def open_entry_orders(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
 
 
 def orders_with_status(conn: sqlite3.Connection, *statuses: str) -> list[dict[str, Any]]:
-    """Verilen durumlardaki emirlerin kimlikleri, sembolleri ve durumlari."""
+    """Verilen durumlardaki emirlerin kimlikleri, sembolleri, durumlari, yonu ve gonderim ani.
+
+    Yon ve gonderim ani, giris brokerdan okunamadiginda izlenen satirin
+    hangi seansa ve yone ait oldugunu bilmek icin gerekir.
+    """
     placeholders = ", ".join("?" for _ in statuses)
     try:
         rows = conn.execute(
             # Yalnizca "?" yer tutuculari birlestiriliyor; degerler baglaniyor.
-            "SELECT client_order_id, broker_order_id, symbol, status FROM orders"  # noqa: S608
+            "SELECT client_order_id, broker_order_id, symbol, status, side, submitted_at"  # noqa: S608
+            " FROM orders"
             f" WHERE status IN ({placeholders})",
             statuses,
         ).fetchall()

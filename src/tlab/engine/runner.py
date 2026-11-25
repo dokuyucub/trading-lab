@@ -125,6 +125,27 @@ class TrackedCancel:
     broker_order_id: str
     client_order_id: str
     symbol: str
+    side: Side | None = None
+    """Girisin journal'daki yonu; giris brokerdan okunamadiginda kullanilir."""
+    submitted_at: datetime | None = None
+    """Girisin gonderildigi an; hangi seansa ait oldugunu soyler."""
+
+
+def journal_side(value: object) -> Side | None:
+    """Journal metnini yone cevirir; taninmiyorsa None."""
+    try:
+        return Side(str(value))
+    except ValueError:
+        return None
+
+
+def journal_instant(value: object) -> datetime | None:
+    """Journal'daki UTC ISO metnini ana cevirir; okunamiyorsa None."""
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def may_still_execute(order: OrderRef, exit_side: Side) -> bool:
@@ -238,6 +259,11 @@ class SessionRunner:
         surec izlemeyi oradan devralir.
         """
         self._unconfirmed_cancels: set[str] = set()
+        self._adopted_cancels: set[str] = set()
+        """Bu surecin journal'dan `cancel_requested` olarak devraldigi iptaller.
+        Yalniz istek dogrulanmamisken sorulur (`_confirm_cancel`). Deneme
+        sayaci surec bellegindedir; devralinan istekte giris okunamazsa
+        sayac yeniden baslatilmaz, gun o turda kapanir (Codex #63/7168523270)."""
         """Iptali gonderilen ama brokerin aldigi dogrulanmamis girisler."""
         self._cancel_attempts: dict[str, int] = {}
         """Giris basina bu surecte yapilan iptal gonderimi sayisi."""
@@ -537,6 +563,8 @@ class SessionRunner:
                 broker_order_id=order.broker_order_id,
                 client_order_id=order.client_order_id,
                 symbol=order.symbol,
+                side=journal_side(ours[order.client_order_id].get("side")),
+                submitted_at=order.submitted_at,
             )
             # Write-ahead: niyet kalici yazilmadan iptal gonderilmez.
             # Aksi halde iptal ile kayit arasinda yeniden baslayan surec
@@ -586,6 +614,11 @@ class SessionRunner:
         turda bir sey gonderilmez, ama tur denemeye sayilir: sinir okuma
         hatasiyla suresiz uzamamali. Hak bitince gun kapanir ve hesap
         genelindeki iptal bayat girisi de kapsar.
+
+        Journal'dan devralinan istekte kor tur hakki yoktur: sayac surec
+        bellegindedir ve yeniden baslatma onu sifirlar. Devralinan giris
+        okunamiyorsa gun o turda kapanir; boylece yeniden baslatma sureyi
+        uzatamaz (Codex #63/7168523270).
         """
         cid = item.client_order_id
         try:
@@ -593,7 +626,7 @@ class SessionRunner:
         except BrokerError:
             log.exception("%s giris emri okunamadi (%s)", item.symbol, item.broker_order_id)
             attempts = self._cancel_attempts.get(cid, 0)
-            if attempts >= MAX_CANCEL_ATTEMPTS:
+            if cid in self._adopted_cancels or attempts >= MAX_CANCEL_ATTEMPTS:
                 return False
             self._cancel_attempts[cid] = attempts + 1
             return True
@@ -636,9 +669,13 @@ class SessionRunner:
                 broker_order_id=str(row["broker_order_id"]),
                 client_order_id=client_order_id,
                 symbol=str(row["symbol"]),
+                side=journal_side(row["side"]),
+                submitted_at=journal_instant(row["submitted_at"]),
             )
             if row["status"] == CANCEL_REQUESTED:
                 self._unconfirmed_cancels.add(client_order_id)
+                # Bu surecin baslatmadigi cozumsuz istek: kor tur hakki yok.
+                self._adopted_cancels.add(client_order_id)
         self._cancels_seen_this_turn = set(tracked)
         for item in tracked.values():
             if item.client_order_id in self._unconfirmed_cancels and not self._confirm_cancel(item):
@@ -673,6 +710,7 @@ class SessionRunner:
 
         self._pending_cancels.pop(item.client_order_id, None)
         self._unconfirmed_cancels.discard(item.client_order_id)
+        self._adopted_cancels.discard(item.client_order_id)
         self._cancel_attempts.pop(item.client_order_id, None)
         if outcome is CancelOutcome.CANCELED:
             self._write_order_status(item, "canceled")
@@ -708,9 +746,13 @@ class SessionRunner:
             pozisyonun korumasi yine olculur (`_outcome_without_entry`);
           * terminal, dolum sifir -> CANCELED;
           * terminal degil, dolum sifir -> PENDING;
-          * dolum sifir ya da bilinmiyor ama tur basinda sembolde pozisyon
-            goruluyor: brokerin dolum bilgisi bayat olabilir; pozisyonun
-            korumasi olculur, kanitlanamazsa UNPROTECTED;
+          * dolum sifir ya da bilinmiyor: iz kapanmadan once sembolun
+            pozisyonu GUNCEL okumayla uzlastirilir (`_current_position`),
+            cunku brokerin dolum bilgisi bayat olabilir ve pozisyon tur
+            icinde sonradan gorunebilir. Pozisyon varsa korumasi olculur,
+            kanitlanamazsa UNPROTECTED. Pozisyon bilinmiyorsa (okuma hata
+            verdi, tur basi goruntusu de bos) duz hesap kanitlanmamistir:
+            PENDING, iz kapanmaz (Codex #63/7168523270);
           * dolum var (ya da terminal ve dolum bilinmiyor): stop
             bacaklari `max(dolum, pozisyon)` miktarini kapsamiyorsa ya
             da durum okunamiyorsa UNPROTECTED; kapsiyorsa terminalde
@@ -723,39 +765,72 @@ class SessionRunner:
             order = self.broker.get_order(item.broker_order_id)
         except BrokerError:
             log.exception("%s giris emri okunamadi (%s)", item.symbol, item.broker_order_id)
-            return self._outcome_without_entry(item, positions)
+            return self._outcome_without_entry(item, positions, session)
         terminal = order.status in TERMINAL_ORDER_STATUSES
         if order.filled_qty == 0 or (not terminal and order.filled_qty is None):
-            seen = positions.get(item.symbol)
-            if seen is not None and not self._position_is_covered(item.symbol, seen):
+            position, known = self._current_position(item.symbol, positions)
+            if position is not None and not self._position_is_covered(item.symbol, position):
                 return CancelOutcome.UNPROTECTED
+            if not known:
+                return CancelOutcome.PENDING
             return CancelOutcome.CANCELED if terminal else CancelOutcome.PENDING
         if not self._fill_is_protected(item, order, session):
             return CancelOutcome.UNPROTECTED
         return CancelOutcome.FILLED if terminal else CancelOutcome.PENDING
 
+    def _current_position(
+        self, symbol: str, positions: dict[str, Position]
+    ) -> tuple[Position | None, bool]:
+        """Sembolun pozisyonu ve bu bilginin kanitli olup olmadigi.
+
+        Once guncel okuma. Okuma hata verirse tur basindaki goruntuye
+        dusulur: sembol oradaysa pozisyon vardir. Orada da yoksa pozisyon
+        BILINMIYOR demektir (`None, False`); duz hesap kanitlanmis sayilmaz.
+        """
+        try:
+            current = next((p for p in self.broker.get_positions() if p.symbol == symbol), None)
+        except BrokerError:
+            log.exception("%s pozisyonu okunamadi; tur basi goruntusu kullaniliyor", symbol)
+            seen = positions.get(symbol)
+            return seen, seen is not None
+        return current, True
+
     def _outcome_without_entry(
-        self, item: TrackedCancel, positions: dict[str, Position]
+        self, item: TrackedCancel, positions: dict[str, Position], session: SessionState
     ) -> CancelOutcome:
-        """Giris okunamiyorken sembolde gorunen pozisyonun korumasini olcer.
+        """Giris okunamiyorken sembolun gorunen durumundan sonuc cikarir.
 
         Dolum miktari bilinmez. Ama girisin okunamamasi, daha once gorulmus
         ya da yeni olusmus korumasiz bir pozisyonu gizlememeli (Codex
-        #63/7154998289). Pozisyon yeniden okunur; bu okuma hata verirse tur
-        basindaki goruntuye dusulur. Pozisyon goruluyor ve korumasi
-        kanitlanamiyorsa UNPROTECTED. Iki kaynakta da pozisyon yoksa ya da
-        pozisyon kapsaniyorsa PENDING: izleme ve giris engeli surer.
+        #63/7154998289):
+          * pozisyon goruluyor: korumasi olculur; kanitlanamazsa
+            UNPROTECTED, kapsaniyorsa PENDING;
+          * pozisyon yok ya da bilinmiyor ve journal girisi ONCEKI seanstan
+            gosteriyor: sembolde hala gerceklesebilecek bir cikis emri
+            goruluyorsa sahipsizdir; dolarsa ters pozisyon acar.
+            UNPROTECTED: gun kapanir, hesap genelindeki iptal emri de
+            kapsar (Codex #63/7168523270). Ayni seansin girisinde bu
+            kontrol yapilmaz: kendi bekleyen bacaklari sahipsiz degildir.
+        Diger her durumda PENDING: izleme ve giris engeli surer.
         """
-        try:
-            position = next(
-                (p for p in self.broker.get_positions() if p.symbol == item.symbol), None
-            )
-        except BrokerError:
-            log.exception("%s pozisyonu okunamadi; tur basi goruntusu kullaniliyor", item.symbol)
-            position = positions.get(item.symbol)
-        if position is None or self._position_is_covered(item.symbol, position):
+        position, _known = self._current_position(item.symbol, positions)
+        if position is not None:
+            if self._position_is_covered(item.symbol, position):
+                return CancelOutcome.PENDING
+            return CancelOutcome.UNPROTECTED
+        if item.submitted_at is None:
             return CancelOutcome.PENDING
-        return CancelOutcome.UNPROTECTED
+        if item.submitted_at.astimezone(UTC) >= session.session_open:
+            return CancelOutcome.PENDING
+        try:
+            symbol_orders = [o for o in self.broker.list_open_orders() if o.symbol == item.symbol]
+        except BrokerError:
+            # Hesap duz, sahipsiz emir kaniti yok; giris engeli zaten suruyor.
+            log.exception("%s acik emirleri okunamadi", item.symbol)
+            return CancelOutcome.PENDING
+        if self._has_orphan_exit(item, item.side, symbol_orders):
+            return CancelOutcome.UNPROTECTED
+        return CancelOutcome.PENDING
 
     def _position_is_covered(self, symbol: str, position: Position) -> bool:
         """Gorunen pozisyonu koruma kaniti olan stoplar kapsiyor mu.
@@ -797,7 +872,7 @@ class SessionRunner:
             # Kalan bir stop ya da hedef dolarsa ters pozisyon acar; sahipligi
             # kimlikle kanitlanamadigi icin gun kapanir ve `_flatten_all`
             # butun emirleri iptal eder (Codex #63/7115896065).
-            return not self._has_orphan_exit(item, order, symbol_orders)
+            return not self._has_orphan_exit(item, order.side, symbol_orders)
         filled = (order.filled_qty or 0.0) if same_session else 0.0
         required = max(filled, held)
         entry_side = position.side if position else order.side
@@ -807,9 +882,11 @@ class SessionRunner:
         return stops_cover(exit_side, required, symbol_orders)
 
     @staticmethod
-    def _has_orphan_exit(item: TrackedCancel, order: OrderRef, orders: list[OrderRef]) -> bool:
+    def _has_orphan_exit(
+        item: TrackedCancel, entry_side: Side | None, orders: list[OrderRef]
+    ) -> bool:
         """Pozisyon yokken sembolde hala gerceklesebilecek bir cikis emri var mi."""
-        if order.side is None:
+        if entry_side is None:
             # Yon bilinmiyorsa girisin kendisi disindaki her terminal olmayan
             # emir sayilir.
             return any(
@@ -817,7 +894,7 @@ class SessionRunner:
                 and o.status not in TERMINAL_ORDER_STATUSES
                 for o in orders
             )
-        exit_side = Side.SELL if order.side is Side.BUY else Side.BUY
+        exit_side = Side.SELL if entry_side is Side.BUY else Side.BUY
         return any(may_still_execute(o, exit_side) for o in orders)
 
     def _write_order_status(self, item: TrackedCancel, status: str) -> None:

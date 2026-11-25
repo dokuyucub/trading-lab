@@ -229,7 +229,7 @@ kullanıcı isterse.
           kapısından geçmiş ilk emrin parçasıdır.
       - İptal/dolum yarışı (Codex #63/6777889127, 6840456161, 6844629736,
         6863854867, 6993997992, 7115896065,
-        7116120239, 7139373707, 7154998289, 7155309564):
+        7116120239, 7139373707, 7154998289, 7155309564, 7168523270):
         bayat giriş
         iptali (hem TTL hem `entries_blocked` yolu) yalnız girişin
         `broker_order_id`'sine gider (`Broker.cancel_order`). Sembol bazlı
@@ -249,9 +249,13 @@ kullanıcı isterse.
             yaşam döngüsü ile dolan miktarın koruması ayrı sorulardır;
           - terminal (`canceled`/`expired`/`rejected`) ve dolum sıfır →
             "canceled";
-          - dolum sıfır ya da bilinmiyor ama tur başında sembolde pozisyon
-            görünüyor → brokerın dolum bilgisi bayat olabilir; pozisyonun
-            koruması ölçülür, kanıtlanamazsa gün kapanır ve iz kapanmaz;
+          - dolum sıfır ya da bilinmiyor → iz kapanmadan önce sembolün
+            pozisyonu güncel okumayla uzlaştırılır (Codex #63/7168523270):
+            brokerın dolum bilgisi bayat olabilir ve pozisyon tur içinde
+            sonradan görünebilir. Pozisyon varsa koruması ölçülür;
+            kanıtlanamazsa gün kapanır ve iz kapanmaz. Güncel okuma hata
+            verirse tur başındaki görüntüye düşülür; orada da pozisyon
+            yoksa düz hesap kanıtlanmış sayılmaz, iz sürer;
           - terminal ve dolum var (`filled` dahil) ya da dolum bilinmiyor
             → koruma kontrolü; kapsıyorsa "filled". Korumasız dolumda
             durum değiştirilmez, gün kararı kalıcıdır;
@@ -279,7 +283,11 @@ kullanıcı isterse.
           (cevabı kaybolan istek), hâlâ aktifse aynı giriş kimliğine yeniden
           gönderilir. Süreç başına en fazla `MAX_CANCEL_ATTEMPTS` (3) deneme;
           girişin okunamadığı tur da denemeye sayılır, sınır okuma hatasıyla
-          uzamaz. Aşılırsa gün kill-switch ile kapanır ("iptal iletilemedi") ve
+          uzamaz. Sayaç süreç belleğindedir; bu yüzden yeni sürecin
+          journal'dan devraldığı çözümsüz istekte kör tur hakkı yoktur:
+          devralınan giriş okunamıyorsa gün o turda kapanır, yeniden
+          başlatma süreyi uzatamaz (Codex #63/7168523270). Giriş okunuyorsa
+          akış aynıdır. Aşılırsa gün kill-switch ile kapanır ("iptal iletilemedi") ve
           `_flatten_all` bütün emirleri iptal edip kapatmayı her turda
           yeniden dener.
         - **Önceki seanstan kalan iz (P2):** koruma kontrolünde `filled_qty`
@@ -313,10 +321,16 @@ kullanıcı isterse.
             bilinmez, ama sembolde görünen pozisyonun koruması yine ölçülür.
             Pozisyon yeniden okunur; bu okuma hata verirse tur başındaki
             görüntü kullanılır. Pozisyon görünüyor ve stoplarla kapsanmıyorsa
-            ya da açık emirler okunamıyorsa gün kapanır. İki kaynakta da
-            pozisyon yoksa ya da pozisyon kapsanıyorsa takip ve giriş engeli
-            sürer. Bedeli: giriş ve emir listesi aynı turda okunamazsa
-            stopla kapsanan pozisyon da kapatılır.
+            ya da açık emirler okunamıyorsa gün kapanır. Pozisyon
+            kapsanıyorsa takip ve giriş engeli sürer. Bedeli: giriş ve emir
+            listesi aynı turda okunamazsa stopla kapsanan pozisyon da
+            kapatılır. Pozisyon yoksa ya da bilinmiyorsa girişin seansına ve
+            yönüne journal'dan bakılır (Codex #63/7168523270): giriş önceki
+            seanstansa ve sembolde gerçekleşebilecek bir çıkış emri
+            görünüyorsa emir sahipsizdir; gün kapanır, hesap genelindeki
+            iptal onu da kapsar, iz korunur. Aynı seansın girişinde bu
+            kontrol yapılmaz (kendi bekleyen bacakları sahipsiz değildir);
+            emir listesi okunamıyorsa takip sürer.
           - **`held` doğrulanmadı.** Alpaca bracket bacakları ebeveyn
             tamamen dolunca etkinleşir. Ebeveyn kısmi dolumdayken `held`
             stop kesinlikle korumaz. Tam dolumdan sonra `held` gösterilen
@@ -359,7 +373,10 @@ kullanıcı isterse.
           yeniden açılan bağlantıdan okunması ve yazılamayan kararın izlenen
           satırdan yeniden kurulması; okunamayan giriş (pozisyon var/yok,
           emirler okunamıyor, tur başı görüntüsü, deneme sınırı); mutabakatın
-          izlenen satırı ezmemesi; bayat dolum bilgisi; satış yönlü giriş.
+          izlenen satırı ezmemesi; bayat dolum bilgisi; satış yönlü giriş;
+          sembol yalıtımı; tur içinde sonradan görünen pozisyon ve bilinmeyen
+          pozisyon; önceki seansın çıkış emri (giriş okunamazken); devralınan
+          çözümsüz iptal.
         - **Doğrulanmadı:** Alpaca'da kısmi dolum + ebeveyn iptalinden
           sonra bacak miktarının dolan miktara inip inmediği ve bacakların
           düz `status=open` listesinde görünüp görünmediği. İlk paper
@@ -373,19 +390,17 @@ kullanıcı isterse.
           dönmediğini bildiriyor. Doğruysa dolumlu her iptal yarışı günü
           kapatır. Bacakların iç içe (`nested`) okunması ve her turda koruma
           denetimi ayrı tasarım işidir.
-        - **Bilinen sınırlar:** (i) önceki seans + okunamayan giriş +
-          pozisyon yokken kalan çıkış emri, iptal brokerca doğrulanmışsa
-          fark edilmez; emir dolarsa oluşan ters pozisyon o turda günü
-          kapatır. (ii) İptali doğrulanmış ama kalıcı olarak okunamayan
-          giriş yeni girişleri süresiz engeller; çıkışı elle journal
-          düzeltmesidir. (iii) İptal deneme sayacı süreç belleğindedir:
-          giriş okunamazken süreç sınır dolmadan yeniden başlarsa sayaç
-          sıfırlanır; bayat giriş o sürede canlı kalır, dolarsa koruması
-          ölçülür. (iv) İptali doğrulanmamış ve kalıcı olarak okunamayan
-          giriş her seansı sınır dolunca kapatır; çıkışı yine elle journal
-          düzeltmesidir. (iii) ve (iv) için kalıcı çözüm, sınırı journal
-          zaman damgasından türetmek ve her turda pozisyon korumasını
-          girişten bağımsız denetlemektir; ayrı tasarım işi.
+        - **Bilinen sınırlar:** (i) İptali doğrulanmış ama kalıcı olarak
+          okunamayan giriş yeni girişleri süresiz engeller; çıkışı elle
+          journal düzeltmesidir. (ii) İptali doğrulanmamış ve kalıcı olarak
+          okunamayan giriş, her yeni sürecin ilk turunda günü kapatır;
+          çıkışı yine elle journal düzeltmesidir. İkisinin kalıcı çözümü,
+          bağdaştırıcının "emir yok" yanıtını geçici hatadan ayırması ve
+          pozisyon korumasının her turda girişten bağımsız denetlenmesidir;
+          ayrı tasarım işi. (iii) Aynı süreçte başlayan ulaşmamış iptalde
+          deneme sınırı süreç başınadır; süreç sınır dolmadan yeniden
+          başlarsa devralma kuralı devreye girer (giriş okunamıyorsa gün
+          hemen kapanır, okunuyorsa iptal yeniden gönderilir).
       - Kalan iş, "günde tek koşu" kapısı. Paper workflow'uyla birlikte
         gelir.
 - **Başlangıç yetkisi:** Codex SHA bağlı ONAY + kullanıcı onayı + kayıtlı
