@@ -1,6 +1,6 @@
 # İş listesi — Sprint 1 Planlama Toplantısı
 
-Tarih: 2026-11-25 · Birim: Planlama Toplantısı · Durum: Onay Kurulu incelemesini bekliyor (kod yazılmadı).
+Tarih: 2026-11-25 · Birim: Planlama Toplantısı · Durum: Onay Kurulu RET'inden sonra düzeltildi (Z1–Z8, `raporlar/S1-onay-kurulu-plan.md`); yeniden inceleme bekliyor.
 Girdi: `docs/office/raporlar/S1-*.md` (8 rapor). Kod tabanı: `main` 47a2a7d (+1 belge birleşmesi); PR #63 `claude/killswitch-fix` @ f654f0d.
 Rapor kısaltmaları: **YÇ** yürütme çekirdeği · **BT** backtest/öğrenme · **R63** PR #63 incelemesi · **F3** Faz 3 yol haritası ·
 **ALP** Alpaca emir davranışı · **GÜV** güvenlik · **TK** test ve kalite · **UF** ufuk. Örnek: "YÇ B1" = o raporun B1 bulgusu.
@@ -10,12 +10,12 @@ raporlardaki kod parçalarıdır. Hiçbir iş `config/*.yaml`'a, `src/tlab/resea
 ## 1. Özet
 
 1. 63 iş: **A** (şimdi birleşir) 14 · **B** (yürütme, #63 üstüne, ≥2 Aralık) 16 · **C** (dalda şimdi, ≥2 Aralık) 22 · **D** (karara bağlı) 11.
-2. Sprint 1 dokuz iş: A1, A3, B0, B63, A2, A6a, A5a, A4, C0. Davranış değiştiren `src/` kodu yok; hepsi 2 Aralık'tan önce biter.
+2. Sprint 1 on iş: A1, A3, B0, B1, A2, A6a, A5a, A4, C0, B2 (B63 tamamlandı). Davranış değiştiren `src/` main'e girmez: B1 ve B2 dalda kalır, birleşmeleri toplam ve C0'dan sonradır.
 3. Sprint 1 sonunda: test süiti belirgin kısalır (ölçüm: sunucu kullanan 15 dosya 791 → 133 sn); kabul tablosu toplam sonucu
    görülmeden main'de; Koruma v2 tasarımı ve #63'ün son hali Codex'in önünde; çözülme planı ve pin dönüşümü 2 Aralık'a hazır.
 4. Dondurma: 2 Aralık'a kadar main'e yalnız test, belge ve script girer. C0 birleşmeden hiçbir `src/` PR'ı main CI'da yeşil olamaz.
 5. Darboğaz: `runner.py`'a dokunan 12 iş (B1, B3, B6–B14, C9b) #63 üstünde tek sıradır; adaptör (C8→B4→B5) ve sim (C9a→C10) zincirleri ayrı yürür.
-6. Ölçüm semantiğini değiştiren 6 iş (C9a, C9b, C10, C11, C13, C15) dalda yazılır; kayıtlı karar olmadan hiçbir ölçümde kullanılmaz.
+6. Ölçüm semantiğini değiştiren 8 iş (B12, B14, C9a, C9b, C10, C11, C13, C15) dalda yazılır; kayıtlı karar olmadan hiçbir ölçümde kullanılmaz.
 7. Sahipten bugün beklenen üç ayar: yabancı PR'ları geçici kapatmak, dış PR iş akışlarını onaya bağlamak, `main` kuralı (§6).
 8. **En büyük risk:** Koruma v2'nin dayandığı "tam dolumdan sonra stop `held` kalır ve açık listede görünmez" bilgisi ikincil kaynaklı;
    broker çağrısı yasak olduğu için doğrulanamıyor. Yanlışsa #63 üstündeki B6–B10 yeniden yazılır. Azaltma: v2 önce yalnız okur ve loglar (İtiraz 3).
@@ -65,7 +65,11 @@ Dondurma sürerken `src/` dokunan dalda kabul edilen tek kırmızı kampanya pin
 | B13 | Kurulamayan emir veto olarak kaydedilsin; sembol başına istisna turu öldürmesin | YÇ B10 | `src/tlab/engine/runner.py`, `src/tlab/risk/gate.py`, `tests/test_runner.py`, `tests/test_gate.py` | `claude/kurulamayan-emir` — runner zinciri | S | ≥2 Aralık | YÇ test_f8: `ValidationError` çıkmaz, karar "emir kurulamadı" vetosuyla yazılır, sonraki semboller değerlendirilir | A7 |
 | B14 | Kill-switch kapanışı journal'da `kill_switch` etiketi | YÇ B12; BT O3; F3 §2 | `src/tlab/engine/reconciler.py`, `src/tlab/engine/runner.py`, `tests/test_reconciler.py` | `claude/kill-switch-etiketi` — runner zinciri | S | ≥2 Aralık | YÇ test_f9: `exit_reason == "kill_switch"` | — |
 
-Runner zinciri sırası: B63 → B1 → B3 → B6 → B7 → B8 → B9 → B10 → B11 → B12 → B13 → B14 → C9b. B0 yanıtı gecikirse B11–B14 öne alınır.
+Runner zinciri sırası: B63 (tamamlandı; taban #63 dalının güncel başı) → B1 → B3 → B6 → B7 → B8 → B9 → B10 → B11 → B12 → B13 → B14 → C9b. B0 yanıtı gecikirse B12–B14 öne alınır (B11 kesin ret ayrımı için B5'i bekler).
+
+**B6–B9 ve B12–B14 için ek kabul ölçütü (Onay Kurulu Z5):** sentetik baseline raporu değişiklikten önce ve sonra karşılaştırılır; fark varsa iş kayıtlı karara bağlanır. B12 ve B14 ölçüm semantiğini değiştirir (mutabakat penceresi ve çıkış etiketi işlem kayıtlarına girer): K8 kapsamındadır, kayıtlı karar olmadan hiçbir ölçümde kullanılmaz.
+
+**B63'ten taşınanlar:** iki B1 testine `trades` satır sayısı doğrulaması B10'a taşındı. `MAX_CANCEL_ATTEMPTS` açıklaması 2876da0'da yapıldı.
 
 ### C — dalda şimdi, birleşme ≥2 Aralık (belge işleri hariç)
 
@@ -110,6 +114,10 @@ Runner zinciri sırası: B63 → B1 → B3 → B6 → B7 → B8 → B9 → B10 �
 | D10 | Olumlu nabız kuralı ve oturumdan bağımsız bekçi | UF 3 | kural `docs/ops/`; başlatıcı değişikliği kampanya sonrası | S/M | K16 |
 | D11 | PDT kuralı: sayaç yanıtta yokken kapı davranışı | UF 16; kanarya log'u | `src/tlab/risk/gate.py`, `src/tlab/core/types.py`, `tests/test_gate.py` | S | K11; C8 |
 
+**D2 ön koşulları (Onay Kurulu Z6):** B4–B8 (Koruma v2 ilk aşama; paper'da uygun emirlerin yaklaşık %10'u kısmi dolar), C8 (kanarya/SDK uyumu) ve D11 (K11, PDT sayacı). Bunlar tamamlanmadan paper seans işi başlamaz.
+
+**C15 notu (Z8):** `learning/evidence.py` değişmez (AGENTS §11.5 ilkesi); gereken ek yeni modülde ya da K13 kararıyla yapılır.
+
 ## 3. Sprint 1 uygulama planı
 
 Her uygulayıcı soğuk başlar. Ortak kurallar:
@@ -126,13 +134,15 @@ Her uygulayıcı soğuk başlar. Ortak kurallar:
 - **A3.** Oku: F3 P1; `docs/designs/unattended-paper.md:23-36`; `scripts/shadow_report.py` (`validate`, `render`);
   `tests/test_shadow_report.py:26` deseni. Kanıt: yeni testler; eşik mutasyonu (15 → 14) kırmızı; bayraksız çıktının bayt karşılaştırması; `python3 -I` ile koşu.
 
-**Tur 2 — B0 ∥ B63** (ikisi de Codex'e gidecek paketi tamamlar)
+**Tur 2 — B0 ∥ B1** (B63 tamamlandı: 8fd2234 ve sonrası; yığın tabanı #63 dalının güncel başı)
 - **B0.** Oku: ALP raporunun tamamı; YÇ B2, B3, B6, B11, B13, B14 ve "stop bacağını listede görmeye dayanan yerler" tablosu;
   R63 B5, O1, O2, R1, R2; `wt-r63` içinde `docs/designs/unattended-paper.md` §4 ve `src/tlab/engine/runner.py`. Kanıt: §4 T1'in
   her sorusuna gerekçeli yanıt; her iddia rapor kimliğine ya da dosya:satıra bağlı; "ikincil kaynak" işaretleri korunur; ÖN RAPOR taslağı ekte.
-- **B63.** Oku: R63 "Yeniden inceleme — f654f0d"; `wt-r63` içinde `tests/test_entry_cancel_race.py:1352-1372`,
-  `src/tlab/journal/writer.py:219`. Kanıt: `mark_order_closed`'u boşaltan mutasyon kırmızı; yarış dosyası tam yeşil (bugün 159);
-  tam `make check`'te tek kırmızı kampanya pin testi; davranış diff'i yok.
+- **B1.** Oku: YÇ B1 ve test_f1 karalama testi; TK §5, §6.3; `src/tlab/engine/runner.py` içinde `run_once` başı,
+  `_resolve_unconfirmed`, `_reconcile`, `_check_kill_switch`; `tests/test_kill_switch_durability.py`. Dal `claude/journal-hata-kapanis`,
+  #63 dalının güncel başından. Kanıt: `orders`/`fills` yazılamazken zarar sınırı ve kapanış penceresi turunda pozisyon
+  kapatılır (önce kırmızı, sonra yeşil); journal hatasında yeni giriş yok, tur sürer; mutasyon; tam `make check`'te tek
+  kırmızı kampanya pin testi. Dal birleşmez: toplam ve C0'dan sonra.
 
 **Tur 3 — A2 ∥ A6a**
 - **A2.** Oku: TK §6.1, §5; `tests/test_runner.py` (`FakeBroker`, `build_runner`, `:592`); `src/tlab/engine/runner.py:583-615`.
@@ -147,12 +157,16 @@ Her uygulayıcı soğuk başlar. Ortak kurallar:
 - **A4.** Oku: UF fikir 1 ve "ilk 5" madde 1; bu dosyanın §5 ve §6; A6a takvimi. Kanıt: sayfada fiyat, hesap değeri ve koşu
   kimliği araması boş; her "Sizden beklenen" satırı §5 ya da §6 maddesine bağlı.
 
-**Tur 5 — C0**
+**Tur 5 — C0 ∥ B2**
 - **C0.** Oku: F3 §4 adım 0; `tests/test_shadow_job.py:700-748`; `tests/test_measurement_freeze.py:60-170`;
   `docs/designs/shadow-observation.md` §7. Kanıt: kayıt boşken parmak izi kapsamındaki bir dosyaya geçici dokunuş testi
   kırmızıya çevirir (geri alınır); kayıt doluyken atlanır ve kayıt testi yeşil. Dal birleşmez; toplam doğrulanınca koşu kimliği doldurulur.
 
-Sprint 2 adayları, sırayla: B1 → B3; C8; B2; A7, A8; A5b; C1 → C2 ∥ C3; A6b.
+- **B2.** Oku: YÇ B4 ve test_f4 karalama testi; UF 6, 16; `src/tlab/cli.py:283-294`; `src/tlab/sdk_compat.py` (`bound_transport`);
+  `tests/test_cli_run.py`. Dal `claude/run-zaman-asimi`, main'den. Kanıt: yakalanan `Session.request` çağrısı `timeout` taşır
+  (istek gönderilmez; önce kırmızı); tam `make check`'te tek kırmızı pin testi. Dal birleşmez: toplam ve C0'dan sonra.
+
+Sprint 2 adayları, sırayla: C8; A8 → B3; A7; A5b; C1 → C2 ∥ C3; A6b.
 
 ## 4. Tasarım gerektirenler
 
@@ -189,7 +203,7 @@ Sprint 2 adayları, sırayla: B1 → B3; C8; B2; A7, A8; A5b; C1 → C2 ∥ C3; 
 | K5 | `min_days` tabanı ve birincil hüküm (F3 soru 5) | Codex | `min_days=20`, `min_trades=100`; birincil gün-bloğu; gerçek veri görülmeden sabitlenir | C3 |
 | K6 | Pozisyon başına R ve sembol herkese açık özete girer mi (F3 soru 7) | Sahip + Codex | Evet; R orandır, fiyat değildir | C1, C4 |
 | K7 | Eşzamanlı pozisyon: backtest bugün fiilen tek pozisyon ölçüyor (YÇ B7, BT B1) | Codex + sahip | Kod dalda düzeltilir; 2026-10-13 ölçümüne "etkilenmiş olabilir, doğrulanmadı" notu düşülür; yeni ölçüm yalnız yeni veri kümesi kararıyla | C9a, C9b |
-| K8 | Dolum modeli ve pencere değişiklikleri (BT B3, B4, B5, B9, B10) | Codex | Temkinli yöndeki B3 ve B4 kabul; görülmüş dönem yeniden ölçülmez; B9 için alan "yalnız kapı vetosu" diye etiketlenir | C10, C11, C13 |
+| K8 | Dolum modeli ve pencere değişiklikleri (BT B3, B4, B5, B9, B10) | Codex | Temkinli yöndeki B3 ve B4 kabul; görülmüş dönem yeniden ölçülmez; B9 için alan "yalnız kapı vetosu" diye etiketlenir | B12, B14, C10, C11, C13 |
 | K9 | `held` stop koruma sayılır mı (ALP K1) | Codex + sahip | Hayır; ilk gözlenen stop tetiklenmesine kadar yalnız log | B6, B7 |
 | K10 | Kısmi dolumda kalan pozisyon: kapat mı, bağımsız çıkış çifti mi (ALP K2) | Codex | Yalnız o sembolü kapat; v2'de yeni emir türü yok | B8 |
 | K11 | PDT sayacı yanıtta yoksa kapı ne yapar (UF 16) | Codex + sahip | Kural açık ve özsermaye eşiğin altındayken sayaç okunamıyorsa veto; önce gerçek yanıt doğrulanır | D11 |
@@ -205,29 +219,39 @@ Sprint 2 adayları, sırayla: B1 → B3; C8; B2; A7, A8; A5b; C1 → C2 ∥ C3; 
 
 Bunları yalnız depo sahibi yapabilir; bizim iş listemize girmez. En acil olan en üstte.
 
-1. **Bugün: yabancıların PR ve yorum açmasını geçici kapatın.** Settings → Moderation → Interaction limits → "Limit to repository
-   collaborators". Neden: 30 Kasım ve 1 Aralık gözlem günlerinde bir yabancının açacağı tek PR o günün kaydını boşa çıkarabilir;
-   iki kayıp gün kampanyayı düşürür. Toplam doğrulanana kadar açık kalsın; süre sorulursa en uzun seçeneği seçin.
-2. **Bugün: dışarıdan gelen PR'lar onayınız olmadan iş çalıştırmasın.** Settings → Actions → General → "Fork pull request
-   workflows" → "Require approval for all external contributors".
-3. **30 Kasım ve 1 Aralık, Türkiye saatiyle 15:50'den önce bir bakış.** Actions sayfasında "Shadow observation" altında bizim
-   zamanlanmış koşumuz dışında bir koşu görürseniz silin ya da bize yazın.
-4. **Bu hafta: `main` dalını kilitleyin.** Settings → Rules → Rulesets → `main` için yeni kural: "Require a pull request" açık,
-   "Require status checks" altında `quality`, "Block force pushes" ve "Restrict deletions" açık, istisna listesi boş.
-   Dikkat: "Require approvals" ve "Code Owners review" **kapalı** kalsın; iki ajan aynı hesapla yazdığı için açılırsa hiçbir PR birleşemez.
-5. **Bu hafta: gizli anahtar taramasını açın.** Settings → Code security → Secret scanning, Push protection, Dependabot alerts,
-   Private vulnerability reporting.
-6. Settings → Actions → General: "Workflow permissions" salt okuma; "Allow GitHub Actions to create and approve pull requests"
-   kapalı; yalnız GitHub'ın kendi action'larına izin.
-7. Yazma yetkisi olanları gözden geçirin: Collaborators, kurulu GitHub App'ler, Deploy keys, Webhooks. Ajan anahtarlarında
-   "Administration" ve "Secrets" izni olmasın.
-8. GitHub, Alpaca ve Cloudflare hesaplarında iki adımlı doğrulama; kullanılmayan erişim anahtarlarını silin.
-9. Depo gizliyken oluşan eski Actions kayıtları artık herkese açık. Gereksizleri silin; `shadow-day` adlı dosyalara **dokunmayın**
-   (kampanya kanıtı). #17'deki yorumlarda yapıştırılmış anahtar ya da hesap değeri var mı, bir göz atın.
+**Genel kural (toplam doğrulanana kadar):** hiçbir anahtar silinmez ya da yenilenmez; hiçbir Actions koşusu ve hiçbir dosya
+(artefakt) silinmez. Korunanlar: `STARTER_GITHUB_PAT` (Cloudflare), Alpaca paper anahtarı, ajan bağlantıları, "Shadow
+observation" ve "Shadow aggregate" koşuları, geçmiş ölçüm koşuları. Emin olmadığınız her şeyi önce bize sorun.
+
+1. **Bugün: yabancıların PR ve yorum açmasını geçici kapatın.** Settings → Moderation options → Interaction limits → "Limit to
+   repository collaborators"; süre sorulursa en uzun seçenek. Açık yabancı PR varsa kapatın. Neden: 30 Kasım ve 1 Aralık
+   gözlem günlerinde bir yabancının açacağı tek PR o günün kaydını boşa çıkarabilir; iki kayıp gün kampanyayı düşürür.
+   Ayardan sonra bize haber verin; ajanların yazabildiğini bir deneme yorumuyla doğrularız.
+2. **Bugün ya da bu hafta: gizli anahtar taramasını açın.** Settings → Code security → Secret scanning, Push protection,
+   Dependabot alerts, Private vulnerability reporting. Bu sayfa Actions ayarlarına dokunmaz; istediğiniz gün yapılabilir.
+3. **30 Kasım ve 1 Aralık sabahı (Türkiye saatiyle 08:00–15:50) bir bakış.** Actions sayfasında "Shadow observation" altında o
+   sabah oluşmuş bir koşu görürseniz **silmeden bize yazın.** Yalnız yanında "Pull request" ya da tanımadığınız bir kullanıcı adı
+   yazan o tek koşu silinebilir. Önceki günlerin koşularına ("Scheduled" ya da sizin adınızla "Manually run" dahil) dokunmayın;
+   bizim gerçek gözlem koşularımız sizin adınızla "Manually run" görünür. Yabancı bir PR'da "Approve and run" düğmesine basmayın.
+4. **Actions ayar sayfası: yalnız plan dışı günde.** Settings → Actions → General → "Fork pull request workflows" → "Require
+   approval for all external contributors". Bu ayarı 26–27 Kasım'da ya da 1 Aralık koşusu bittikten sonra yapın; 30 Kasım ve
+   1 Aralık'ta bu sayfaya dokunmayın. Sayfada başka hiçbir seçeneği değiştirmeyin (yanlış seçim gözlem işini durdurabilir).
+   Bu ayar kampanyayı tek başına korumaz; asıl koruma madde 1'dir.
+5. **Bu hafta: `main` dalını kilitleyin.** Settings → Rules → Rulesets → `main` için yeni kural: "Require a pull request before
+   merging" açık ve **"Required approvals: 0"**; "Require review from Code Owners" **kapalı**; "Require status checks to pass"
+   altında `quality`; "Require branches to be up to date before merging" **kapalı**; "Block force pushes" ve "Restrict deletions"
+   açık; istisna (bypass) listesi boş. İki ajan aynı hesapla yazdığı için onay sayısı 0'dan büyük olursa hiçbir PR birleşemez.
+6. **1 Aralık koşusu bittikten sonra:** Settings → Actions → General: "Workflow permissions" salt okuma; "Allow GitHub Actions
+   to create and approve pull requests" kapalı; yalnız GitHub'ın kendi action'larına izin.
+7. Yazma yetkisi olanları gözden geçirin (yalnız bakın, silmeyin): Collaborators, kurulu GitHub App'ler, Deploy keys, Webhooks.
+8. GitHub, Alpaca ve Cloudflare hesaplarında iki adımlı doğrulamayı açın. Anahtar silme ve yenileme toplam doğrulandıktan sonra.
+9. **Toplam doğrulandıktan sonra (listeyi biz vereceğiz):** depo gizliyken oluşan gereksiz eski Actions kayıtlarının silinmesi;
+   Alpaca paper anahtarının yenilenmesi; başlatıcı kullanılmayacaksa anahtarının iptali.
 10. Takvime yazın: toplam tıklaması 2–24 Aralık arası; 20 Ocak 2027'de başlatıcı anahtarı bitiyor.
-11. 2 Aralık'tan sonra: `paper` adlı bir Environment kurun (yalnız `main`, onaylayan siz). Kampanya bitince Alpaca paper
-    anahtarını yenileyin; başlatıcı kullanılmayacaksa anahtarını iptal edin. Gerçek para anahtarı bu yapılmadan GitHub'a girmesin.
-12. Bir kez bakın: Insights → Dependency graph kilit dosyalarını görüyor mu; anahtar taraması açıldıktan sonra geçmiş için uyarı çıktı mı.
+11. Paper'a geçiş kararından sonra: `paper` adlı bir Environment (yalnız `main`). Onaylayıcı zorunlu olursa gözetimsiz iş her
+    sabah sizi bekler; bu yüzden ayrı karara bağlı (K2). Gerçek para anahtarı bu yapı kurulmadan GitHub'a girmesin.
+12. İsteğe bağlı: oturum ortamının ağ izinlerine `docs.alpaca.markets` eklenirse Alpaca'nın resmî belgesini doğrudan
+    okuyabiliriz; "stop emri `held` görünür" bilgisinin doğrulanmasına yardım eder.
 
 ## 7. Kapsam dışı bırakılanlar
 
