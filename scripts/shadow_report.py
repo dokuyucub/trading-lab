@@ -8,7 +8,13 @@ ONERI oldugunu soyler; fiyat ya da ham veri tasimaz (toplamda zaten yoktur).
 disinda kalir, kampanya dondurmasi sirasinda degisebilir; ag yok, tetik yok.
 Beklenmeyen sema ya da alan sabit bir hata ile durdurur; sessiz tamamlama yok.
 
+`--kabul`, raporun sonuna paper kabul olcutleri tablosunu ekler
+(`docs/designs/unattended-paper.md` §1). Tablo KARAR DEGILDIR: olcutleri ayni
+ozetten mekanik okur, genel hukum vermez. Esikler tasarimdan gelir ve toplam
+sonucu gorulmeden once buraya yazildi; sonuca gore degistirilmez.
+
 Kullanim: python3 -I scripts/shadow_report.py --summary shadow-total.json [--out rapor.md]
+          [--kabul [--campaign <64 hane>]]
 """
 
 from __future__ import annotations
@@ -68,6 +74,23 @@ MEASURE_EXTRAS = {
     "range_within_bps": ("iex_window_incomplete", "sip_window_incomplete"),
     "intent_agreement": ("no_intent",),
 }
+# Paper kabul olcutleri (`unattended-paper.md` §1). Sayilar TASARIMDAN gelir,
+# ozetten degil. `ACCEPT_THRESHOLDS`, `tlab.shadow.summary.Thresholds`
+# varsayilaninin kopyasidir (betik `tlab`i ice aktaramaz); esitligi test baglar.
+ACCEPT_PLANNED_DAYS = 20
+ACCEPT_MIN_COMPLETE = 15
+ACCEPT_THRESHOLDS = {
+    "completeness": 0.95,
+    "range_bps": 5.0,
+    "range_share": 0.90,
+    "range_min_support": 100,
+    "intent_share": 0.80,
+    "intent_min_support": 30,
+    "intent_min_days": 10,
+}
+NO_RUN_STATUSES = ("baslamadi", "bilinmiyor")
+"""Kayit isinin kostugu bilinmeyen gunler: hic kosmadi ya da kosu kaydi yok."""
+MET, UNMET, MANUAL = "sağlandı", "sağlanmadı", "elle doğrulanacak"
 
 
 class ReportError(ValueError):
@@ -315,13 +338,105 @@ def _short(rate: Mapping[str, Any]) -> str:
     return f"{rate['numerator']}/{rate['denominator']} (bilinmeyen {rate['unknown']})"
 
 
+def acceptance(
+    summary: Mapping[str, Any], *, expected_campaign: str | None = None
+) -> list[dict[str, str]]:
+    """Paper kabul olcutleri (`unattended-paper.md` §1), olcut basina bir satir.
+
+    KARAR DEGILDIR; genel hukum uretmez. GECTI olmayan olcu (BELIRSIZ dahil)
+    saglanmamistir, yukari yuvarlanmaz. Betigin ozetten bilemeyecegi satirlar her
+    zaman `elle doğrulanacak` kalir. Beklenen kampanya verilmis ve ozetinki
+    farkliysa `ReportError`.
+    """
+    data = validate(summary)
+    if expected_campaign is not None and data["campaign"] != expected_campaign:
+        raise ReportError("kampanya kimligi beklenenle uyusmuyor")
+    rows: list[dict[str, str]] = []
+
+    def add(olcut: str, durum: str, kanit: str) -> None:
+        rows.append({"olcut": olcut, "durum": durum, "kanit": kanit})
+
+    designed = data["thresholds"] == ACCEPT_THRESHOLDS
+    note = "" if designed else "; özet tasarımdaki varsayılan eşiklerle hesaplanmamış"
+    for name, question in MEASURES:
+        verdict = data["total"][name]["verdict"]
+        add(
+            f"{question} (`{name}`)",
+            MET if verdict == "gecti" and designed else UNMET,
+            f"sonuç {VERDICTS[verdict]}; gereken GEÇTİ{note}",
+        )
+    planned, complete = data["planned_days"], data["days"]["tamam"]
+    twenty = planned == ACCEPT_PLANNED_DAYS
+    needed = f"en az {ACCEPT_MIN_COMPLETE} / {ACCEPT_PLANNED_DAYS}"
+    add(
+        f"Gün kapsaması: {needed} gün tamam",
+        MET if twenty and complete >= ACCEPT_MIN_COMPLETE else UNMET,
+        f"tamam {complete} / planlı {planned}; gereken {needed}"
+        + ("" if twenty else f"; ölçüt {ACCEPT_PLANNED_DAYS} günlük plan için yazıldı"),
+    )
+    add(
+        "Tamam olmayan günlerin sebebi kayıtta ve sistematik değil",
+        MANUAL,
+        f"tamam olmayan gün {planned - complete}; sebepler gün tablosunda, "
+        "sistematik olup olmadığını betik bilemez",
+    )
+    add(
+        "İlk gün denetimi: sistematik hata yok, durdurma kararı verilmemiş",
+        MANUAL,
+        "kaynak #17 kayıtları; betik onları göremez",
+    )
+    no_run = [
+        f"{item['day']} ({DAY_STATUSES[item['status']]})"
+        for item in data["day_list"]
+        if item["status"] in NO_RUN_STATUSES
+    ]
+    add(
+        "Kayıt işi: koşusuz planlı gün yok ya da sebebi açıklanmış",
+        MANUAL if no_run else MET,
+        f"koşusuz ya da koşusu bilinmeyen gün {len(no_run)}: {', '.join(no_run)}; "
+        "açıklaması günlük kayıtlardan doğrulanır"
+        if no_run
+        else "koşusuz gün yok (başlamadı 0, bilinmiyor 0)",
+    )
+    return rows
+
+
+def render_acceptance(rows: Sequence[Mapping[str, str]]) -> str:
+    """Kabul satirlarindan rapora eklenen bolum. Metni sonuca gore DEGISMEZ."""
+    lines = [
+        "",
+        "## Paper kabul ölçütleri (karar değildir)",
+        "",
+        "Bu tablo karar değildir. Sonuç görülmeden önce yazılmış kabul ölçütlerini "
+        "(`docs/designs/unattended-paper.md`, bölüm 1) bu özetten mekanik olarak okur; "
+        "eşikler tasarımdan gelir, burada değiştirilmez ve genel bir hüküm verilmez. "
+        '"elle doğrulanacak" satırlarını betik bilemez; onlara #17 kayıtlarından bir '
+        "kişi bakar. Paper kararı #17'de ayrıca verilir. Gölge gözlem emir göndermez; "
+        "emirlerin nasıl işlediği ilk paper günlerinde ayrıca gözlenir.",
+        "",
+        "| Ölçüt | Durum | Kanıt |",
+        "|---|---|---|",
+        *[f"| {row['olcut']} | {row['durum']} | {row['kanit']} |" for row in rows],
+        "",
+    ]
+    return "\n".join(lines)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python3 -I scripts/shadow_report.py")
     parser.add_argument("--summary", type=Path, required=True, help="shadow-total.json")
     parser.add_argument(
         "--out", type=Path, help="Markdown ciktisi (var olan dosya uzerine yazilmaz)"
     )
+    parser.add_argument(
+        "--kabul",
+        action="store_true",
+        help="paper kabul olcutleri tablosunu ekler (karar degildir)",
+    )
+    parser.add_argument("--campaign", help="beklenen kampanya kimligi (64 hane); --kabul ile")
     args = parser.parse_args(argv)
+    if args.campaign is not None and not args.kabul:
+        parser.error("--campaign yalniz --kabul ile kullanilir")
     try:
         summary = json.loads(args.summary.read_text(encoding="utf-8"))
     except (OSError, ValueError, RecursionError) as exc:
@@ -329,6 +444,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     try:
         report = render(summary)
+        if args.kabul:
+            report += render_acceptance(acceptance(summary, expected_campaign=args.campaign))
     except ReportError as exc:
         print(f"HATA: {exc}", file=sys.stderr)
         return 1
