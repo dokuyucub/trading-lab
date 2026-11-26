@@ -415,26 +415,49 @@ test("log satirinda token ve yanit govdesi yoktur", async () => {
   }
 });
 
-test("scheduled isleyicisi tek satir JSON log yazar; fetch isleyicisi 404 doner", async () => {
+/**
+ * `scheduled` isleyicisini SABIT saatte kosturur ve yazdigi log satirlarini verir.
+ *
+ * Isleyici saati disaridan almaz (`start` varsayilani `Date.now`). Saat sabitlenmezse
+ * test gercek saate baglanir: baslangic penceresinin icinde kosan bir CI'da sahte
+ * listedeki 5 Ocak kosusu "bugunun kosusu" sayilmaz, dispatch denenir ve sonuc "red" olur.
+ */
+async function scheduledAt(nowMs) {
   const originalFetch = globalThis.fetch;
   const originalLog = console.log;
+  const originalNow = Date.now;
   const logged = [];
   globalThis.fetch = async (url) =>
     String(url).includes("/jobs") ? jobs("in_progress", null) : listing([run(60, "2026-01-05T13:50:03Z")]);
   console.log = (text) => logged.push(text);
+  Date.now = () => nowMs;
   try {
-    // Gercek saat pencere disinda olabilir: bu test yalnizca log satirini ve
-    // ag disi yolu dogrular; dispatch'e varmadan "kosu-var" ya da "pencere-disi".
     await worker.scheduled({ scheduledTime: WINTER, cron: "50 13 * * 1-5" }, { STARTER_GITHUB_PAT: TOKEN });
   } finally {
     globalThis.fetch = originalFetch;
     console.log = originalLog;
+    Date.now = originalNow;
   }
-  assert.equal(logged.length, 1);
-  const line = JSON.parse(logged[0]);
-  assert.ok(["kosu-var", "pencere-disi"].includes(line.result), line.result);
-  assert.equal(line.cron, "50 13 * * 1-5");
-  assert.ok(!logged[0].includes(TOKEN));
+  return logged;
+}
+
+test("scheduled isleyicisi tek satir JSON log yazar; fetch isleyicisi 404 doner", async () => {
+  // Pencere ici (13:50:03Z): sahte liste o gunun kosusunu tasir, dispatch'e varilmaz.
+  // Pencere disi (iki saat once): hic istek yok. Iki yol da gercek saatten bagimsiz.
+  const cases = [
+    [WINTER, "icinde", "kosu-var"],
+    [WINTER - 2 * 3_600_000, "disinda", "pencere-disi"],
+  ];
+  for (const [at, window, result] of cases) {
+    const logged = await scheduledAt(at);
+    assert.equal(logged.length, 1);
+    const line = JSON.parse(logged[0]);
+    assert.equal(line.started, new Date(at).toISOString());
+    assert.equal(line.window, window);
+    assert.equal(line.result, result);
+    assert.equal(line.cron, "50 13 * * 1-5");
+    assert.ok(!logged[0].includes(TOKEN));
+  }
   const response = await worker.fetch(new Request("https://example.invalid/"));
   assert.equal(response.status, 404);
 });
