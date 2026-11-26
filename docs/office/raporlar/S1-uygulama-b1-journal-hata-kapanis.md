@@ -7,10 +7,12 @@ Push, GitHub yazımı, iş akışı, broker ya da ağ çağrısı yok; testler s
 
 - **B1 kapandı** (turun başındaki defter işleri için; yazma ve okuma hatası). `orders`/`fills` yazılamazken zarar sınırı turunda ve
   kapanış penceresinde pozisyon kapatılıyor, o turda yeni giriş gitmiyor, tur hata fırlatmıyor.
-- Tek commit `ad8a415` (push edilmedi). İki dosya: `src/tlab/engine/runner.py` +37/−6, `tests/test_kill_switch_durability.py` +379/−2.
+- Commit `ad8a415` (push edilmedi). İki dosya: `src/tlab/engine/runner.py` +37/−6, `tests/test_kill_switch_durability.py` +379/−2.
+  *(Düzeltme `2d714ee`: "tek commit" artık doğru değil; dalda üstüne takip commit'i `2d714ee` var, §9. Bu bölümün sayıları `ad8a415` içindir.)*
 - Hedefli üç dosya: 287 geçti (taban 266 + 21 yeni). `ruff check` temiz, `ruff format --check` 144 dosya, `mypy` 117 dosyada hata yok.
 - 22 el mutantının 22'si öldürüldü. Tam süit: 1774 geçti, 6 atlandı, 1 kaldı (beklenen kampanya pin testi).
 - Mevcut hiçbir testin beklentisi değişmedi. Yönetimin bilmesi gereken iki bedel (§7.1, §7.2) ve kapsam dışı sınırlar §7'de.
+  *(Düzeltme `2d714ee`: §7.2 bedeli kapandı; kalan bedel §7.1.)*
 
 ## 2. Değişiklik
 
@@ -23,20 +25,22 @@ değişmedi; journal sağlamken yol aynıdır. Yakalanan tip yalnız `JournalErr
 ## 3. Tasarım kararları
 
 **Ölçüt 4 — tur hata fırlatmaz.** Hata üç yerde görünür: ERROR düzeyinde iz (`log.exception`), `LoopResult.entries_blocked` ve
-`summary()` satırına düşen not. `run_once` çağıranlarına göre:
+`summary()` satırına düşen not. *(Düzeltme `2d714ee`: dördüncü yer `LoopResult.journal_error`.)* `run_once` çağıranlarına göre
+*(düzeltme `2d714ee`: "Bu seçimle" sütunu `ad8a415` anıdır, satır numaraları da; son üç satır değişti, üstü çizili. Güncel tablo §9)*:
 
 | Çağıran | Yeniden fırlatsaydım | Bu seçimle |
 |---|---|---|
 | `run_forever` (`runner.py:291`) | tur başarısız sayılır, bekleme en çok 8 kata çıkar | tur normal aralıkta koşar; not INFO özetinde, iz ERROR'da |
-| `cli run --once` (`cli.py:335`) | `main` "HATA" basar, çıkış kodu 1 | **çıkış kodu 0**, not özet satırında |
-| `backtest/engine.py:359` | koşu durur | **koşu sürer**; motor `LoopResult`'ı atıyor, iz yalnız log'da |
-| `shadow_job.py:555` | `failed += 1` | tur `called` sayılır |
+| `cli run --once` (`cli.py:335`) | `main` "HATA" basar, çıkış kodu 1 | ~~**çıkış kodu 0**, not özet satırında~~ → `2d714ee`: özet basılır, sonra "HATA", çıkış kodu 1 |
+| `backtest/engine.py:359` | koşu durur | ~~**koşu sürer**; motor `LoopResult`'ı atıyor, iz yalnız log'da~~ → `2d714ee`: koşu durur (turun güvenlik adımlarından sonra) |
+| `shadow_job.py:555` | `failed += 1` | ~~tur `called` sayılır~~ → `2d714ee`: `failed` sayılır |
 
 Gerekçe: (1) Güvenlik adımlarından sonra fırlatmak, kalıcı journal hatasını `run_forever`'da 8 katlık beklemeye çevirir (B5): 60 sn'lik
 döngüde koruma kontrolü 8 dakikada bire düşer; 10 dakikalık kapanış penceresine bir, en çok iki deneme sığar, `_flatten_all` ise iptal
 kesinleşmezse ikinci tura ihtiyaç duyar. Düzeltmenin amacını geri alırdı. (2) `run_once` içindeki benzer journal hataları aynı kanalı
 kullanıyor ("gun durumu okunamadi", "izlenen iptaller journal'dan okunamadi", "iptal niyeti yazilamadi", "kill-switch karari journal'a
-yazilamadi"); yeni kanal icat edilmedi. (3) `unattended-paper.md` §4 kuralı: girişte fail-closed, korumada fail-open.
+yazilamadi"); yeni kanal icat edilmedi. *(Düzeltme `2d714ee`: yalnız iki defter işi için yeni kanal eklendi, `journal_error`; sayılan dört
+hata hâlâ yalnız not ve iz kanalında.)* (3) `unattended-paper.md` §4 kuralı: girişte fail-closed, korumada fail-open.
 
 **Ölçüt 6 — hata kill-switch ya da kapatma yolunun içindeyse.** Kod değişikliği gerekmedi; mevcut yol karşılıyor:
 - `_flatten_all` journal'a hiç dokunmaz (yalnız broker). `_check_kill_switch` gün durumu okumasını `(sqlite3.Error, JournalError)` için
@@ -100,9 +104,10 @@ Sayım notu: komuttaki `-q` ile `addopts`'taki `-q` birleşince pytest özet say
 
 1. **Bekleyen girişler de iptal edilir.** `entries_blocked` mevcut kuralı taşır (`every_age`): hatalı turda, pozisyonu olmayan sembollerdeki
    kendi bekleyen girişlerimiz yaşına bakılmadan iptal edilir. Geçici tek bir kilit hatası sinyali ve bekleyen girişi kaybettirebilir. Yön güvenli; testle sabit.
-2. **Çıkış kodu ve backtest.** `run --once` bu hatada 0 döner; backtest motoru journal hatasında artık durmaz ve `LoopResult`'a bakmaz.
-   İkisi de izinli dosyaların dışında (`cli.py`, `backtest/engine.py`); dokunmadım. Öneri: çağıranlar `entries_blocked`'ı denetlesin.
-3. **Güvenlik adımlarından sonraki journal okuması.** `orders` okunamıyorsa normal turda `_cancel_stale_entries` (`runner.py:583`) hâlâ
+2. **Çıkış kodu ve backtest.** ~~`run --once` bu hatada 0 döner; backtest motoru journal hatasında artık durmaz ve `LoopResult`'a bakmaz.
+   İkisi de izinli dosyaların dışında (`cli.py`, `backtest/engine.py`); dokunmadım. Öneri: çağıranlar `entries_blocked`'ı denetlesin.~~
+   *Düzeltme `2d714ee`: kapandı. `run --once` 1 döner, backtest durur, gölge işi turu `failed` sayar; üçü de `journal_error`'a bakıyor (§9).*
+3. **Güvenlik adımlarından sonraki journal okuması.** `orders` okunamıyorsa normal turda `_cancel_stale_entries` (`runner.py:583`; `2d714ee`'de 598) hâlâ
    `JournalError` fırlatır (B5 beklemesi; karalama testiyle görüldü). Zarar sınırı ve kapanış turu etkilenmez; yazma hatasında tur hiç fırlatmıyor (testte).
 4. **Journal dışı hatalar** turu hâlâ güvenlik adımlarından önce bitirir: `get_account`/`get_positions` `BrokerError`'ı (#63 raporu, madde
    (c)) ve programlama hataları. Defter işlerinde bu sınır bilinçlidir ve testle sabittir; genişletmek ayrı karardır.
@@ -115,5 +120,46 @@ Sayım notu: komuttaki `-q` ile `addopts`'taki `-q` birleşince pytest özet say
 - Gerçek disk dolu, salt okunur dosya sistemi ya da `database is locked`: yalnız tetikleyici, `query_only` ve `DROP TABLE` ile benzetildi.
   Kilitli veritabanında her yazmanın sqlite bekleme süresi kadar turu geciktirmesi ve kalıcı hatadaki log hacmi ölçülmedi.
 - `run_forever` uçtan uca (bekleme, kadans) ve §3 tablosundaki `--once` çıkış kodu, backtest, gölge işi satırları: testi yok; kod okumasına dayanıyor.
+  *(Düzeltme `2d714ee`: dördünün de testi var, §9; `run_forever` yalnız sahte `sleep` ile üç tur.)*
 - `dry_run` + journal hatası: karalama ile bir kez denendi (tur döndü, giriş yok); commit'li testi yok.
 - Gerçek broker davranışı (yalnız `FakeBroker`), CI (`quality` işi; push edilmedi) ve araçla tam mutasyon taraması (mutantlar elle seçildi).
+
+## 9. Ek: çağıran sözleşmesi (`2d714ee`)
+
+`ad8a415`'ten sonra `run_once` defter işi hatasında normal döndüğü için üç çağıran hatalı turu başarı sayıyordu (§7.2). Güvenlik kazanımı
+korunarak görünürlük geri geldi. Tek yeni commit `2d714ee` (`ad8a415`'in üstünde, push edilmedi): 8 dosya, +404/−7. `runner.py` +17/−2,
+`backtest/engine.py` +6/−1, `cli.py` +6/−1, `shadow_job.py` +8/−2, dört test dosyası +367/−1. `LoopResult.journal_error` eklendi; `_bookkeeping`
+yakaladığı İLK `JournalError` nesnesini oraya koyar. `run_once`'ın geri kalanı ve `run_forever` değişmedi.
+
+| Çağıran | `ad8a415` öncesi | `ad8a415`'te | Şimdi (`2d714ee`) |
+|---|---|---|---|
+| `run_forever` | tur başarısız; bekleme 8 kata kadar | normal aralık; güvenlik adımları çalışır | aynı; alana bakmaz (testle sabit) |
+| backtest | koşu `JournalError` ile durur | koşu sürer, rapor üretir | durur, o turun güvenlik adımlarından sonra |
+| `run --once` | tur özeti yok; "HATA: …", çıkış 1 | tur özeti; çıkış 0 | tur özeti, sonra "HATA: …", çıkış 1 |
+| gölge işi | `failed` | `called` | `failed` |
+
+`main` yolu (okundu, testte): hata `cmd_run`'dan çıkar; `finally` koşuyu kapatıp koşu özetini basar; `main` stderr'e `HATA: <mesaj>` basar, 1 döner.
+**RED** (`red-b1b-new.log`; `ad8a415` kaynağı + 14 yeni test): `12 failed, 2 passed`. 8 runner testi `AttributeError: 'LoopResult' object has no
+attribute 'journal_error'`; cli `assert 0 == 1`; iki backtest testi `Failed: DID NOT RAISE JournalError`; gölge `{'failed': 0} != {'failed': 1}`.
+RED'de yeşil iki test bilinçli: `--once` sağlam journal kontrolü ve `run_forever` kadans testi (davranış `ad8a415`'te doğruydu; test sabitliyor).
+**GREEN:** 14/14 (`green-b1b-new.log`); dört test dosyası + `test_runner.py`: `1 failed, 176 passed` (kalan: kampanya pin testi). `ruff check`
+temiz, `ruff format --check` 144 dosya, `mypy` 117 dosyada hata yok.
+
+| # | Mutant (`mutants-b1b.log`; tek tek, sonra geri alındı; parantez: düşen test) | Sonuç |
+|---|---|---|
+| N01–N03 | alan hiç / yalnız çözümlemede / yalnız mutabakatta doldurulmaz | öldü (8, 3, 5) |
+| N04, N16 | ikinci hata ilkini ezer / alan süreçte kalıp sonraki tura taşınır | öldü (1, 1) |
+| N05–N08 | backtest fırlatmaz / başka nesne fırlatır; cli fırlatmaz / özeti basmadan fırlatır | öldü (2, 1, 1, 1) |
+| N09, N10 | gölge işi `called` sayar / hem `called` hem `failed` sayar | öldü (1, 1) |
+| N11, N17 | `run_forever` alanı fırlatır (bekleme uzar) / tur alanı doldurup yeniden fırlatır | öldü (1, 17) |
+| N12–N15 | kapsam: gün durumu, kill-switch kararı, iptal niyeti, izlenen iptaller de alanı doldurur | öldü (2, 1, 1, 1) |
+
+17/17 öldü, sağ kalan yok. **Tam süit** (bir kez, 22:03–22:22 UTC, `makecheck-b1b.log`): `1 failed, 1788 passed, 6 skipped in 1154.44s (0:19:14)`;
+kapsam %91,48. Tek kırmızı: `tests/test_shadow_job.py::test_the_campaign_identity_is_pinned_to_the_implementation_tree` (beklenen). Sapma: komuttaki
+`-q` çıkarıldı; `addopts`'taki `-q` ile birleşince `-qq` olup özet satırını bastırıyor (denendi). Süit commit'ten önce koştu; 8 dosyanın sha256'sı aynı.
+**Beklentisi değişen mevcut test:** yok; mevcut test satırlarına dokunulmadı (tek silinen satır, genişleyen bir import).
+**Sonraki olası iş (bilinçli kapsam dışı):** turun not düşüp geçtiği diğer journal hataları alanı doldurmuyor, backtest ve `--once` bunlarda hâlâ başarıyla
+biter: "gun durumu okunamadi", "bugunku emir kayitlari okunamadi", "izlenen iptaller journal'dan okunamadi", "iptal niyeti yazilamadi", "kill-switch
+karari journal'a yazilamadi", "<sembol>: journal yazilamadi" (karar/emir kaydı), `_write_order_status` (yalnız iz). §7.3 de sürüyor.
+**Doğrulanmadı:** gerçek disk dolu/kilitli veritabanı (yalnız tetikleyici, `query_only`); `run_forever` gerçek beklemeyle (sahte `sleep`, üç tur); `tlab backtest`
+uçtan uca (`Backtest.run` sınandı; `main`'e düşmesi kod okuması); gölge işinde tek tur, `orders` yazımı; N02–N17 çalışma kopyasının birebir kopyalarında koştu; CI.
