@@ -7,9 +7,9 @@ Push, GitHub yazımı, iş akışı, broker ya da ağ çağrısı yok; testler s
 
 - **B1 kapandı** (turun başındaki defter işleri için; yazma ve okuma hatası). `orders`/`fills` yazılamazken zarar sınırı turunda ve
   kapanış penceresinde pozisyon kapatılıyor, o turda yeni giriş gitmiyor, tur hata fırlatmıyor.
-- Tek commit `@@SHA@@`. İki dosya: `src/tlab/engine/runner.py` +37/−6, `tests/test_kill_switch_durability.py` +379/−2.
+- Tek commit `ad8a415` (push edilmedi). İki dosya: `src/tlab/engine/runner.py` +37/−6, `tests/test_kill_switch_durability.py` +379/−2.
 - Hedefli üç dosya: 287 geçti (taban 266 + 21 yeni). `ruff check` temiz, `ruff format --check` 144 dosya, `mypy` 117 dosyada hata yok.
-- 22 el mutantının 22'si öldürüldü. Tam süit: @@FULL@@.
+- 22 el mutantının 22'si öldürüldü. Tam süit: 1774 geçti, 6 atlandı, 1 kaldı (beklenen kampanya pin testi).
 - Mevcut hiçbir testin beklentisi değişmedi. Yönetimin bilmesi gereken iki bedel (§7.1, §7.2) ve kapsam dışı sınırlar §7'de.
 
 ## 2. Değişiklik
@@ -41,42 +41,37 @@ yazilamadi"); yeni kanal icat edilmedi. (3) `unattended-paper.md` §4 kuralı: g
 **Ölçüt 6 — hata kill-switch ya da kapatma yolunun içindeyse.** Kod değişikliği gerekmedi; mevcut yol karşılıyor:
 - `_flatten_all` journal'a hiç dokunmaz (yalnız broker). `_check_kill_switch` gün durumu okumasını `(sqlite3.Error, JournalError)` için
   korur. Karar yazımı `_record_halt` içinde korunur: yazılamazsa karar `_unpersisted_halts` belleğinde tutulur, not düşer, kapatma gider.
-- Birleşik durum yeni testte: `test_a_read_only_journal_still_closes_on_a_breached_loss`. Bütün journal salt okunur (defter işi ve
-  `daily_state` yazımı birlikte hata verir): ilk turda iptal + kapatma; hesap toparlansa da ikinci turda gün kapalı, kapatma yeniden gider.
-- Sınır (önceden yazılı): yazılamayan karar yalnız süreç belleğindedir; süreç yeniden başlarsa kaybolur.
+- Birleşik durum yeni testte (`test_a_read_only_journal_still_closes_on_a_breached_loss`): bütün journal salt okunur, defter işi ve
+  `daily_state` yazımı birlikte hata verir. İlk turda iptal + kapatma; hesap toparlansa da ikinci turda gün kapalı, kapatma yeniden gider.
+  Sınır (önceden yazılı): yazılamayan karar yalnız süreç belleğindedir; süreç yeniden başlarsa kaybolur.
 
 ## 4. RED ve GREEN
 
-Kurulum (`turn_with_bookkeeping`): her tura iki defter işi bırakılır: journal'a düşmemiş, önceki seanstan bir gerçekleşme (`fills`
-INSERT) ve `submitting` kalmış, brokerda görünen bir giriş (`orders` UPDATE). Hata türleri: tabloya özel `RAISE(ABORT)` tetikleyicisi
-(`fills`, `orders`), `PRAGMA query_only = ON` (`salt-okunur`), `DROP TABLE orders` (`orders-okunamaz`).
+Kurulum (`turn_with_bookkeeping`): her tura iki defter işi bırakılır: journal'a düşmemiş, önceki seanstan bir gerçekleşme (`fills` INSERT)
+ve `submitting` kalmış, brokerda görünen bir giriş (`orders` UPDATE). Hata türleri: tabloya özel `RAISE(ABORT)` tetikleyicisi (`fills`,
+`orders`), `PRAGMA query_only = ON` (`salt-okunur`), `DROP TABLE orders` (`orders-okunamaz`).
 
 **RED** (yeni testler + değişiklikten önceki `runner.py`; `red-b1.log`): `16 failed, 16 passed`. 16'sı da `runner.run_once()` satırında
-`JournalError` ile düşüyor; iddia satırlarına ulaşılmıyor:
-- `test_a_journal_failure_does_not_stop_the_loss_limit[fills | orders | orders-okunamaz]`
-- `test_a_journal_failure_does_not_stop_the_end_of_day_flatten[fills | orders | salt-okunur | orders-okunamaz]`
-- `test_a_journal_failure_blocks_new_entries_for_the_turn[fills | orders | salt-okunur]`
-- `test_a_read_only_journal_still_closes_on_a_breached_loss`, `test_a_journal_failure_is_logged_with_its_cause[fills | orders]`
-- `test_a_failed_order_confirmation_does_not_skip_the_fill_record`, `test_bookkeeping_resumes_once_the_journal_recovers`,
-  `test_a_journal_failure_cancels_the_pending_entry_like_any_blocked_turn`
+`JournalError` ile düşüyor; iddia satırlarına ulaşılmıyor (`…` = `test_a_journal_failure_`):
+- `…does_not_stop_the_loss_limit[fills | orders | orders-okunamaz]`, `…does_not_stop_the_end_of_day_flatten[fills | orders | salt-okunur | orders-okunamaz]`
+- `…blocks_new_entries_for_the_turn[fills | orders | salt-okunur]`, `…is_logged_with_its_cause[fills | orders]`, `…cancels_the_pending_entry_like_any_blocked_turn`
+- `test_a_read_only_journal_still_closes_on_a_breached_loss`, `test_a_failed_order_confirmation_does_not_skip_the_fill_record`, `test_bookkeeping_resumes_once_the_journal_recovers`
 ```
 writer.py:275  JournalError: Gerceklesme kaydedilemedi (yazilmamis-dolum): disk dolu              6 test
 writer.py:252  JournalError: Emir guncellenemedi (tlab-…): disk dolu                              5 test
 writer.py:252  JournalError: Emir guncellenemedi (tlab-…): attempt to write a readonly database   3 test
 queries.py:73  JournalError: Kesinlesmemis emirler okunamadi: no such table: orders               2 test
 ```
-RED'de yeşil kalan 16: mevcut 11 test, üç kontrol (`test_a_healthy_journal_…_as_before`: zarar sınırı, kapanış, giriş) ve
-`test_an_unexpected_error_in_bookkeeping_is_not_swallowed[confirm_order | record_fill]`. Kontroller aynı senaryoyu sağlam journal ile
-kurar, değişiklikten önce de sonra da geçer: `entries_blocked` yok, fazladan not yok, gerçekleşme yazılmış, giriş kesinleşmiş, SPY emri gitmiş.
+RED'de yeşil kalan 16: mevcut 11 test, `test_an_unexpected_error_in_bookkeeping_is_not_swallowed[confirm_order | record_fill]` ve üç kontrol
+(`test_a_healthy_journal_…_as_before`: zarar sınırı, kapanış, giriş). Kontroller aynı senaryoyu sağlam journal ile kurar, önce de sonra da geçer.
 
-**GREEN:** `test_kill_switch_durability.py` 32 geçti; üç hedef dosya 287 geçti (değişiklikten önce 266).
-Not: yeni testlerimden birinin ilk beklentisi yanlıştı (hatalı turda bekleyen girişin `new` kalacağını yazmıştım; engelli tur onu iptal
-ediyor). Düzelttim ve davranışı ayrı testle sabitledim (§7.1). Mevcut testlere dokunulmadı.
+**GREEN:** `test_kill_switch_durability.py` 32 geçti; üç hedef dosya 287 geçti (önce 266). Not: yeni testlerimden birinin ilk beklentisi yanlıştı
+(hatalı turda bekleyen giriş `new` kalır sanmıştım; engelli tur onu iptal ediyor). Düzelttim, davranışı ayrı testle sabitledim (§7.1).
 
 ## 5. Mutantlar
 
-Her mutant tek başına uygulandı, test dosyası koştu, dosya geri alındı (son hal amaçlanan dosyayla aynı; `mutants-b1.log`).
-"İki adım": çözümleme ve mutabakat koruması için ayrı ayrı. Parantez: düşen test sayısı.
+Her mutant tek başına uygulandı, test dosyası koştu, dosya geri alındı (son hal amaçlanan dosyayla aynı; `mutants-b1.log`). "İki adım":
+çözümleme ve mutabakat koruması için ayrı ayrı. Parantez: düşen test sayısı. Sağ kalan yok (iki koşu: önce 20, son test kümesiyle 22).
 
 | # | Mutant | Sonuç |
 |---|---|---|
@@ -93,36 +88,32 @@ Her mutant tek başına uygulandı, test dosyası koştu, dosya geri alındı (s
 | M17, M18 | `trades_recorded` yazılmaz (üç hedef dosyayla) / defter işleri hiç çalışmaz | öldü (1, 20) |
 | M19, M20 | not düşmez, yalnız bayrak / hatalı turda bekleyen giriş iptal edilmez | öldü (3, 2) |
 
-Sağ kalan olmadı (iki koşu: önce 20 mutant, son test kümesiyle 22).
-
 ## 6. Tam süit
 
-@@FULLDETAIL@@
+Bir kez koştu (14:37–14:58 UTC, 21 dk 27 sn; `makecheck-b1.log`): **1781 test: 1774 geçti, 6 atlandı, 1 kaldı.** Kapsam %91,27 (eşik %80);
+`engine/runner.py` %94, `_bookkeeping` satırlarında eksik yok. Tek kırmızı, yönetimin bildirdiği beklenen test:
+`tests/test_shadow_job.py::test_the_campaign_identity_is_pinned_to_the_implementation_tree` (`makecheck-63n.log`'da da kırmızı).
+Sayım notu: komuttaki `-q` ile `addopts`'taki `-q` birleşince pytest özet sayı satırını basmıyor; sayılar logdaki ilerleme karakterlerinden
+(1774 `.`, 6 `s`, 1 `F`) ve `--collect-only` çıktısından (1781) alındı. Süit commit'ten önce koştu; iki dosyanın sha256'sı commit'tekiyle aynı.
 
 ## 7. Bilinen sınırlar ve bedeller
 
-1. **Bekleyen girişler de iptal edilir.** `entries_blocked` mevcut kuralı taşır (`every_age`): hatalı turda, pozisyonu olmayan
-   sembollerdeki kendi bekleyen girişlerimiz yaşına bakılmadan iptal edilir (iptal niyeti yazılamıyorsa iptal gitmez). Geçici tek
-   bir kilit hatası o turun sinyalini ve bekleyen girişi kaybettirebilir. Yön güvenli; iki testle sabit.
-2. **Çıkış kodu ve backtest.** `run --once` bu hatada 0 döner; backtest motoru journal hatasında artık durmaz ve `LoopResult`'a
-   bakmaz. İkisi de izinli dosyaların dışında (`cli.py`, `backtest/engine.py`); dokunmadım. Öneri: çağıranlar `entries_blocked`'ı denetlesin.
-3. **Güvenlik adımlarından sonraki journal okuması.** `orders` okunamıyorsa normal turda `_cancel_stale_entries` (`runner.py:583`)
-   hâlâ `JournalError` fırlatır; `run_forever` bunu başarısız tur sayar (B5). Zarar sınırı ve kapanış turu etkilenmez (testte).
-   Karalama testiyle görüldü, commit edilmedi. Yalnız yazma hatasında (salt okunur dahil) tur hata fırlatmıyor (testte).
-4. **Journal dışı hatalar** turu hâlâ güvenlik adımlarından önce bitirir: `get_account`/`get_positions` `BrokerError`'ı (#63 raporu,
-   madde (c)) ve programlama hataları. Defter işlerinde bu sınır bilinçlidir ve testle sabittir; genişletmek ayrı karardır.
+1. **Bekleyen girişler de iptal edilir.** `entries_blocked` mevcut kuralı taşır (`every_age`): hatalı turda, pozisyonu olmayan sembollerdeki
+   kendi bekleyen girişlerimiz yaşına bakılmadan iptal edilir. Geçici tek bir kilit hatası sinyali ve bekleyen girişi kaybettirebilir. Yön güvenli; testle sabit.
+2. **Çıkış kodu ve backtest.** `run --once` bu hatada 0 döner; backtest motoru journal hatasında artık durmaz ve `LoopResult`'a bakmaz.
+   İkisi de izinli dosyaların dışında (`cli.py`, `backtest/engine.py`); dokunmadım. Öneri: çağıranlar `entries_blocked`'ı denetlesin.
+3. **Güvenlik adımlarından sonraki journal okuması.** `orders` okunamıyorsa normal turda `_cancel_stale_entries` (`runner.py:583`) hâlâ
+   `JournalError` fırlatır (B5 beklemesi; karalama testiyle görüldü). Zarar sınırı ve kapanış turu etkilenmez; yazma hatasında tur hiç fırlatmıyor (testte).
+4. **Journal dışı hatalar** turu hâlâ güvenlik adımlarından önce bitirir: `get_account`/`get_positions` `BrokerError`'ı (#63 raporu, madde
+   (c)) ve programlama hataları. Defter işlerinde bu sınır bilinçlidir ve testle sabittir; genişletmek ayrı karardır.
 5. **Süreç başlangıcı.** Journal süreç açılırken yazılamıyorsa `start_run` hata verir ve döngü hiç başlamaz (kod okunarak).
-6. `_reconcile` içinde `record_trade` yazılıp `mark_order_closed` yazılamazsa sonraki tur yeniden denemez; satır `closed` olmaz.
-   Önceden de böyleydi; güvenlik etkisi görmedim (kod okunarak).
-7. Kalıcı hatada her tur bir iki iz log'a düşer; eskiden bekleme uzadığı için daha seyrekti.
-8. `docs/designs/unattended-paper.md` §4'e "Açık 3" kaydı eklenmedi (dosya izinli listede değil); ayrı doküman değişikliği gerekir.
+6. `_reconcile`'da `record_trade` yazılıp `mark_order_closed` yazılamazsa sonraki tur yeniden denemez (önceden de böyleydi; kod okunarak).
+7. `docs/designs/unattended-paper.md` §4'e "Açık 3" kaydı eklenmedi (dosya izinli listede değil); ayrı doküman değişikliği gerekir.
 
 ## 8. Doğrulanmadı
 
-- Gerçek disk dolu, salt okunur dosya sistemi ya da `database is locked`: yalnız tetikleyici, `query_only` ve `DROP TABLE` ile
-  benzetildi. Kilitli veritabanında her yazmanın sqlite bekleme süresi kadar turu geciktirmesi ölçülmedi.
-- `run_forever` uçtan uca (bekleme, kadans): testi yok; §3'teki gerekçe kod okumasına dayanıyor.
-- §3 tablosundaki `--once` çıkış kodu, backtest ve gölge işi satırları: kod okunarak; bu senaryo için ayrı test yazılmadı.
+- Gerçek disk dolu, salt okunur dosya sistemi ya da `database is locked`: yalnız tetikleyici, `query_only` ve `DROP TABLE` ile benzetildi.
+  Kilitli veritabanında her yazmanın sqlite bekleme süresi kadar turu geciktirmesi ve kalıcı hatadaki log hacmi ölçülmedi.
+- `run_forever` uçtan uca (bekleme, kadans) ve §3 tablosundaki `--once` çıkış kodu, backtest, gölge işi satırları: testi yok; kod okumasına dayanıyor.
 - `dry_run` + journal hatası: karalama ile bir kez denendi (tur döndü, giriş yok); commit'li testi yok.
-- Gerçek broker davranışı (yalnız `FakeBroker`) ve CI (`quality` işi; push edilmedi).
-- Mutantlar elle seçildi; araçla tam mutasyon taraması yapılmadı.
+- Gerçek broker davranışı (yalnız `FakeBroker`), CI (`quality` işi; push edilmedi) ve araçla tam mutasyon taraması (mutantlar elle seçildi).
