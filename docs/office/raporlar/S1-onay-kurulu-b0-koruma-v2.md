@@ -107,3 +107,62 @@ yakalanmayan `JournalError` ya da kapalı borsadaki yeni pozisyon okuması turu 
   bacak etkinleşme gecikmesi, `held` bacağın kimlikle iptali) gözlenmedi. Z1(3) ve Z6 öneri metnidir.
 - YÇ, R63, OK63 atıflarında kimliklerin varlığı ve dört alıntı doğrulandı; her iddianın içeriği tek tek değil.
 - `main` ile `8f855cc` farkı karşılaştırılmadı. Z7'deki yeni journal durumunun C7'ye ve mutabakat sorgularına etkisi incelenmedi.
+
+## Yeniden inceleme (2026-11-26)
+
+İncelenen: revize not (534 satır, commit yok) ve güncellenmiş taslak (63 satır; gönderilecek kısım 57). Kapsam: Z1–Z9 ve N1–N5'in metne
+işlenmesi, düzeltmelerin açtığı yeni delikler, yeni atıflar, iç tutarlılık, taslak. Salt okuma; not ve taslak değiştirilmedi.
+
+### Karar: ONAY (notlarla)
+
+Dokuz düzeltmenin sekizi ve beş notun hepsi nota işlenmiş; ilk incelemedeki fail-open ve fail-closed yollar kapanmış ya da karar
+listesine açıkça bağlanmış. Yönetim Y1–Y3'ü aşağıdaki metinle işleyince belge Codex'e gidebilir; yeni kurul turu gerekmez. Y4–Y7
+öneridir. Bu onay Codex incelemesinin yerine geçmez.
+
+| Madde | Durum | Yer |
+|---|---|---|
+| Z1 | uygulandı | §4 "Sembolü kapat", dört adım; §9 |
+| Z2 | uygulandı | §8 karar 10; §5 aşama 2 girişi "3–5 ve 10"; §3.7(5) "öneridir, karar değildir"; B7b ve B9 bağımlılığı |
+| Z3 | uygulandı | §3.1 "Öneri"; §4 "Ebeveyn" |
+| Z4 | uygulandı | 9a/9b; 8. satırdan `filled` çıkmış; §7 `alpaca-nolegs`; §3.3 ve §8 risk 1 yumuşamış |
+| Z5 | uygulandı | 17. satır; 11 ve 12 genişlemiş; K tekilleştirme (§4 "Terimler"); §5 aşama 1 çıkışı |
+| Z6 | uygulandı | §4 "Tazelik"; §8 açık soru 6 |
+| Z7 | kısmen | §3.5, §4 "İptal izi yolu", §6 sapma 14 var; eski risk 5 silinmiş. Eksik: Y3 |
+| Z8 | uygulandı | §5 ilk madde, aşama 1 giriş ve çıkışı; §6 B4, B7a; §7 `AlpacaBroker` |
+| Z9 | notta uygulandı; taslakta kısmen | §6 sapma 11–13; S6 etiketi; §9'da yedi yeni madde. Taslakta soru 3, madde 4, satır sayısı, soru 8 tamam; karar sayısı yanlış: Y1 |
+| N1 | uygulandı | 4. satır aşama 3 hücresi; §8 karar 1 |
+| N2 | uygulandı | §4 "Belirsiz satırların üst sınırı"; §8 karar 11 |
+| N3 | notta uygulandı; taslakta eksik | §3.1 "Tartılan"; §8 açık soru 1. Taslak eski gerekçeyi taşıyor: Y2 |
+| N4 | uygulandı | §8 risk 1 |
+| N5 | uygulandı | §3.6 sıklık ve §8 karar 12; §7 `SimBroker`; B4 kabul testi |
+
+### Kalan zorunlu düzeltmeler (tırnak içindeki metin olduğu gibi kopyalanır)
+
+- **Y1 — karar sayısı ve durum satırı.** Not §8'de 12 karar var (11 ve 12 revizyonda eklendi); taslak "on madde" diyor. Taslağın son cümlesi: "Sahip ve Codex kararı bekleyen on iki madde §8'de; hiçbiri verilmiş sayılmıyor." Not satır 3–4: "Ofis Onay Kurulu ilk incelemede RET verdi (dokuz metin düzeltmesi); revizyon yeniden incelendi: ONAY (notlarla), 2026-11-26. Bu, Codex incelemesinin yerine geçmez." §9'da "ve kurul bu revizyonu yeniden incelemedi" yerine "kurul yeniden incelemede yalnız metni okudu".
+- **Y2 — taslak okuma yolunu hâlâ reddedilmiş gösteriyor.** Not §3.1 liste seçeneğini artık reddetmiyor (ek istek getirmez; iki eski itiraz ayırt etmez; açık soru 1). Taslakta üç yer. (i) Paragraf: "**Tarttığımız ve seçmediğimiz:** `held`i şimdi koruma saymak (kanıt ikincil); `held`i korumasız sayıp uygulamak (tam dolan her pozisyon kapanır); bağımsız OCO çıkış çifti (yeni emir türü). Okuma yolu seçilmiş değil: 1. soru." (ii) Soru 1: "Okuma yolu: pozisyon başına `get_order` + `OrderRef.legs` mi (bir ek istek, protokol değişmez), mutabakatın zaten her tur istediği `status=all` + `nested` listeden mi (ek istek yok, protokol yüzeyi değişir), ikisi birlikte mi?" (iii) Madde 1'in başlığı: "**Okuma yolu (çalışma varsayımı; 1. soru):**"; kalanı aynı.
+- **Y3 — B8'in ayrı journal durumu ilk geçişte kayboluyor.** İptal brokera ulaşınca satır `cancel_pending` yazılıyor (`runner.py:607`, `:710`); mutabakatın ezmeme listesi yalnız iki eski durumu tanıyor (`:441`). §9 bunu "yazılmadı" diye kabul ediyor, §6 B8 satırı ise "yeniden başlatmada da aynı" diyor. §3.5 ve §4 "İptal izi yolu"ndaki parantez şununla değişsin: "(öneri: iki durum, `cancel_requested_partial` ve `cancel_pending_partial`; sütun serbest metin, göç yok. #63'ün iki durumu okuduğu ya da yazdığı her yerde karşılıkları kullanılır: devralma sorgusu ve doğrulanmamış ayrımı `runner.py:662`, `:678`; iptal ulaşınca yazım `:607`, `:710`; mutabakatın ezmeme listesi `:441`)". §9'daki "İptal ulaşınca … yazılmadı." cümlesi silinsin; §6 B8 kabul testine "iki durum da yeniden başlatmada devralınır" eklensin.
+
+### Yeni bulgular (öneri; engel değil)
+
+- **Y4.** "Sembolü kapat" (1) son adım diye yazılmamış; (2)'deki `cancel_open_orders(symbol)` bekleyen kapatmayı da iptal eder
+  (`alpaca_broker.py:268-278`). (1)'in sonuna: "Bekleyen kapatma varsa o tur başka adım atılmaz."
+- **Y5.** 9b, L boşken de `belirsiz`: iç içe okumanın bacak döndürmediği dünyada gece taşınan emirsiz pozisyon (S3) gün sonuna kadar
+  yalnız not alır. Sağlıklı bracket iki görünümde de L'de en az bir emir gösterir. Öneri: 9b stop hücresi "`legs == ()` ve L'de sembolde
+  emir var"; 15. satır ebeveyn hücresi "bilinmiyor, ya da `filled` ve `legs == ()`"; §3.6 parantezi "(bacak dönmez ve L boşsa 15)".
+- **Y6.** Tazelik kuralında gerçekleşmeler okunamazsa yön açık soru 6'ya bırakılmış. §3.9 ile tutarlı varsayılan yazılsın:
+  "okunamadıysa 9a ve 15 uygulanmaz; hüküm `belirsiz`". Soru yalnız pencere genişliğine insin.
+- **Y7 (küçük).** K tanımındaki "`replaced` bacak yok sayılır" 8. satırın `replaced` hücresiyle çakışıyor (hüküm aynı): "K hesabında
+  yok sayılır" densin. Taslak madde 8 (c) koşulunu, madde 6 yeni journal durumunu, soru 3 9a'daki `filled` stopu anmıyor.
+- **Aranıp bulunmayan yeni delik.** 9a/9b/17 sırası: 9a terminal stop bacağı istiyor, boş `legs` 9b'ye düşüyor; bekleyen kapatma
+  turunda 9a ve 15 uymuyor, 17 eylemsiz, döngü yok. Bayat ebeveyn: (a) kayıp yanıtı, (b) ters yönü yakalıyor; (c) bekleyen kapatma
+  tanımı geniş olduğu için zayıf (açık soru 7'de yazılı), ama 9a'nın "L boş" koşulu aynı durumu kesiyor. L okunamayınca her satır 16.
+- **İç tutarlılık.** §3, §5, §6, §7, §8, §9'daki satır, sapma, karar ve risk atıfları son tabloyla (18 satır: 1–17, 9a/9b) uyuşuyor.
+  Revizyonun eklediği ya da yeni bağlamda kullandığı 20 atıf `8f855cc`'de okundu, 20 isabet (`002_durability.sql:31`,
+  `broker.py:66-73`, `runner.py:413`, `:416-418`, `:605-607`, `:1096`, `alpaca_broker.py:383-386` dahil).
+- **Taslak.** Gönderilecek kısım 57 satır, yasak hitap yok; Y1 ve Y2 dışında notla uyumlu. Y2 satır sayısını artırmaz.
+
+### Doğrulanmadı
+
+- Test koşulmadı; ağ, broker ve GitHub yok. İlk incelemedeki 86 atıf yeniden okunmadı. Not commit'siz olduğu için diff alınamadı;
+  revizyonun dokunmadığı bölümler eski sürümle satır satır karşılaştırılmadı (not baştan sona bir kez okundu).
+- Y3–Y6 metinleri öneridir; Alpaca davranışı gözlenmedi. Y3'teki ikinci durumun C7'ye ve yaşam döngüsü denetimine etkisi incelenmedi.

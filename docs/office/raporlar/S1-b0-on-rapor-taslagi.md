@@ -1,14 +1,14 @@
 # S1 — B0: ÖN RAPOR taslağı (Koruma denetimi v2)
 
 Taslak, 2026-11-26. Yönetim #17'ye yorum olarak gönderir; Tasarım birimi GitHub'a yazmadı. Çizginin altı gönderilecek metindir.
-Onay Kurulu'nun ilk incelemesinden (RET, Z1–Z9) sonra güncellendi.
+Onay Kurulu'nun ilk incelemesi (RET, Z1–Z9) ve yeniden incelemesi (ONAY notlarla, Y1–Y7) işlendi.
 
 ---
 
 ## ÖN RAPOR — Koruma denetimi v2 (tasarım notu; kod yok)
 
 **Belge:** `docs/designs/protection-check-v2.md`, dal `claude/koruma-v2-tasarim`. Kod satırları #63 başına (`8f855cc`) göredir.
-Ofisin Onay Kurulu notu bir kez geri çevirdi (dokuz metin düzeltmesi); bu sürüm o düzeltmeleri taşıyor.
+Ofisin Onay Kurulu notu bir kez geri çevirdi (dokuz metin düzeltmesi), ikinci turda notlarla onayladı; bu sürüm ikisini de taşıyor.
 
 **Neden.** Bugün "bu pozisyon korunuyor mu?" sorusu yalnız giriş iptali izlenirken ve yalnız düz açık emir listesine
 bakılarak soruluyor. Keşif dört açık buldu: (1) Alpaca tam dolumdan sonra stop bacağını `held` tutuyor ve `status=open`
@@ -18,7 +18,7 @@ kaynak); (3) iz kapandıktan sonra görünen ya da geceye taşınan pozisyon hi�
 
 **Ne öneriyoruz.**
 
-1. **Okuma yolu:** `get_order` iç içe (`nested`) okur, bacaklar yeni `OrderRef.legs` alanına gelir. Protokole yeni yöntem
+1. **Okuma yolu (çalışma varsayımı; 1. soru):** `get_order` iç içe (`nested`) okur, bacaklar yeni `OrderRef.legs` alanına gelir. Protokole yeni yöntem
    yok. İkinci tanık bugünkü düz liste. Tur başına ek istek: açık pozisyon başına bir.
 2. **Her tur denetimi:** girişten bağımsız, her açık pozisyon için üç hükümden biri: `korunuyor`, `korunmuyor`,
    `belirsiz`. Tanım 18 satırlık bir doğruluk tablosu (belge §4; hiçbir satıra uymayan durum `belirsiz`), long ve short için aynı.
@@ -34,13 +34,13 @@ kaynak); (3) iz kapandıktan sonra görünen ya da geceye taşınan pozisyon hi�
 8. **Yanlış kapatmaya karşı üç koruma:** ebeveyn ancak yönü pozisyonla aynıysa ve ondan yeni kimliksiz giriş satırı yoksa
    "biliniyor" sayılır; dolumdan hemen sonraki turda kapatma uygulanmaz (tazelik); `held` bacak kimliğiyle iptal edilir.
 
-**Tarttığımız ve seçmediğimiz:** tur başına tek `status=all` + `nested` liste (`limit`'in bacakları sayıp saymadığı
-doğrulanmadı; yeni protokol yöntemi); `held`i şimdi koruma saymak (kanıt ikincil); `held`i korumasız sayıp uygulamak
-(tam dolan her pozisyon kapanır); bağımsız OCO çıkış çifti (yeni emir türü).
+**Tarttığımız ve seçmediğimiz:** `held`i şimdi koruma saymak (kanıt ikincil); `held`i korumasız sayıp uygulamak (tam
+dolan her pozisyon kapanır); bağımsız OCO çıkış çifti (yeni emir türü). Okuma yolu seçilmiş değil: 1. soru.
 
 **Görüşünü özellikle istediğimiz kararlar** (her biri tek satırla yanıtlanabilir):
 
-1. Okuma yolu `get_order` + `OrderRef.legs` olsun mu, yoksa tur başına tek `status=all` + `nested` liste mi?
+1. Okuma yolu: pozisyon başına `get_order` + `OrderRef.legs` mi (bir ek istek, protokol değişmez), mutabakatın zaten her tur
+   istediği `status=all` + `nested` listeden mi (ek istek yok, protokol yüzeyi değişir), ikisi birlikte mi?
 2. `held` stop her tur denetiminde yalnız loglanıyor, iptal yarışı yolunda ise bugünkü gibi günü kapatıyor. Bu fark
    K9'a kadar kalsın mı?
 3. Aşama 2'de uygulanan küme şu üç durum olsun mu: sembolde hiç emir yok; stop bacağı `canceled`/`expired`/`rejected` (hedef dursa bile);
@@ -60,4 +60,4 @@ kuralı açılmaz. `config/*.yaml`, journal göçü, yeni emir türü ve yeni `E
 
 **Doğrulanmayan.** Bu not için test koşulmadı; satır numaraları `8f855cc`'de okunarak doğrulandı. Alpaca'nın `held`
 davranışı, `held` stopun tetiklendiği ve kısmi dolum + iptal sonrası bacak durumları doğrulanmadı; tam liste belgenin
-§9'unda. Sahip ve Codex kararı bekleyen on madde §8'de; hiçbiri verilmiş sayılmıyor.
+§9'unda. Sahip ve Codex kararı bekleyen on iki madde §8'de; hiçbiri verilmiş sayılmıyor.
