@@ -404,12 +404,29 @@ kullanıcı isterse.
           (iii) Aynı süreçte başlayan ulaşmamış iptalde deneme sınırı
           süreç içidir (`MAX_CANCEL_ATTEMPTS`); süreç sınır dolmadan
           yeniden başlarsa devralma kuralı devreye girer ve yeni süreç ilk
-          turunda ya isteği doğrular ya günü kapatır. (iv) İz, broker
+          turunda ya isteği doğrular ya günü kapatır. Bedeli: yeniden
+          başlatma, journal'da kalmış `cancel_requested` satırı ve yeni
+          sürecin ilk turunda tek bir geçici okuma hatası bir araya
+          gelirse gün gereksiz yere kapanır; giriş, okuma ile yeniden
+          gönderim arasında stopuyla kapsanarak dolsa bile gün kapanır ve
+          o pozisyon kapatılır. Yön güvenli taraftadır: emir açık
+          bırakılmaz. İyileştirme: başarısız yeniden gönderimden sonra
+          girişi bir kez daha okuyup kabul görülürse isteği doğrulamak.
+          (iv) İz, broker
           girişi `canceled`/sıfır dolum bildirdiğinde ve güncel pozisyon
           okuması boş olduğunda kapanır. Pozisyon ancak sonraki bir turda
           görünürse bu izleme onu yakalamaz. Bunun ve kısmi dolan girişin
           çözümü, her turda girişten bağımsız pozisyon koruma denetimidir;
-          ayrı tasarım işi (Koruma denetimi v2).
+          ayrı tasarım işi (Koruma denetimi v2). (v) Önceki seanstan
+          kalan giriş okunabiliyor, sıfır dolumlu ve iptal edilmiş, hesap
+          düz, ama aynı sembolde bir çıkış emri hâlâ duruyorsa satır
+          `canceled` kapanır ve o emir yerinde kalır: sahipsiz çıkış emri
+          araması yalnız dolum olan ve giriş okunamayan dallarda çalışır.
+          Bu da v2 denetiminin kapsamıdır. (vi) Doğrulanmadı: brokerda
+          `pending_cancel` durumundaki bir emrin yeniden etkin duruma
+          dönüp dönmediği. Dönerse satır `cancel_pending` kalır ve ikinci
+          iptal gönderilmez; giriş engeli, gün sonu kapanışı ve emrin
+          `DAY` süresi bunu sınırlar.
       - Kalan iş, "günde tek koşu" kapısı. Paper workflow'uyla birlikte
         gelir.
 - **Başlangıç yetkisi:** Codex SHA bağlı ONAY + kullanıcı onayı + kayıtlı
