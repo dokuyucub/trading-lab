@@ -236,6 +236,52 @@ def test_close_position_and_cancel(broker: AlpacaBroker, stub: tuple[str, StubSt
     assert broker.cancel_open_orders() == 1
 
 
+ENTRY_TO_CANCEL = "6f1c1b7e-0000-4000-8000-000000000001"
+
+
+def test_cancel_order_targets_only_that_id(
+    broker: AlpacaBroker, stub: tuple[str, StubState]
+) -> None:
+    """Tek emir iptali listeleme yapmaz ve yalnizca o kimlige gider."""
+    broker.cancel_order(ENTRY_TO_CANCEL)
+    assert [(method, path) for method, path, _ in stub[1].requests] == [
+        ("DELETE", f"/v2/orders/{ENTRY_TO_CANCEL}")
+    ]
+
+
+def test_get_order_reads_status_and_filled_quantity(
+    broker: AlpacaBroker, stub: tuple[str, StubState]
+) -> None:
+    """Iptalin sonucu girisin terminal durumu ve dolan miktariyla cozulur."""
+    stub[1].order_by_id = dict(
+        stub[1].order_by_id, id=ENTRY_TO_CANCEL, status="canceled", qty="100", filled_qty="30"
+    )
+    order = broker.get_order(ENTRY_TO_CANCEL)
+    assert [(method, path) for method, path, _ in stub[1].requests] == [
+        ("GET", f"/v2/orders/{ENTRY_TO_CANCEL}")
+    ]
+    assert order.status == "canceled"
+    assert order.filled_qty == 30
+    assert order.remaining_qty == 70
+
+
+def test_an_unreadable_order_becomes_a_broker_error(
+    broker: AlpacaBroker, stub: tuple[str, StubState]
+) -> None:
+    stub[1].fail_next = 500
+    with pytest.raises(BrokerError, match="Emir okunamadi"):
+        broker.get_order(ENTRY_TO_CANCEL)
+
+
+def test_a_refused_cancel_becomes_a_broker_error(
+    broker: AlpacaBroker, stub: tuple[str, StubState]
+) -> None:
+    """Dolmus emrin iptali reddedilir; cagiran taraf durumu yeniden okur."""
+    stub[1].fail_next = 422
+    with pytest.raises(BrokerError, match="Emir iptal edilemedi"):
+        broker.cancel_order(ENTRY_TO_CANCEL)
+
+
 # --------------------------------------------------------------------------
 # Piyasa verisi
 # --------------------------------------------------------------------------
@@ -606,6 +652,31 @@ def test_pending_order_risk_metadata_survives_real_sdk(
     assert order.remaining_qty == 70
     assert order.limit_price == 101.25
     assert order.side is Side.BUY
+    assert order.stop_price is None
+
+
+def test_stop_leg_price_survives_real_sdk(
+    broker: AlpacaBroker, stub: tuple[str, StubState]
+) -> None:
+    """Dolan miktarin korumasi stop bacaginin fiyati ve kalan miktariyla dogrulanir."""
+    stub[1].open_orders = [
+        dict(
+            stub[1].open_orders[0],
+            order_type="stop",
+            type="stop",
+            side="sell",
+            qty="40",
+            filled_qty="0",
+            limit_price=None,
+            stop_price="99.10",
+            status="new",
+        )
+    ]
+    order = broker.list_open_orders()[0]
+    assert order.stop_price == 99.10
+    assert order.limit_price is None
+    assert order.remaining_qty == 40
+    assert order.side is Side.SELL
 
 
 # --------------------------------------------------------------------------

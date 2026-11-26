@@ -216,6 +216,29 @@ class JournalWriter:
             (status, broker_order_id, self._now()),
         )
 
+    def mark_order_closed(self, client_order_id: str, *, unless: tuple[str, ...]) -> None:
+        """Islemi kapanan girisi `closed` yapar; `unless` durumundaki satira dokunmaz.
+
+        Iptal izlemesi ayni sutunda durur. Mutabakat izlenen satiri `closed`
+        ile ezerse yeniden baslayan surec izi bulamaz ve kalan pozisyonun
+        korumasi bir daha olculmez. Kosul tek SQL ifadesinde: okuma ile
+        yazma arasinda pencere kalmaz.
+        """
+        if not unless:
+            msg = "mark_order_closed: korunacak durum listesi bos olamaz"
+            raise ValueError(msg)
+        placeholders = ", ".join("?" for _ in unless)
+        try:
+            self._conn.execute(
+                # Yalnizca "?" yer tutuculari birlestiriliyor; degerler baglaniyor.
+                "UPDATE orders SET status = 'closed', updated_at = ?"  # noqa: S608
+                f" WHERE client_order_id = ? AND status NOT IN ({placeholders})",
+                (self._now(), client_order_id, *unless),
+            )
+        except sqlite3.Error as exc:
+            msg = f"Emir guncellenemedi ({client_order_id}): {exc}"
+            raise JournalError(msg) from exc
+
     def _update_order(self, client_order_id: str, assignment: str, params: tuple[Any, ...]) -> None:
         try:
             self._conn.execute(
