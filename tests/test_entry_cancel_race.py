@@ -2001,6 +2001,27 @@ def test_same_session_legs_are_not_orphans_while_the_entry_is_unreadable(
 
 
 @pytest.mark.parametrize("path", PATHS)
+def test_same_session_legs_are_not_orphans_for_a_row_adopted_from_the_journal(
+    path: str, config: Config, tmp_path: Path
+) -> None:
+    """Yeni surec ayni seansin satirini journal'dan devralir; seans journal anindan okunur."""
+    s = prepare(path, config, tmp_path)
+    accept_without_settling(s)
+    stop, target = legs(s.order, stop_qty=s.order.qty)
+    s.broker.open_orders.extend(
+        [stop.model_copy(update={"status": "held"}), target.model_copy(update={"status": "held"})]
+    )
+    s.broker.fail_get_order = True
+
+    result = reopen(s, tmp_path).run_once()
+
+    assert not result.halted
+    assert result.entries_blocked
+    assert leg_ids(s.broker) == ["leg-stop", "leg-target"]
+    assert status_of(s.conn, s.entry) == "cancel_pending"
+
+
+@pytest.mark.parametrize("path", PATHS)
 def test_an_adopted_unconfirmed_cancel_gets_no_blind_turn(
     path: str, config: Config, tmp_path: Path
 ) -> None:
