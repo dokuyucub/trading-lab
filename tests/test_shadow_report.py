@@ -455,6 +455,26 @@ def test_fifteen_of_twenty_complete_days_is_the_boundary(
     assert rows[SYSTEMATIC]["kanit"].startswith(f"tamam olmayan gün {20 - complete};")
 
 
+@pytest.mark.parametrize(("complete", "durum"), [(15, MET), (14, UNMET)], ids=["15", "14"])
+def test_only_complete_days_count_toward_the_fifteen(
+    complete: int, durum: str, report: ModuleType
+) -> None:
+    """Esik `planli - eksik` degil, `tamam` sayisidir: `baslamadi` ve `bilinmiyor`
+    gunler `eksik` sayilmadiklari icin sessizce `tamam`a eklenmez."""
+    rest = PLAN20[complete:]
+    summary = campaign(marked=[Day(rest[0], "baslamadi", "gozlem baslamadi")], absent=rest[1:])
+    assert summary["days"] == {
+        "tamam": complete,
+        "eksik": 0,
+        "baslamadi": 1,
+        "bilinmiyor": 19 - complete,
+    }
+    rows = report.acceptance(summary)
+    assert rows[COVERAGE]["durum"] == durum
+    assert rows[COVERAGE]["kanit"] == f"tamam {complete} / planlı 20; gereken en az 15 / 20"
+    assert rows[SYSTEMATIC]["kanit"].startswith(f"tamam olmayan gün {20 - complete};")
+
+
 def test_the_day_threshold_is_written_for_a_twenty_day_plan(report: ModuleType) -> None:
     """Tasarim "15/20" der. Baska uzunlukta bir plan icin esik uydurulmaz: 21 gunun
     21'i `tamam` olsa da satir saglanmaz ve nedeni yazilir."""
